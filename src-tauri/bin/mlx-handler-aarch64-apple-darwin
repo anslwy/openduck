@@ -1,0 +1,89 @@
+#!/bin/bash
+# mlx-handler-aarch64-apple-darwin
+
+# Find the bundled python_env relative to the sidecar executable
+# sidecars can be in src-tauri/bin (dev) or src-tauri/target/debug (dev run) or .app/Contents/MacOS (bundle)
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# 1. Bundled location (macOS .app)
+BUNDLED_PYTHON_HOME="$BASE_DIR/../Resources/resources/python_env"
+BUNDLED_PYTHON="$BUNDLED_PYTHON_HOME/bin/python3"
+BUNDLED_GEMMA_SITE_PACKAGES="$BASE_DIR/../Resources/resources/python_env/venv/lib/python3.11/site-packages"
+
+# 2. Dev location (relative to src-tauri/bin)
+DEV_PYTHON_HOME_1="$BASE_DIR/../resources/python_env"
+DEV_PYTHON_1="$DEV_PYTHON_HOME_1/bin/python3"
+DEV_GEMMA_SITE_PACKAGES_1="$BASE_DIR/../resources/python_env/venv/lib/python3.11/site-packages"
+
+# 3. Dev run location (relative to src-tauri/target/debug)
+DEV_PYTHON_HOME_2="$BASE_DIR/../../../resources/python_env"
+DEV_PYTHON_2="$DEV_PYTHON_HOME_2/bin/python3"
+DEV_GEMMA_SITE_PACKAGES_2="$BASE_DIR/../../../resources/python_env/venv/lib/python3.11/site-packages"
+
+# 4. Absolute fallback for local dev
+DEV_PYTHON_HOME_3="/Users/waiyip/Documents/CS/openduck/src-tauri/resources/python_env"
+DEV_PYTHON_3="$DEV_PYTHON_HOME_3/bin/python3"
+DEV_GEMMA_SITE_PACKAGES_3="$DEV_PYTHON_HOME_3/venv/lib/python3.11/site-packages"
+
+if [ -f "$BUNDLED_PYTHON" ]; then
+    PYTHON_EXE="$BUNDLED_PYTHON"
+    PYTHON_HOME="$BUNDLED_PYTHON_HOME"
+    GEMMA_SITE_PACKAGES="$BUNDLED_GEMMA_SITE_PACKAGES"
+elif [ -f "$DEV_PYTHON_1" ]; then
+    PYTHON_EXE="$DEV_PYTHON_1"
+    PYTHON_HOME="$DEV_PYTHON_HOME_1"
+    GEMMA_SITE_PACKAGES="$DEV_GEMMA_SITE_PACKAGES_1"
+elif [ -f "$DEV_PYTHON_2" ]; then
+    PYTHON_EXE="$DEV_PYTHON_2"
+    PYTHON_HOME="$DEV_PYTHON_HOME_2"
+    GEMMA_SITE_PACKAGES="$DEV_GEMMA_SITE_PACKAGES_2"
+elif [ -f "$DEV_PYTHON_3" ]; then
+    PYTHON_EXE="$DEV_PYTHON_3"
+    PYTHON_HOME="$DEV_PYTHON_HOME_3"
+    GEMMA_SITE_PACKAGES="$DEV_GEMMA_SITE_PACKAGES_3"
+else
+    # Fallback to system python
+    PYTHON_EXE="python3"
+    PYTHON_HOME=""
+    GEMMA_SITE_PACKAGES=""
+fi
+
+if [ -n "$PYTHON_HOME" ]; then
+    export PYTHONHOME="$PYTHON_HOME"
+fi
+
+if [ -d "$GEMMA_SITE_PACKAGES" ]; then
+    if [ -n "$PYTHONPATH" ]; then
+        export PYTHONPATH="$GEMMA_SITE_PACKAGES:$PYTHONPATH"
+    else
+        export PYTHONPATH="$GEMMA_SITE_PACKAGES"
+    fi
+fi
+
+PATCH_SCRIPT_BUNDLED="$BASE_DIR/../Resources/resources/patch_mlx_vlm.py"
+PATCH_SCRIPT_DEV_1="$BASE_DIR/../resources/patch_mlx_vlm.py"
+PATCH_SCRIPT_DEV_2="$BASE_DIR/../../../resources/patch_mlx_vlm.py"
+PATCH_SCRIPT_DEV_3="/Users/waiyip/Documents/CS/openduck/src-tauri/resources/patch_mlx_vlm.py"
+
+if [ -f "$PATCH_SCRIPT_BUNDLED" ]; then
+    PATCH_SCRIPT="$PATCH_SCRIPT_BUNDLED"
+elif [ -f "$PATCH_SCRIPT_DEV_1" ]; then
+    PATCH_SCRIPT="$PATCH_SCRIPT_DEV_1"
+elif [ -f "$PATCH_SCRIPT_DEV_2" ]; then
+    PATCH_SCRIPT="$PATCH_SCRIPT_DEV_2"
+elif [ -f "$PATCH_SCRIPT_DEV_3" ]; then
+    PATCH_SCRIPT="$PATCH_SCRIPT_DEV_3"
+else
+    PATCH_SCRIPT=""
+fi
+
+# Check if we should run the server instead of generate
+if [[ "$1" == "--server" ]]; then
+    shift
+    if [ -n "$PATCH_SCRIPT" ]; then
+        exec "$PYTHON_EXE" "$PATCH_SCRIPT" "$@"
+    fi
+    exec "$PYTHON_EXE" -m mlx_vlm.server "$@"
+else
+    exec "$PYTHON_EXE" -m mlx_vlm.generate "$@"
+fi

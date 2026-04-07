@@ -6,9 +6,11 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Define directories
 RESOURCES_DIR="$REPO_ROOT/src-tauri/resources"
 PYTHON_ENV_DIR="$RESOURCES_DIR/python_env"
+CSM_ENV_DIR="$RESOURCES_DIR/csm_env"
 PORTABLE_PYTHON_TAR="$REPO_ROOT/python-standalone.tar.gz"
 MLX_VLM_REPO="https://github.com/Blaizzy/mlx-vlm.git"
 MLX_VLM_REF="${MLX_VLM_REF:-23e1dffd224488141a4f022b6d21d6a730f11507}"
+CSM_MLX_REPO="https://github.com/senstella/csm-mlx"
 PATCH_SERVER_SCRIPT="$RESOURCES_DIR/patch_mlx_vlm.py"
 
 echo "Stopping existing MLX server processes..."
@@ -32,6 +34,10 @@ if [ -d "$PYTHON_ENV_DIR" ]; then
     echo "Removing old Python environment..."
     rm -rf "$PYTHON_ENV_DIR"
 fi
+if [ -d "$CSM_ENV_DIR" ]; then
+    echo "Removing old CSM environment..."
+    rm -rf "$CSM_ENV_DIR"
+fi
 
 mkdir -p "$RESOURCES_DIR"
 
@@ -51,15 +57,24 @@ tar -xzf "$PORTABLE_PYTHON_TAR" -C "$PYTHON_ENV_DIR" --strip-components=1
 # Clean up tarball
 rm "$PORTABLE_PYTHON_TAR"
 
-# Create a virtual environment using the portable Python
-echo "Creating virtual environment..."
+# Create isolated virtual environments for Gemma and CSM.
+echo "Creating Gemma virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$PYTHON_ENV_DIR/venv"
+echo "Creating CSM virtual environment..."
+"$PYTHON_ENV_DIR/bin/python3" -m venv "$CSM_ENV_DIR/venv"
 
-# Use the venv's pip to install mlx-vlm and dependencies
-echo "Installing mlx-vlm into the venv..."
+# Install Gemma server dependencies into the Gemma venv.
+echo "Installing mlx-vlm into the Gemma environment..."
 "$PYTHON_ENV_DIR/venv/bin/pip" install -U pip
 "$PYTHON_ENV_DIR/venv/bin/pip" install soundfile
 echo "Installing mlx-vlm from $MLX_VLM_REPO @ $MLX_VLM_REF..."
 "$PYTHON_ENV_DIR/venv/bin/pip" install "git+$MLX_VLM_REPO@$MLX_VLM_REF"
 
-echo "Setup complete! Python 3.11 and mlx-vlm have been prepared in $PYTHON_ENV_DIR"
+# Install CSM into its own venv to avoid downgrading Gemma dependencies.
+echo "Installing csm-mlx into the CSM environment..."
+"$CSM_ENV_DIR/venv/bin/pip" install -U pip
+"$CSM_ENV_DIR/venv/bin/pip" install "git+$CSM_MLX_REPO" --upgrade
+
+echo "Setup complete!"
+echo "Gemma environment: $PYTHON_ENV_DIR/venv"
+echo "CSM environment: $CSM_ENV_DIR/venv"

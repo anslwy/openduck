@@ -13,6 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "OpenDuck",
         "width": 600,
         "height": 600,
@@ -28,7 +29,8 @@
       "active": true,
       "targets": "all",
       "resources": [
-        "resources/python_env/**/*"
+        "resources/**/*",
+        "../sample-male.mp3"
       ],
       "externalBin": [
         "bin/mlx-handler"

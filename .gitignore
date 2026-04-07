@@ -9,7 +9,12 @@ build/
 src-tauri/target/
 src-tauri/gen/
 src-tauri/bin/mlx-handler-*
+!src-tauri/bin/mlx-handler-aarch64-apple-darwin
 src-tauri/resources/python_env/
+src-tauri/resources/csm_env/
+src-tauri/resources/__pycache__/
+__pycache__/
+*.pyc
 *.wav
 
 # OS

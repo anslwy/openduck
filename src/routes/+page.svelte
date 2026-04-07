@@ -1,57 +1,157 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { invoke } from '@tauri-apps/api/core';
+	import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+
+	type CsmAudioStartEvent = {
+		request_id: number;
+		text: string;
+	};
+
+	type CsmAudioChunkEvent = {
+		request_id: number;
+		audio_wav_base64: string;
+	};
+
+	type CsmAudioDoneEvent = {
+		request_id: number;
+	};
+
+	type CsmAudioStopEvent = Record<string, never>;
+
+	type CsmErrorEvent = {
+		request_id?: number | null;
+		message: string;
+	};
+
+	type CsmStatusEvent = {
+		message: string;
+	};
+
+	type ModelDownloadProgressEvent = {
+		model: 'gemma' | 'csm';
+		phase: 'progress' | 'completed' | 'error';
+		message: string;
+		progress?: number | null;
+		indeterminate: boolean;
+	};
 
 	let calling = $state(false);
 	let micMuted = $state(false);
-	let time = $state(0); 
-	let isModelDownloaded = $state(false);
-	let isModelLoaded = $state(false);
-	let isDownloading = $state(false);
-	let isLoadingModel = $state(false);
+	let time = $state(0);
+	let isGemmaDownloaded = $state(false);
+	let isGemmaLoaded = $state(false);
+	let isCsmDownloaded = $state(false);
+	let isCsmLoaded = $state(false);
+	let isDownloadingGemma = $state(false);
+	let isLoadingGemma = $state(false);
+	let isDownloadingCsm = $state(false);
+	let isLoadingCsm = $state(false);
+	let gemmaDownloadMessage = $state('Preparing download...');
+	let gemmaDownloadProgress = $state<number | null>(null);
+	let gemmaDownloadIndeterminate = $state(true);
+	let csmDownloadMessage = $state('Preparing download...');
+	let csmDownloadProgress = $state<number | null>(null);
+	let csmDownloadIndeterminate = $state(true);
+	let csmLoadMessage = $state('Starting worker...');
 
-	let audioContext: AudioContext | null = null;
+	let captureContext: AudioContext | null = null;
 	let mediaStream: MediaStream | null = null;
 	let source: MediaStreamAudioSourceNode | null = null;
 	let processor: AudioWorkletNode | null = null;
-	let healthCheckInterval: any = null;
+	let healthCheckInterval: ReturnType<typeof window.setInterval> | null = null;
+	let callTimerInterval: ReturnType<typeof window.setInterval> | null = null;
+	let eventUnlisteners: UnlistenFn[] = [];
+	let activeTtsRequestId: number | null = null;
+	let activePlaybackAudio: HTMLAudioElement | null = null;
+	let activePlaybackUrl: string | null = null;
+	let queuedPlaybackUrls: string[] = [];
+
+	const formattedTime = $derived(
+		`${Math.floor(time / 60)
+			.toString()
+			.padStart(2, '0')}:${(time % 60).toString().padStart(2, '0')}`
+	);
+	const modelsReady = $derived(isGemmaLoaded && isCsmLoaded);
+
+	function resetDownloadState(model: 'gemma' | 'csm') {
+		if (model === 'gemma') {
+			gemmaDownloadMessage = 'Preparing download...';
+			gemmaDownloadProgress = null;
+			gemmaDownloadIndeterminate = true;
+			return;
+		}
+
+		csmDownloadMessage = 'Preparing download...';
+		csmDownloadProgress = null;
+		csmDownloadIndeterminate = true;
+	}
+
+	function applyDownloadEvent(payload: ModelDownloadProgressEvent) {
+		if (payload.model === 'gemma') {
+			gemmaDownloadMessage = payload.message;
+			gemmaDownloadProgress = payload.progress ?? null;
+			gemmaDownloadIndeterminate = payload.indeterminate;
+			return;
+		}
+
+		csmDownloadMessage = payload.message;
+		csmDownloadProgress = payload.progress ?? null;
+		csmDownloadIndeterminate = payload.indeterminate;
+	}
+
+	async function syncModelStatus() {
+		try {
+			const [gemmaDownloaded, gemmaLoaded, csmDownloaded, csmLoaded] = await Promise.all([
+				invoke<boolean>('check_model_status'),
+				invoke<boolean>('is_server_running'),
+				invoke<boolean>('check_csm_status'),
+				invoke<boolean>('is_csm_running')
+			]);
+
+			isGemmaDownloaded = gemmaDownloaded;
+			isGemmaLoaded = gemmaLoaded;
+			isCsmDownloaded = csmDownloaded;
+			isCsmLoaded = csmLoaded;
+		} catch (err) {
+			console.error('Failed to sync model status:', err);
+		}
+	}
 
 	async function startAudioCapture() {
 		console.log('Starting audio capture...');
+
 		try {
-			mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-			console.log('Microphone access granted');
-			
-			audioContext = new AudioContext();
-			console.log('AudioContext created, state:', audioContext.state, 'sampleRate:', audioContext.sampleRate);
-			
-			// Load and add the AudioWorklet module
-			const moduleUrl = '/audio-processor.js';
-			console.log('Loading AudioWorklet from:', moduleUrl);
-			await audioContext.audioWorklet.addModule(moduleUrl);
-			console.log('AudioWorklet module added');
-			
-			source = audioContext.createMediaStreamSource(mediaStream);
-			processor = new AudioWorkletNode(audioContext, 'audio-processor');
-			
+			mediaStream = await navigator.mediaDevices.getUserMedia({
+				audio: {
+					echoCancellation: true,
+					noiseSuppression: true
+				}
+			});
+			captureContext = new AudioContext();
+
+			await captureContext.audioWorklet.addModule('/audio-processor.js');
+
+			source = captureContext.createMediaStreamSource(mediaStream);
+			processor = new AudioWorkletNode(captureContext, 'audio-processor');
+
 			processor.port.onmessage = (event) => {
-				if (micMuted || !calling) return;
-				
-				const inputData = event.data;
-				// Send to Rust backend
-				invoke('receive_audio_chunk', { payload: { data: Array.from(inputData) } })
-					.catch(err => console.error('Invoke error:', err));
+				if (micMuted || !calling) {
+					return;
+				}
+
+				const inputData = event.data as Float32Array;
+				void invoke('receive_audio_chunk', { payload: { data: Array.from(inputData) } }).catch((err) =>
+					console.error('Invoke error:', err)
+				);
 			};
 
 			source.connect(processor);
-			processor.connect(audioContext.destination);
-			
-			if (audioContext.state === 'suspended') {
-				await audioContext.resume();
-				console.log('AudioContext resumed');
+			processor.connect(captureContext.destination);
+
+			if (captureContext.state === 'suspended') {
+				await captureContext.resume();
 			}
-			
-			console.log('Audio pipeline connected');
 		} catch (err) {
 			console.error('Failed to start audio capture:', err);
 			calling = false;
@@ -67,148 +167,386 @@
 			source.disconnect();
 			source = null;
 		}
-		if (audioContext) {
-			audioContext.close();
-			audioContext = null;
+		if (captureContext) {
+			void captureContext.close();
+			captureContext = null;
 		}
 		if (mediaStream) {
-			mediaStream.getTracks().forEach(track => track.stop());
+			mediaStream.getTracks().forEach((track) => track.stop());
 			mediaStream = null;
 		}
 	}
 
-	function handleStartCall() {
-		console.log('Button: Call clicked');
+	function stopPlayback(_closeContext = false) {
+		if (activePlaybackAudio) {
+			activePlaybackAudio.pause();
+			activePlaybackAudio.src = '';
+			activePlaybackAudio = null;
+		}
+		if (activePlaybackUrl) {
+			URL.revokeObjectURL(activePlaybackUrl);
+			activePlaybackUrl = null;
+		}
+		for (const url of queuedPlaybackUrls) {
+			URL.revokeObjectURL(url);
+		}
+		queuedPlaybackUrls = [];
+		activeTtsRequestId = null;
+	}
+
+	function decodeBase64Bytes(audioBase64: string) {
+		const binary = atob(audioBase64);
+		const bytes = new Uint8Array(binary.length);
+
+		for (let i = 0; i < binary.length; i += 1) {
+			bytes[i] = binary.charCodeAt(i);
+		}
+
+		return bytes;
+	}
+
+	function playNextQueuedAudio() {
+		if (!calling || activePlaybackAudio || queuedPlaybackUrls.length === 0) {
+			return;
+		}
+
+		const nextUrl = queuedPlaybackUrls.shift();
+		if (!nextUrl) {
+			return;
+		}
+
+		const audio = new Audio(nextUrl);
+		activePlaybackAudio = audio;
+		activePlaybackUrl = nextUrl;
+		audio.preload = 'auto';
+
+		const finishPlayback = () => {
+			if (activePlaybackAudio === audio) {
+				activePlaybackAudio.pause();
+				activePlaybackAudio.src = '';
+				activePlaybackAudio = null;
+			}
+			if (activePlaybackUrl === nextUrl) {
+				URL.revokeObjectURL(nextUrl);
+				activePlaybackUrl = null;
+			}
+			playNextQueuedAudio();
+		};
+
+		audio.onended = finishPlayback;
+		audio.onerror = () => {
+			console.error('Failed to play queued CSM audio');
+			finishPlayback();
+		};
+
+		void audio.play().catch((err) => {
+			console.error('Failed to start queued CSM audio:', err);
+			finishPlayback();
+		});
+	}
+
+	async function queuePlaybackChunk(payload: CsmAudioChunkEvent) {
+		if (!calling) {
+			return;
+		}
+		if (activeTtsRequestId !== payload.request_id) {
+			return;
+		}
+
+		const audioBytes = decodeBase64Bytes(payload.audio_wav_base64);
+		if (audioBytes.length === 0) {
+			return;
+		}
+
+		const audioBlob = new Blob([audioBytes], { type: 'audio/wav' });
+		queuedPlaybackUrls = [...queuedPlaybackUrls, URL.createObjectURL(audioBlob)];
+		playNextQueuedAudio();
+	}
+
+	async function handleStartCall() {
+		if (!modelsReady) {
+			return;
+		}
+
+		try {
+			await invoke('reset_call_session');
+		} catch (err) {
+			console.error('Failed to reset call session:', err);
+		}
+
 		calling = true;
 		time = 0;
-		startAudioCapture();
-		
-		// Ping backend to confirm connection
-		invoke('ping').then(() => console.log('Backend: ping successful')).catch(err => console.error('Backend: ping failed', err));
-		
-		// Start timer simulation
-		const interval = setInterval(() => {
+		activeTtsRequestId = null;
+
+		void startAudioCapture();
+		void invoke('ping').catch((err) => console.error('Backend ping failed', err));
+
+		if (callTimerInterval) {
+			clearInterval(callTimerInterval);
+		}
+
+		callTimerInterval = window.setInterval(() => {
 			if (!calling) {
-				clearInterval(interval);
+				if (callTimerInterval) {
+					clearInterval(callTimerInterval);
+					callTimerInterval = null;
+				}
 				return;
 			}
-			time++;
+			time += 1;
 		}, 1000);
 	}
 
-	function handleEndCall() {
+	async function handleEndCall() {
 		calling = false;
 		stopAudioCapture();
+		stopPlayback();
+
+		if (callTimerInterval) {
+			clearInterval(callTimerInterval);
+			callTimerInterval = null;
+		}
+
+		try {
+			await invoke('reset_call_session');
+		} catch (err) {
+			console.error('Failed to clear call session:', err);
+		}
 	}
 
 	function toggleMic() {
 		micMuted = !micMuted;
 	}
 
-	// Format time as mm:ss
-	const formattedTime = $derived(`${Math.floor(time / 60).toString().padStart(2, '0')}:${(time % 60).toString().padStart(2, '0')}`);
-
-	onMount(() => {
-		const checkStatus = async () => {
-			try {
-				isModelDownloaded = await invoke('check_model_status');
-				isModelLoaded = await invoke('is_server_running');
-			} catch (err) {
-				console.error('Failed to check status:', err);
-			}
-		};
-		
-		checkStatus();
-
-		// Periodic health check
-		healthCheckInterval = setInterval(async () => {
-			isModelLoaded = await invoke('is_server_running');
-		}, 5000);
-	});
-
-	onDestroy(() => {
-		if (healthCheckInterval) clearInterval(healthCheckInterval);
-	});
-
-	async function handleDownloadModel() {
-		isDownloading = true;
+	async function handleDownloadGemma() {
+		isDownloadingGemma = true;
+		resetDownloadState('gemma');
 		try {
 			await invoke('download_model');
-			isModelDownloaded = await invoke('check_model_status');
+			await syncModelStatus();
 		} catch (err) {
 			console.error('Download model failed:', err);
-			alert('Download failed. Check the console for details.');
+			alert(`Gemma download failed.\n${String(err)}`);
 		} finally {
-			isDownloading = false;
+			isDownloadingGemma = false;
 		}
 	}
 
-	async function handleLoadModel() {
-		isLoadingModel = true;
+	async function handleLoadGemma() {
+		isLoadingGemma = true;
 		try {
 			await invoke('start_server');
-			// Wait for server to be responsive
-			for (let i = 0; i < 30; i++) {
-				await new Promise(r => setTimeout(r, 1000));
-				if (await invoke('is_server_running')) {
-					isModelLoaded = true;
+			for (let i = 0; i < 30; i += 1) {
+				await new Promise((resolve) => setTimeout(resolve, 1000));
+				if (await invoke<boolean>('is_server_running')) {
+					isGemmaLoaded = true;
 					break;
 				}
 			}
 		} catch (err) {
 			console.error('Load model failed:', err);
-			alert('Failed to load model. Check logs.');
+			alert(`Failed to load Gemma.\n${String(err)}`);
 		} finally {
-			isLoadingModel = false;
+			isLoadingGemma = false;
+			await syncModelStatus();
 		}
 	}
+
+	async function handleDownloadCsm() {
+		isDownloadingCsm = true;
+		resetDownloadState('csm');
+		try {
+			await invoke('download_csm_model');
+			await syncModelStatus();
+		} catch (err) {
+			console.error('Download CSM failed:', err);
+			alert(`CSM download failed.\n${String(err)}`);
+		} finally {
+			isDownloadingCsm = false;
+		}
+	}
+
+	async function handleLoadCsm() {
+		isLoadingCsm = true;
+		csmLoadMessage = 'Starting worker...';
+		try {
+			await invoke('start_csm_server');
+			isCsmLoaded = true;
+		} catch (err) {
+			console.error('Load CSM failed:', err);
+			alert(`Failed to load CSM.\n${String(err)}`);
+		} finally {
+			isLoadingCsm = false;
+			await syncModelStatus();
+		}
+	}
+
+	onMount(() => {
+		void syncModelStatus();
+
+		healthCheckInterval = window.setInterval(() => {
+			void syncModelStatus();
+		}, 5000);
+
+		void (async () => {
+			try {
+				eventUnlisteners = await Promise.all([
+					listen<CsmAudioStartEvent>('csm-audio-start', ({ payload }) => {
+						if (!calling) {
+							return;
+						}
+
+						stopPlayback();
+						activeTtsRequestId = payload.request_id;
+						console.log('Synthesizing response:', payload.text);
+					}),
+					listen<CsmAudioChunkEvent>('csm-audio-chunk', ({ payload }) => {
+						void queuePlaybackChunk(payload);
+					}),
+					listen<CsmAudioDoneEvent>('csm-audio-done', ({ payload }) => {
+						if (payload.request_id === activeTtsRequestId) {
+							console.log('Finished streaming CSM response');
+						}
+					}),
+					listen<CsmAudioStopEvent>('csm-audio-stop', () => {
+						stopPlayback();
+					}),
+					listen<CsmErrorEvent>('csm-error', ({ payload }) => {
+						console.error('CSM error:', payload.message);
+						if (payload.request_id == null || payload.request_id === activeTtsRequestId) {
+							stopPlayback();
+						}
+					}),
+					listen<CsmStatusEvent>('csm-status', ({ payload }) => {
+						if (isLoadingCsm) {
+							csmLoadMessage = payload.message;
+						}
+					}),
+					listen<ModelDownloadProgressEvent>('model-download-progress', ({ payload }) => {
+						applyDownloadEvent(payload);
+					})
+				]);
+			} catch (err) {
+				console.error('Failed to register Tauri event listeners:', err);
+			}
+		})();
+	});
+
+	onDestroy(() => {
+		if (healthCheckInterval) {
+			clearInterval(healthCheckInterval);
+		}
+		if (callTimerInterval) {
+			clearInterval(callTimerInterval);
+		}
+
+		stopAudioCapture();
+		stopPlayback(true);
+
+		for (const unlisten of eventUnlisteners) {
+			unlisten();
+		}
+		eventUnlisteners = [];
+	});
 </script>
 
 <div class="app-container">
-	<!-- Background -->
 	<div class="background"></div>
 
-	<!-- Main Content -->
+	{#if !calling}
+		<div class="model-tags">
+			<div class="download-banner" class:ready={isGemmaDownloaded && isGemmaLoaded}>
+				{#if isDownloadingGemma}
+					<div class="download-content">
+						<div class="download-row">
+							<span>Gemma 3: {gemmaDownloadMessage}</span>
+							{#if gemmaDownloadProgress !== null}
+								<span class="download-percent">{Math.round(gemmaDownloadProgress)}%</span>
+							{/if}
+						</div>
+						<div class="progress-track">
+							<div
+								class="progress-fill"
+								class:indeterminate={gemmaDownloadIndeterminate}
+								style:width={gemmaDownloadIndeterminate ? '38%' : `${gemmaDownloadProgress ?? 0}%`}
+							></div>
+						</div>
+					</div>
+				{:else if isGemmaDownloaded}
+					{#if isGemmaLoaded}
+						<div class="status-icon">
+							<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+						</div>
+						<span>Gemma 3: Loaded</span>
+					{:else}
+						<span>Gemma 3: Downloaded</span>
+						<button class="download-btn" disabled={isLoadingGemma} onclick={handleLoadGemma}>
+							{isLoadingGemma ? 'Loading...' : 'Load Model'}
+						</button>
+					{/if}
+				{:else}
+					<span>Gemma 3 model not found in cache.</span>
+					<button class="download-btn" disabled={isDownloadingGemma} onclick={handleDownloadGemma}>
+						{isDownloadingGemma ? 'Downloading...' : 'Download Model'}
+					</button>
+				{/if}
+			</div>
+
+			<div class="download-banner" class:ready={isCsmDownloaded && isCsmLoaded}>
+				{#if isDownloadingCsm}
+					<div class="download-content">
+						<div class="download-row">
+							<span>CSM 1B: {csmDownloadMessage}</span>
+							{#if csmDownloadProgress !== null}
+								<span class="download-percent">{Math.round(csmDownloadProgress)}%</span>
+							{/if}
+						</div>
+						<div class="progress-track">
+							<div
+								class="progress-fill"
+								class:indeterminate={csmDownloadIndeterminate}
+								style:width={csmDownloadIndeterminate ? '38%' : `${csmDownloadProgress ?? 0}%`}
+							></div>
+						</div>
+					</div>
+				{:else if isCsmDownloaded}
+					{#if isCsmLoaded}
+						<div class="status-icon">
+							<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+						</div>
+						<span>CSM 1B: Loaded</span>
+					{:else}
+						<span>CSM 1B: {isLoadingCsm ? csmLoadMessage : 'Downloaded'}</span>
+						<button class="download-btn" disabled={isLoadingCsm} onclick={handleLoadCsm}>
+							{isLoadingCsm ? 'Loading...' : 'Load Model'}
+						</button>
+					{/if}
+				{:else}
+					<span>CSM 1B model not found in cache.</span>
+					<button class="download-btn" disabled={isDownloadingCsm} onclick={handleDownloadCsm}>
+						{isDownloadingCsm ? 'Downloading...' : 'Download Model'}
+					</button>
+				{/if}
+			</div>
+		</div>
+	{/if}
+
 	<main>
 		<div class="avatar-container">
 			<div class="avatar" class:calling></div>
 		</div>
 	</main>
 
-	{#if !calling}
-		<div class="download-banner" class:ready={isModelDownloaded && isModelLoaded}>
-			{#if isModelDownloaded}
-				{#if isModelLoaded}
-					<div class="status-icon">
-						<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-					</div>
-					<span>Gemma 3: Loaded</span>
-				{:else}
-					<span>Gemma 3: Downloaded</span>
-					<button class="download-btn" disabled={isLoadingModel} onclick={handleLoadModel}>
-						{isLoadingModel ? "Loading..." : "Load Model"}
-					</button>
-				{/if}
-			{:else}
-				<span>Gemma 3 model not found in cache.</span>
-				<button class="download-btn" disabled={isDownloading} onclick={handleDownloadModel}>
-					{isDownloading ? "Downloading..." : "Download Model"}
-				</button>
-			{/if}
-		</div>
-	{/if}
-
-	<!-- Control Bar -->
 	<div class="control-bar-wrapper">
 		<div class="control-bar">
 			<div class="info">
 				<div class="username">openduck</div>
-				<div class="timer">{calling ? formattedTime : "Ready"}</div>
+				<div class="timer">{calling ? formattedTime : 'Ready'}</div>
 			</div>
 
 			<div class="actions">
 				{#if calling}
-					<button class="icon-btn" class:active={!micMuted} onclick={toggleMic} aria-label={micMuted ? "Unmute microphone" : "Mute microphone"}>
+					<button class="icon-btn" class:active={!micMuted} onclick={toggleMic} aria-label={micMuted ? 'Unmute microphone' : 'Mute microphone'}>
 						{#if micMuted}
 							<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
 						{:else}
@@ -221,7 +559,7 @@
 			{#if calling}
 				<button class="end-btn" onclick={handleEndCall}>End</button>
 			{:else}
-				<button class="start-btn" onclick={handleStartCall}>Call</button>
+				<button class="start-btn" disabled={!modelsReady} onclick={handleStartCall}>Call</button>
 			{/if}
 		</div>
 	</div>
@@ -282,6 +620,16 @@
 
 	.avatar.calling {
 		box-shadow: 0 0 60px rgba(255, 215, 0, 0.4);
+	}
+
+	.model-tags {
+		position: absolute;
+		top: 40px;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 12px;
+		z-index: 10;
 	}
 
 	.control-bar-wrapper {
@@ -359,8 +707,8 @@
 		color: #1c1c1e;
 	}
 
-	.end-btn {
-		background-color: #ff3b30;
+	.end-btn,
+	.start-btn {
 		color: white;
 		border: none;
 		border-radius: 24px;
@@ -368,40 +716,36 @@
 		font-weight: 600;
 		font-size: 1.05rem;
 		cursor: pointer;
-		transition: background-color 0.2s, transform 0.1s;
+		transition: background-color 0.2s, transform 0.1s, opacity 0.2s;
+	}
+
+	.end-btn {
+		background-color: #ff3b30;
 	}
 
 	.end-btn:hover {
 		background-color: #ff453a;
 	}
 
-	.end-btn:active {
-		transform: scale(0.95);
-	}
-
 	.start-btn {
 		background-color: #34c759;
-		color: white;
-		border: none;
-		border-radius: 24px;
-		padding: 10px 30px;
-		font-weight: 600;
-		font-size: 1.05rem;
-		cursor: pointer;
-		transition: background-color 0.2s, transform 0.1s;
 	}
 
-	.start-btn:hover {
+	.start-btn:hover:not(:disabled) {
 		background-color: #30d158;
 	}
 
-	.start-btn:active {
+	.end-btn:active,
+	.start-btn:active:not(:disabled) {
 		transform: scale(0.95);
 	}
 
+	.start-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
 	.download-banner {
-		position: absolute;
-		top: 40px;
 		background: rgba(28, 28, 30, 0.9);
 		border: 1px solid rgba(255, 255, 255, 0.1);
 		border-radius: 12px;
@@ -411,8 +755,53 @@
 		gap: 16px;
 		color: white;
 		backdrop-filter: blur(10px);
-		z-index: 10;
 		animation: slideDown 0.3s ease-out;
+		min-width: 420px;
+	}
+
+	.download-banner.ready {
+		background: rgba(28, 28, 30, 0.6);
+		padding: 8px 16px;
+	}
+
+	.download-content {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		width: 100%;
+	}
+
+	.download-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+	}
+
+	.download-percent {
+		color: rgba(255, 255, 255, 0.75);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.progress-track {
+		position: relative;
+		width: 100%;
+		height: 8px;
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.1);
+		overflow: hidden;
+	}
+
+	.progress-fill {
+		height: 100%;
+		border-radius: 999px;
+		background: linear-gradient(90deg, #7fe37c 0%, #34c759 100%);
+		transition: width 0.2s ease;
+	}
+
+	.progress-fill.indeterminate {
+		position: relative;
+		animation: indeterminateSlide 1.1s ease-in-out infinite;
 	}
 
 	.download-btn {
@@ -431,11 +820,6 @@
 		cursor: not-allowed;
 	}
 
-	.download-banner.ready {
-		background: rgba(28, 28, 30, 0.6);
-		padding: 8px 16px;
-	}
-
 	.status-icon {
 		display: flex;
 		align-items: center;
@@ -443,7 +827,22 @@
 	}
 
 	@keyframes slideDown {
-		from { transform: translateY(-20px); opacity: 0; }
-		to { transform: translateY(0); opacity: 1; }
+		from {
+			transform: translateY(-20px);
+			opacity: 0;
+		}
+		to {
+			transform: translateY(0);
+			opacity: 1;
+		}
+	}
+
+	@keyframes indeterminateSlide {
+		from {
+			transform: translateX(-120%);
+		}
+		to {
+			transform: translateX(320%);
+		}
 	}
 </style>
