@@ -1,0 +1,24 @@
+{
+  "name": "openduck",
+  "version": "1.0.0",
+  "description": "AI Voice Assistant Desktop App",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.56.1",
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@tauri-apps/cli": "^2.10.1",
+    "svelte": "^5.55.1",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.5"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.1"
+  }
+}
