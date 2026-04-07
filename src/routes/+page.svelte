@@ -1,11 +1,85 @@
 <script lang="ts">
+	import { invoke } from '@tauri-apps/api/core';
+
 	let calling = $state(false);
 	let micMuted = $state(false);
 	let time = $state(0); 
 
+	let audioContext: AudioContext | null = null;
+	let mediaStream: MediaStream | null = null;
+	let source: MediaStreamAudioSourceNode | null = null;
+	let processor: AudioWorkletNode | null = null;
+
+	async function startAudioCapture() {
+		console.log('Starting audio capture...');
+		try {
+			mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			console.log('Microphone access granted');
+			
+			audioContext = new AudioContext();
+			console.log('AudioContext created, state:', audioContext.state);
+			
+			// Load and add the AudioWorklet module
+			const moduleUrl = '/audio-processor.js';
+			console.log('Loading AudioWorklet from:', moduleUrl);
+			await audioContext.audioWorklet.addModule(moduleUrl);
+			console.log('AudioWorklet module added');
+			
+			source = audioContext.createMediaStreamSource(mediaStream);
+			processor = new AudioWorkletNode(audioContext, 'audio-processor');
+			
+			processor.port.onmessage = (event) => {
+				if (micMuted || !calling) return;
+				
+				const inputData = event.data;
+				// Send to Rust backend
+				invoke('receive_audio_chunk', { payload: { data: Array.from(inputData) } })
+					.catch(err => console.error('Invoke error:', err));
+			};
+
+			source.connect(processor);
+			processor.connect(audioContext.destination);
+			
+			if (audioContext.state === 'suspended') {
+				await audioContext.resume();
+				console.log('AudioContext resumed');
+			}
+			
+			console.log('Audio pipeline connected');
+		} catch (err) {
+			console.error('Failed to start audio capture:', err);
+			calling = false;
+		}
+	}
+
+	function stopAudioCapture() {
+		if (processor) {
+			processor.disconnect();
+			processor = null;
+		}
+		if (source) {
+			source.disconnect();
+			source = null;
+		}
+		if (audioContext) {
+			audioContext.close();
+			audioContext = null;
+		}
+		if (mediaStream) {
+			mediaStream.getTracks().forEach(track => track.stop());
+			mediaStream = null;
+		}
+	}
+
 	function handleStartCall() {
+		console.log('Button: Call clicked');
 		calling = true;
 		time = 0;
+		startAudioCapture();
+		
+		// Ping backend to confirm connection
+		invoke('ping').then(() => console.log('Backend: ping successful')).catch(err => console.error('Backend: ping failed', err));
+		
 		// Start timer simulation
 		const interval = setInterval(() => {
 			if (!calling) {
@@ -18,6 +92,7 @@
 
 	function handleEndCall() {
 		calling = false;
+		stopAudioCapture();
 	}
 
 	function toggleMic() {
