@@ -7,7 +7,13 @@ const config = {
 	kit: {
 		adapter: adapter({
 			fallback: 'index.html'
-		})
+		}),
+		prerender: {
+			handleHttpError: ({ path, referrer, message }) => {
+				if (path === '/favicon.png') return;
+				throw new Error(message);
+			}
+		}
 	}
 };
 

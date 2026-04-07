@@ -1,14 +1,20 @@
 <script lang="ts">
+	import { onMount, onDestroy } from 'svelte';
 	import { invoke } from '@tauri-apps/api/core';
 
 	let calling = $state(false);
 	let micMuted = $state(false);
 	let time = $state(0); 
+	let isModelDownloaded = $state(false);
+	let isModelLoaded = $state(false);
+	let isDownloading = $state(false);
+	let isLoadingModel = $state(false);
 
 	let audioContext: AudioContext | null = null;
 	let mediaStream: MediaStream | null = null;
 	let source: MediaStreamAudioSourceNode | null = null;
 	let processor: AudioWorkletNode | null = null;
+	let healthCheckInterval: any = null;
 
 	async function startAudioCapture() {
 		console.log('Starting audio capture...');
@@ -17,7 +23,7 @@
 			console.log('Microphone access granted');
 			
 			audioContext = new AudioContext();
-			console.log('AudioContext created, state:', audioContext.state);
+			console.log('AudioContext created, state:', audioContext.state, 'sampleRate:', audioContext.sampleRate);
 			
 			// Load and add the AudioWorklet module
 			const moduleUrl = '/audio-processor.js';
@@ -101,6 +107,61 @@
 
 	// Format time as mm:ss
 	const formattedTime = $derived(`${Math.floor(time / 60).toString().padStart(2, '0')}:${(time % 60).toString().padStart(2, '0')}`);
+
+	onMount(() => {
+		const checkStatus = async () => {
+			try {
+				isModelDownloaded = await invoke('check_model_status');
+				isModelLoaded = await invoke('is_server_running');
+			} catch (err) {
+				console.error('Failed to check status:', err);
+			}
+		};
+		
+		checkStatus();
+
+		// Periodic health check
+		healthCheckInterval = setInterval(async () => {
+			isModelLoaded = await invoke('is_server_running');
+		}, 5000);
+	});
+
+	onDestroy(() => {
+		if (healthCheckInterval) clearInterval(healthCheckInterval);
+	});
+
+	async function handleDownloadModel() {
+		isDownloading = true;
+		try {
+			await invoke('download_model');
+			isModelDownloaded = await invoke('check_model_status');
+		} catch (err) {
+			console.error('Download model failed:', err);
+			alert('Download failed. Check the console for details.');
+		} finally {
+			isDownloading = false;
+		}
+	}
+
+	async function handleLoadModel() {
+		isLoadingModel = true;
+		try {
+			await invoke('start_server');
+			// Wait for server to be responsive
+			for (let i = 0; i < 30; i++) {
+				await new Promise(r => setTimeout(r, 1000));
+				if (await invoke('is_server_running')) {
+					isModelLoaded = true;
+					break;
+				}
+			}
+		} catch (err) {
+			console.error('Load model failed:', err);
+			alert('Failed to load model. Check logs.');
+		} finally {
+			isLoadingModel = false;
+		}
+	}
 </script>
 
 <div class="app-container">
@@ -113,6 +174,29 @@
 			<div class="avatar" class:calling></div>
 		</div>
 	</main>
+
+	{#if !calling}
+		<div class="download-banner" class:ready={isModelDownloaded && isModelLoaded}>
+			{#if isModelDownloaded}
+				{#if isModelLoaded}
+					<div class="status-icon">
+						<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+					</div>
+					<span>Gemma 3: Loaded</span>
+				{:else}
+					<span>Gemma 3: Downloaded</span>
+					<button class="download-btn" disabled={isLoadingModel} onclick={handleLoadModel}>
+						{isLoadingModel ? "Loading..." : "Load Model"}
+					</button>
+				{/if}
+			{:else}
+				<span>Gemma 3 model not found in cache.</span>
+				<button class="download-btn" disabled={isDownloading} onclick={handleDownloadModel}>
+					{isDownloading ? "Downloading..." : "Download Model"}
+				</button>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Control Bar -->
 	<div class="control-bar-wrapper">
@@ -313,5 +397,53 @@
 
 	.start-btn:active {
 		transform: scale(0.95);
+	}
+
+	.download-banner {
+		position: absolute;
+		top: 40px;
+		background: rgba(28, 28, 30, 0.9);
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 12px;
+		padding: 12px 20px;
+		display: flex;
+		align-items: center;
+		gap: 16px;
+		color: white;
+		backdrop-filter: blur(10px);
+		z-index: 10;
+		animation: slideDown 0.3s ease-out;
+	}
+
+	.download-btn {
+		background: #ffffff;
+		color: #000;
+		border: none;
+		border-radius: 8px;
+		padding: 6px 14px;
+		font-weight: 600;
+		cursor: pointer;
+		font-size: 0.9rem;
+	}
+
+	.download-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.download-banner.ready {
+		background: rgba(28, 28, 30, 0.6);
+		padding: 8px 16px;
+	}
+
+	.status-icon {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	@keyframes slideDown {
+		from { transform: translateY(-20px); opacity: 0; }
+		to { transform: translateY(0); opacity: 1; }
 	}
 </style>

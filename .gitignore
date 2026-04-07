@@ -7,6 +7,10 @@ build/
 
 # Rust
 src-tauri/target/
+src-tauri/gen/
+src-tauri/bin/mlx-handler-*
+src-tauri/resources/python_env/
+*.wav
 
 # OS
 .DS_Store
