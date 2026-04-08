@@ -55,6 +55,9 @@
 	let isLoadingGemma = $state(false);
 	let isDownloadingCsm = $state(false);
 	let isLoadingCsm = $state(false);
+	let isUnloadingGemma = $state(false);
+	let isUnloadingCsm = $state(false);
+	let isUpdatingCsmQuantize = $state(false);
 	let gemmaDownloadMessage = $state('Preparing download...');
 	let gemmaDownloadProgress = $state<number | null>(null);
 	let gemmaDownloadIndeterminate = $state(true);
@@ -62,6 +65,7 @@
 	let csmDownloadProgress = $state<number | null>(null);
 	let csmDownloadIndeterminate = $state(true);
 	let csmLoadMessage = $state('Starting worker...');
+	let isCsmQuantized = $state(false);
 	let selectedCsmVoice = $state<CsmVoiceOption>('male');
 	let lastAppliedCsmVoice = $state<CsmVoiceOption>('male');
 
@@ -139,19 +143,41 @@
 		}
 	}
 
+	async function applyCsmQuantizeSelection() {
+		await invoke('set_csm_quantize', { enabled: isCsmQuantized });
+	}
+
+	async function handleCsmQuantizeToggle() {
+		const previousValue = isCsmQuantized;
+		isCsmQuantized = !isCsmQuantized;
+		isUpdatingCsmQuantize = true;
+
+		try {
+			await applyCsmQuantizeSelection();
+		} catch (err) {
+			isCsmQuantized = previousValue;
+			console.error('Failed to update CSM quantize setting:', err);
+			alert(`Failed to update CSM quantize setting.\n${String(err)}`);
+		} finally {
+			isUpdatingCsmQuantize = false;
+		}
+	}
+
 	async function syncModelStatus() {
 		try {
-			const [gemmaDownloaded, gemmaLoaded, csmDownloaded, csmLoaded] = await Promise.all([
+			const [gemmaDownloaded, gemmaLoaded, csmDownloaded, csmLoaded, csmQuantized] = await Promise.all([
 				invoke<boolean>('check_model_status'),
 				invoke<boolean>('is_server_running'),
 				invoke<boolean>('check_csm_status'),
-				invoke<boolean>('is_csm_running')
+				invoke<boolean>('is_csm_running'),
+				invoke<boolean>('get_csm_quantize')
 			]);
 
 			isGemmaDownloaded = gemmaDownloaded;
 			isGemmaLoaded = gemmaLoaded;
 			isCsmDownloaded = csmDownloaded;
 			isCsmLoaded = csmLoaded;
+			isCsmQuantized = csmQuantized;
 		} catch (err) {
 			console.error('Failed to sync model status:', err);
 		}
@@ -455,6 +481,7 @@
 		isLoadingCsm = true;
 		csmLoadMessage = 'Starting worker...';
 		try {
+			await applyCsmQuantizeSelection();
 			await applyCsmVoiceSelection();
 			await invoke('start_csm_server');
 			isCsmLoaded = true;
@@ -463,6 +490,34 @@
 			alert(`Failed to load CSM.\n${String(err)}`);
 		} finally {
 			isLoadingCsm = false;
+			await syncModelStatus();
+		}
+	}
+
+	async function handleUnloadGemma() {
+		isUnloadingGemma = true;
+		try {
+			await invoke('stop_server');
+			isGemmaLoaded = false;
+		} catch (err) {
+			console.error('Unload Gemma failed:', err);
+			alert(`Failed to unload Gemma.\n${String(err)}`);
+		} finally {
+			isUnloadingGemma = false;
+			await syncModelStatus();
+		}
+	}
+
+	async function handleUnloadCsm() {
+		isUnloadingCsm = true;
+		try {
+			await invoke('stop_csm_server');
+			isCsmLoaded = false;
+		} catch (err) {
+			console.error('Unload CSM failed:', err);
+			alert(`Failed to unload CSM.\n${String(err)}`);
+		} finally {
+			isUnloadingCsm = false;
 			await syncModelStatus();
 		}
 	}
@@ -596,8 +651,13 @@
 									<span class="banner-title">Gemma 3</span>
 									<span class="banner-subtitle">Loaded</span>
 								</div>
-								<div class="status-icon">
-									<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+								<div class="loaded-actions">
+									<button class="utility-btn" disabled={isUnloadingGemma} onclick={handleUnloadGemma}>
+										{isUnloadingGemma ? 'Unloading...' : 'Unload'}
+									</button>
+									<div class="status-icon">
+										<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+									</div>
 								</div>
 							</div>
 						{:else}
@@ -605,7 +665,7 @@
 								<span class="banner-title">Gemma 3</span>
 								<span class="banner-subtitle">Downloaded</span>
 							</div>
-							<button class="download-btn" disabled={isLoadingGemma} onclick={handleLoadGemma}>
+							<button class="download-btn" disabled={isLoadingGemma || isUnloadingGemma} onclick={handleLoadGemma}>
 								{isLoadingGemma ? 'Loading...' : 'Load Model'}
 							</button>
 						{/if}
@@ -648,16 +708,38 @@
 									<span class="banner-title">CSM 1B</span>
 									<span class="banner-subtitle">Loaded</span>
 								</div>
-								<div class="status-icon">
-									<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+								<div class="loaded-actions">
+									<button class="utility-btn" disabled={isUnloadingCsm} onclick={handleUnloadCsm}>
+										{isUnloadingCsm ? 'Unloading...' : 'Unload'}
+									</button>
+									<div class="status-icon">
+										<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+									</div>
 								</div>
 							</div>
 						{:else}
 							<div class="banner-copy">
-								<span class="banner-title">CSM 1B</span>
+								<div class="banner-heading-row">
+									<span class="banner-title">CSM 1B</span>
+									<div class="tooltip-shell">
+										<button
+											type="button"
+											class="quantize-toggle"
+											class:active={isCsmQuantized}
+											disabled={isLoadingCsm || isDownloadingCsm || isUpdatingCsmQuantize}
+											onclick={handleCsmQuantizeToggle}
+										>
+											<span class="quantize-dot"></span>
+											<span>Quantize</span>
+										</button>
+										<div class="tooltip-bubble">
+											This can speed up the audio generation but lose the quality.
+										</div>
+									</div>
+								</div>
 								<span class="banner-subtitle">{isLoadingCsm ? csmLoadMessage : 'Downloaded'}</span>
 							</div>
-							<button class="download-btn" disabled={isLoadingCsm} onclick={handleLoadCsm}>
+							<button class="download-btn" disabled={isLoadingCsm || isUnloadingCsm} onclick={handleLoadCsm}>
 								{isLoadingCsm ? 'Loading...' : 'Load Model'}
 							</button>
 						{/if}
@@ -665,7 +747,24 @@
 				{:else}
 					<div class="banner-row">
 						<div class="banner-copy">
-							<span class="banner-title">CSM 1B</span>
+							<div class="banner-heading-row">
+								<span class="banner-title">CSM 1B</span>
+								<div class="tooltip-shell">
+									<button
+										type="button"
+										class="quantize-toggle"
+										class:active={isCsmQuantized}
+										disabled={isDownloadingCsm || isUpdatingCsmQuantize}
+										onclick={handleCsmQuantizeToggle}
+									>
+										<span class="quantize-dot"></span>
+										<span>Quantize</span>
+									</button>
+									<div class="tooltip-bubble">
+										This can speed up the audio generation but lose the quality.
+									</div>
+								</div>
+							</div>
 							<span class="banner-subtitle">Model not found in cache</span>
 						</div>
 						<button class="download-btn" disabled={isDownloadingCsm} onclick={handleDownloadCsm}>
@@ -681,7 +780,7 @@
 							id="csm-voice-select"
 							class="voice-select"
 							bind:value={selectedCsmVoice}
-							disabled={isLoadingCsm}
+							disabled={isLoadingCsm || isUnloadingCsm}
 							onchange={handleCsmVoiceChange}
 						>
 							<option value="female">Female</option>
@@ -1043,6 +1142,13 @@
 		min-width: 0;
 	}
 
+	.banner-heading-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+	}
+
 	.banner-title {
 		font-size: 1rem;
 		font-weight: 600;
@@ -1061,6 +1167,13 @@
 		justify-content: space-between;
 		gap: 16px;
 		width: 100%;
+	}
+
+	.loaded-actions {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-shrink: 0;
 	}
 
 	.download-percent {
@@ -1100,9 +1213,111 @@
 		font-size: 0.9rem;
 	}
 
-	.download-btn:disabled {
+	.download-btn:disabled,
+	.utility-btn:disabled,
+	.quantize-toggle:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
+	}
+
+	.utility-btn {
+		background: rgba(255, 255, 255, 0.08);
+		color: rgba(255, 255, 255, 0.9);
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 10px;
+		padding: 7px 12px;
+		font-weight: 600;
+		font-size: 0.88rem;
+		cursor: pointer;
+		transition: background-color 0.2s ease, border-color 0.2s ease;
+	}
+
+	.utility-btn:hover:not(:disabled) {
+		background: rgba(255, 255, 255, 0.12);
+		border-color: rgba(255, 255, 255, 0.12);
+	}
+
+	.tooltip-shell {
+		position: relative;
+		display: inline-flex;
+	}
+
+	.quantize-toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.06);
+		color: rgba(255, 255, 255, 0.82);
+		padding: 5px 12px;
+		font-size: 0.82rem;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		cursor: pointer;
+		transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+	}
+
+	.quantize-toggle:hover:not(:disabled) {
+		background: rgba(255, 255, 255, 0.1);
+	}
+
+	.quantize-toggle.active {
+		background: rgba(127, 227, 124, 0.12);
+		border-color: rgba(127, 227, 124, 0.32);
+		color: #9ae998;
+	}
+
+	.quantize-dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: rgba(255, 255, 255, 0.35);
+		transition: background-color 0.2s ease, box-shadow 0.2s ease;
+	}
+
+	.quantize-toggle.active .quantize-dot {
+		background: #7fe37c;
+		box-shadow: 0 0 0 4px rgba(127, 227, 124, 0.14);
+	}
+
+	.tooltip-bubble {
+		position: absolute;
+		left: 50%;
+		bottom: calc(100% + 10px);
+		transform: translateX(-50%) translateY(6px);
+		width: 220px;
+		padding: 10px 12px;
+		border-radius: 12px;
+		background: rgba(18, 18, 20, 0.96);
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		box-shadow: 0 12px 36px rgba(0, 0, 0, 0.34);
+		color: rgba(255, 255, 255, 0.86);
+		font-size: 0.78rem;
+		line-height: 1.35;
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 0.18s ease, transform 0.18s ease;
+		z-index: 20;
+	}
+
+	.tooltip-bubble::after {
+		content: '';
+		position: absolute;
+		left: 50%;
+		top: 100%;
+		width: 10px;
+		height: 10px;
+		background: rgba(18, 18, 20, 0.96);
+		border-right: 1px solid rgba(255, 255, 255, 0.08);
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+		transform: translateX(-50%) rotate(45deg);
+	}
+
+	.tooltip-shell:hover .tooltip-bubble,
+	.tooltip-shell:focus-within .tooltip-bubble {
+		opacity: 1;
+		transform: translateX(-50%) translateY(0);
 	}
 
 	.status-icon {

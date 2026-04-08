@@ -141,6 +141,7 @@ struct AppState {
     csm_startup_message: Mutex<Option<String>>,
     csm_stderr_tail: Mutex<VecDeque<String>>,
     selected_csm_voice: Mutex<CsmVoice>,
+    selected_csm_quantized: Mutex<bool>,
     next_csm_request_id: AtomicU64,
     next_generation_id: AtomicU64,
     active_generation: Mutex<Option<ActiveGeneration>>,
@@ -337,6 +338,17 @@ async fn start_csm_server(
 }
 
 #[tauri::command]
+fn get_csm_quantize(state: State<'_, AppState>) -> bool {
+    *state.selected_csm_quantized.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_csm_quantize(state: State<'_, AppState>, enabled: bool) {
+    let mut quantized_guard = state.selected_csm_quantized.lock().unwrap();
+    *quantized_guard = enabled;
+}
+
+#[tauri::command]
 async fn set_csm_voice(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -391,7 +403,7 @@ async fn start_csm_server_inner(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let should_quantize_csm = std::env::var("OPEN_DUCK_CSM_QUANTIZE").ok().as_deref() == Some("1");
+    let should_quantize_csm = *state.selected_csm_quantized.lock().unwrap();
     if should_quantize_csm {
         info!("Starting CSM worker with quantization enabled");
         command.arg("--quantize");
@@ -1987,6 +1999,8 @@ pub fn run() {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     info!("Starting OpenDuck application");
+    let default_csm_quantized =
+        std::env::var("OPEN_DUCK_CSM_QUANTIZE").ok().as_deref() == Some("1");
 
     tauri::Builder::default()
         .setup(|app| {
@@ -2005,6 +2019,7 @@ pub fn run() {
             csm_startup_message: Mutex::new(None),
             csm_stderr_tail: Mutex::new(VecDeque::new()),
             selected_csm_voice: Mutex::new(CsmVoice::Male),
+            selected_csm_quantized: Mutex::new(default_csm_quantized),
             next_csm_request_id: AtomicU64::new(1),
             next_generation_id: AtomicU64::new(1),
             active_generation: Mutex::new(None),
@@ -2024,6 +2039,8 @@ pub fn run() {
             is_csm_running,
             start_server,
             start_csm_server,
+            get_csm_quantize,
+            set_csm_quantize,
             set_csm_voice,
             stop_server,
             stop_csm_server
