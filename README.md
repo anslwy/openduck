@@ -13,7 +13,7 @@ The backend uses Gemma for transcription and reply generation, and CSM for speec
 5. The backend asks Gemma for a short spoken reply using the system prompt plus recent conversation history.
 6. The reply is sanitized, split into short spoken segments, and sent to the CSM worker for text-to-speech generation.
 7. The frontend listens for `csm-audio-start`, `csm-audio-chunk`, `csm-audio-done`, and `call-stage` events, queues the generated audio, plays it sequentially, and updates the visible call state.
-8. Successful user and assistant turns are stored in memory with a rolling limit of 12 turns. Starting or ending a call clears that history and resets the session.
+8. Successful user and assistant turns are stored in memory with a rolling limit of 24 turns. Starting or ending a call clears that history and resets the session.
 
 ## Flowchart
 
