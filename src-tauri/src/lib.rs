@@ -34,6 +34,7 @@ const CSM_AUDIO_STOP_EVENT: &str = "csm-audio-stop";
 const CSM_ERROR_EVENT: &str = "csm-error";
 const CSM_STATUS_EVENT: &str = "csm-status";
 const CALL_STAGE_EVENT: &str = "call-stage";
+const TRANSCRIPT_EVENT: &str = "transcript-ready";
 const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";
 const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 const CSM_STDERR_TAIL_LIMIT: usize = 8;
@@ -210,6 +211,11 @@ struct CsmStatusEvent {
 struct CallStageEvent {
     phase: String,
     message: String,
+}
+
+#[derive(Clone, Serialize)]
+struct TranscriptEvent {
+    text: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -645,6 +651,12 @@ fn process_audio_with_server(samples: &[f32], server_port: u16, app_handle: taur
                 }
 
                 info!("Gemma transcription: {}", user_text);
+                emit_transcript_event(
+                    &app_handle_for_task,
+                    TranscriptEvent {
+                        text: user_text.clone(),
+                    },
+                );
                 interrupt_active_generation(&app_handle_for_task).await;
 
                 if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
@@ -1664,6 +1676,12 @@ fn emit_call_stage(app_handle: &tauri::AppHandle, phase: &str, message: &str) {
         },
     ) {
         error!("Failed to emit call stage event: {}", err);
+    }
+}
+
+fn emit_transcript_event(app_handle: &tauri::AppHandle, payload: TranscriptEvent) {
+    if let Err(err) = app_handle.emit(TRANSCRIPT_EVENT, payload) {
+        error!("Failed to emit transcript event: {}", err);
     }
 }
 

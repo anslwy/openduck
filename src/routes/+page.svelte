@@ -34,12 +34,22 @@
         message: string;
     };
 
+    type TranscriptEvent = {
+        text: string;
+    };
+
     type ModelDownloadProgressEvent = {
         model: "gemma" | "csm";
         phase: "progress" | "completed" | "error";
         message: string;
         progress?: number | null;
         indeterminate: boolean;
+    };
+
+    type ConversationLogEntry = {
+        id: number;
+        role: "user" | "assistant";
+        text: string;
     };
 
     let calling = $state(false);
@@ -79,6 +89,9 @@
     let activePlaybackAudio: HTMLAudioElement | null = null;
     let activePlaybackUrl: string | null = null;
     let queuedPlaybackUrls: string[] = [];
+    let showConversationPopup = $state(false);
+    let conversationLogEntries = $state<ConversationLogEntry[]>([]);
+    let nextConversationEntryId = 1;
     let callStagePhase = $state<
         | "idle"
         | "listening"
@@ -95,6 +108,7 @@
             .padStart(2, "0")}:${(time % 60).toString().padStart(2, "0")}`,
     );
     const modelsReady = $derived(isGemmaLoaded && isCsmLoaded);
+    let conversationLogViewport = $state<HTMLDivElement | null>(null);
 
     function setCallStage(
         phase:
@@ -108,6 +122,58 @@
     ) {
         callStagePhase = phase;
         callStageMessage = message;
+    }
+
+    function scrollConversationLogToBottom() {
+        window.requestAnimationFrame(() => {
+            if (conversationLogViewport) {
+                conversationLogViewport.scrollTop =
+                    conversationLogViewport.scrollHeight;
+            }
+        });
+    }
+
+    function appendConversationLogEntry(
+        role: ConversationLogEntry["role"],
+        text: string,
+    ) {
+        const normalizedText = text.trim();
+        if (!normalizedText) {
+            return;
+        }
+
+        conversationLogEntries = [
+            ...conversationLogEntries,
+            {
+                id: nextConversationEntryId,
+                role,
+                text: normalizedText,
+            },
+        ];
+        nextConversationEntryId += 1;
+        scrollConversationLogToBottom();
+    }
+
+    function resetConversationLog() {
+        conversationLogEntries = [];
+        nextConversationEntryId = 1;
+    }
+
+    function closeConversationPopup() {
+        showConversationPopup = false;
+    }
+
+    function toggleConversationPopup() {
+        showConversationPopup = !showConversationPopup;
+        if (showConversationPopup) {
+            scrollConversationLogToBottom();
+        }
+    }
+
+    function handleWindowKeydown(event: KeyboardEvent) {
+        if (event.key === "Escape" && showConversationPopup) {
+            closeConversationPopup();
+        }
     }
 
     function resetDownloadState(model: "gemma" | "csm") {
@@ -385,6 +451,8 @@
             console.error("Failed to reset call session:", err);
         }
 
+        closeConversationPopup();
+        resetConversationLog();
         calling = true;
         time = 0;
         activeTtsRequestId = null;
@@ -415,6 +483,8 @@
         calling = false;
         stopAudioCapture();
         stopPlayback();
+        closeConversationPopup();
+        resetConversationLog();
         setCallStage("idle", "");
 
         if (callTimerInterval) {
@@ -545,6 +615,10 @@
                             stopPlayback();
                             activeTtsRequestId = payload.request_id;
                             pendingTtsSegments = payload.total_segments;
+                            appendConversationLogEntry(
+                                "assistant",
+                                payload.text,
+                            );
                             console.log("Synthesizing response:", payload.text);
                         },
                     ),
@@ -608,6 +682,16 @@
                             setCallStage(payload.phase, payload.message);
                         }
                     }),
+                    listen<TranscriptEvent>(
+                        "transcript-ready",
+                        ({ payload }) => {
+                            if (!calling) {
+                                return;
+                            }
+
+                            appendConversationLogEntry("user", payload.text);
+                        },
+                    ),
                     listen<ModelDownloadProgressEvent>(
                         "model-download-progress",
                         ({ payload }) => {
@@ -641,6 +725,8 @@
         eventUnlisteners = [];
     });
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <div class="app-container">
     <div class="background"></div>
@@ -901,6 +987,70 @@
     </main>
 
     <div class="control-bar-wrapper">
+        {#if calling && showConversationPopup}
+            <div
+                id="conversation-log-popup"
+                class="conversation-popup"
+                role="dialog"
+                aria-label="Conversation log"
+                aria-modal="false"
+            >
+                <div class="conversation-popup-header">
+                    <div class="conversation-popup-copy">
+                        <span class="conversation-popup-title"
+                            >Conversation</span
+                        >
+                        <span class="conversation-popup-subtitle"
+                            >Live call transcript</span
+                        >
+                    </div>
+                    <button
+                        type="button"
+                        class="conversation-close-btn"
+                        onclick={closeConversationPopup}
+                        aria-label="Close conversation log"
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="18"
+                            height="18"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            ><line x1="18" y1="6" x2="6" y2="18" /><line
+                                x1="6"
+                                y1="6"
+                                x2="18"
+                                y2="18"
+                            /></svg
+                        >
+                    </button>
+                </div>
+
+                <div class="conversation-log" bind:this={conversationLogViewport}>
+                    {#if conversationLogEntries.length === 0}
+                        <div class="conversation-empty">
+                            Start talking and the transcript will appear here.
+                        </div>
+                    {:else}
+                        {#each conversationLogEntries as entry (entry.id)}
+                            <div class="conversation-entry" data-role={entry.role}>
+                                <div
+                                    class="conversation-bubble"
+                                    data-role={entry.role}
+                                >
+                                    {entry.text}
+                                </div>
+                            </div>
+                        {/each}
+                    {/if}
+                </div>
+            </div>
+        {/if}
+
         <div class="control-bar">
             <div class="info">
                 <div class="username">openduck</div>
@@ -909,6 +1059,34 @@
 
             <div class="actions">
                 {#if calling}
+                    <button
+                        type="button"
+                        class="icon-btn"
+                        class:active={showConversationPopup}
+                        onclick={toggleConversationPopup}
+                        aria-label="Toggle conversation log"
+                        aria-controls="conversation-log-popup"
+                        aria-expanded={showConversationPopup}
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="22"
+                            height="22"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            ><path
+                                d="M7 10h8"
+                            /><path
+                                d="M7 14h5"
+                            /><path
+                                d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"
+                            /></svg
+                        >
+                    </button>
                     <button
                         class="icon-btn"
                         class:active={!micMuted}
@@ -1106,6 +1284,7 @@
         width: 100%;
         display: flex;
         justify-content: center;
+        align-items: center;
         padding: 0 20px;
     }
 
@@ -1120,6 +1299,8 @@
         width: auto;
         min-width: 440px;
         border: 1px solid rgba(255, 255, 255, 0.05);
+        position: relative;
+        z-index: 2;
     }
 
     .info {
@@ -1146,6 +1327,138 @@
         gap: 14px;
         flex: 1;
         justify-content: center;
+    }
+
+    .conversation-popup {
+        position: absolute;
+        left: 50%;
+        bottom: calc(100% + 18px);
+        transform: translateX(-50%);
+        width: min(calc(100vw - 32px), 420px);
+        max-height: min(52vh, 420px);
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 18px;
+        border-radius: 24px;
+        background:
+            linear-gradient(
+                180deg,
+                rgba(34, 31, 16, 0.94) 0%,
+                rgba(18, 18, 20, 0.94) 100%
+            );
+        border: 1px solid rgba(255, 220, 102, 0.16);
+        box-shadow:
+            0 28px 70px rgba(0, 0, 0, 0.42),
+            0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+        backdrop-filter: blur(22px);
+        box-sizing: border-box;
+        z-index: 1;
+    }
+
+    .conversation-popup-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+    }
+
+    .conversation-popup-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+    }
+
+    .conversation-popup-title {
+        color: rgba(255, 246, 214, 0.96);
+        font-size: 1rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+    }
+
+    .conversation-popup-subtitle {
+        color: rgba(255, 255, 255, 0.56);
+        font-size: 0.85rem;
+        letter-spacing: -0.01em;
+    }
+
+    .conversation-close-btn {
+        width: 34px;
+        height: 34px;
+        border: none;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition:
+            background-color 0.2s ease,
+            color 0.2s ease,
+            transform 0.1s ease;
+    }
+
+    .conversation-close-btn:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: #ffffff;
+    }
+
+    .conversation-close-btn:active {
+        transform: scale(0.95);
+    }
+
+    .conversation-log {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        overflow-y: auto;
+        padding-right: 4px;
+    }
+
+    .conversation-entry {
+        display: flex;
+        width: 100%;
+    }
+
+    .conversation-entry[data-role="user"] {
+        justify-content: flex-end;
+    }
+
+    .conversation-bubble {
+        max-width: 88%;
+        padding: 12px 16px;
+        border-radius: 22px;
+        font-size: 0.98rem;
+        line-height: 1.38;
+        letter-spacing: -0.015em;
+        word-break: break-word;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+    }
+
+    .conversation-bubble[data-role="user"] {
+        background: linear-gradient(135deg, #ffdf63 0%, #ffcd40 100%);
+        color: #2f2500;
+        border-bottom-right-radius: 10px;
+    }
+
+    .conversation-bubble[data-role="assistant"] {
+        background: rgba(242, 242, 247, 0.96);
+        color: #232326;
+        border-bottom-left-radius: 10px;
+    }
+
+    .conversation-empty {
+        padding: 18px 16px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px dashed rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.56);
+        font-size: 0.94rem;
+        line-height: 1.4;
+        text-align: center;
     }
 
     .icon-btn {
