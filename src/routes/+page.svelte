@@ -40,11 +40,15 @@
 
     type ModelDownloadProgressEvent = {
         model: "gemma" | "csm";
-        phase: "progress" | "completed" | "error";
+        phase: "progress" | "completed" | "error" | "cancelled";
         message: string;
         progress?: number | null;
+        downloaded_bytes?: number | null;
+        total_bytes?: number | null;
         indeterminate: boolean;
     };
+
+    type GemmaVariant = "e4b" | "e2b";
 
     type ConversationLogEntry = {
         id: number;
@@ -60,6 +64,7 @@
     let isCsmDownloaded = $state(false);
     let isCsmLoaded = $state(false);
     let isDownloadingGemma = $state(false);
+    let isCancellingGemmaDownload = $state(false);
     let isLoadingGemma = $state(false);
     let isDownloadingCsm = $state(false);
     let isLoadingCsm = $state(false);
@@ -69,9 +74,12 @@
     let gemmaDownloadMessage = $state("Preparing download...");
     let gemmaDownloadProgress = $state<number | null>(null);
     let gemmaDownloadIndeterminate = $state(true);
+    let gemmaDownloadError = $state<string | null>(null);
+    let selectedGemmaVariant = $state<GemmaVariant>("e4b");
     let csmDownloadMessage = $state("Preparing download...");
     let csmDownloadProgress = $state<number | null>(null);
     let csmDownloadIndeterminate = $state(true);
+    let csmDownloadError = $state<string | null>(null);
     let csmLoadMessage = $state("Starting worker...");
     let isCsmQuantized = $state(true);
 
@@ -81,6 +89,9 @@
     let processor: AudioWorkletNode | null = null;
     let healthCheckInterval: ReturnType<typeof window.setInterval> | null =
         null;
+    let downloadStatusPollInterval:
+        | ReturnType<typeof window.setInterval>
+        | null = null;
     let callTimerInterval: ReturnType<typeof window.setInterval> | null = null;
     let playbackIdleTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let eventUnlisteners: UnlistenFn[] = [];
@@ -108,7 +119,26 @@
             .padStart(2, "0")}:${(time % 60).toString().padStart(2, "0")}`,
     );
     const modelsReady = $derived(isGemmaLoaded && isCsmLoaded);
+    const gemmaVariantDisabled = $derived(
+        isGemmaLoaded ||
+            isDownloadingGemma ||
+            isCancellingGemmaDownload ||
+            isLoadingGemma ||
+            isUnloadingGemma,
+    );
     let conversationLogViewport = $state<HTMLDivElement | null>(null);
+    const gemmaVariantOptions: Array<{
+        value: GemmaVariant;
+        label: string;
+    }> = [
+        { value: "e4b", label: "E4B" },
+        { value: "e2b", label: "E2B" },
+    ];
+    const gemmaVariantTooltip = $derived(
+        selectedGemmaVariant === "e4b"
+            ? "E4B uses more RAM but is generally more capable. Recommended for Macs with 24 GB+ of unified memory."
+            : "E2B uses less RAM but is generally less capable. Recommended for Macs with 16 GB+ of unified memory.",
+    );
 
     function setCallStage(
         phase:
@@ -181,12 +211,58 @@
             gemmaDownloadMessage = "Preparing download...";
             gemmaDownloadProgress = null;
             gemmaDownloadIndeterminate = true;
+            gemmaDownloadError = null;
             return;
         }
 
         csmDownloadMessage = "Preparing download...";
         csmDownloadProgress = null;
         csmDownloadIndeterminate = true;
+        csmDownloadError = null;
+    }
+
+    function normalizeErrorMessage(error: unknown) {
+        let message = String(error).trim();
+
+        if (message.startsWith('"') && message.endsWith('"')) {
+            try {
+                const parsed = JSON.parse(message);
+                if (typeof parsed === "string") {
+                    message = parsed;
+                }
+            } catch {
+                // Keep the raw string when it is not valid JSON.
+            }
+        }
+
+        if (message.toLowerCase().startsWith("error: ")) {
+            message = message.slice(7).trim();
+        }
+
+        return message;
+    }
+
+    function normalizeDownloadErrorMessage(error: unknown) {
+        const message = normalizeErrorMessage(error);
+
+        if (message.toLowerCase().startsWith("download failed:")) {
+            return message.slice("download failed:".length).trim();
+        }
+
+        return message;
+    }
+
+    function formatDownloadPercent(progress: number) {
+        if (progress >= 99.95) {
+            return "100%";
+        }
+        if (progress < 1) {
+            return `${progress.toFixed(2)}%`;
+        }
+        if (progress < 10) {
+            return `${progress.toFixed(1)}%`;
+        }
+        return `${Math.round(progress)}%`;
     }
 
     function applyDownloadEvent(payload: ModelDownloadProgressEvent) {
@@ -194,12 +270,87 @@
             gemmaDownloadMessage = payload.message;
             gemmaDownloadProgress = payload.progress ?? null;
             gemmaDownloadIndeterminate = payload.indeterminate;
+            if (payload.phase === "error") {
+                gemmaDownloadError = normalizeDownloadErrorMessage(
+                    payload.message,
+                );
+            } else if (
+                payload.phase === "completed" ||
+                payload.phase === "cancelled"
+            ) {
+                gemmaDownloadError = null;
+            }
+            if (payload.phase === "cancelled") {
+                isCancellingGemmaDownload = false;
+            }
             return;
         }
 
         csmDownloadMessage = payload.message;
         csmDownloadProgress = payload.progress ?? null;
         csmDownloadIndeterminate = payload.indeterminate;
+        if (payload.phase === "error") {
+            csmDownloadError = normalizeDownloadErrorMessage(payload.message);
+        } else if (
+            payload.phase === "completed" ||
+            payload.phase === "cancelled"
+        ) {
+            csmDownloadError = null;
+        }
+    }
+
+    function stopDownloadStatusPolling() {
+        if (downloadStatusPollInterval) {
+            clearInterval(downloadStatusPollInterval);
+            downloadStatusPollInterval = null;
+        }
+    }
+
+    async function pollActiveDownloadStatuses() {
+        if (!isDownloadingGemma && !isDownloadingCsm) {
+            stopDownloadStatusPolling();
+            return;
+        }
+
+        try {
+            const [gemmaStatus, csmStatus] = await Promise.all([
+                isDownloadingGemma
+                    ? invoke<ModelDownloadProgressEvent | null>(
+                          "get_model_download_status",
+                          { model: "gemma" },
+                      )
+                    : Promise.resolve(null),
+                isDownloadingCsm
+                    ? invoke<ModelDownloadProgressEvent | null>(
+                          "get_model_download_status",
+                          { model: "csm" },
+                      )
+                    : Promise.resolve(null),
+            ]);
+
+            if (
+                gemmaStatus &&
+                (!isCancellingGemmaDownload || gemmaStatus.phase !== "progress")
+            ) {
+                applyDownloadEvent(gemmaStatus);
+            }
+            if (csmStatus) {
+                applyDownloadEvent(csmStatus);
+            }
+        } catch (err) {
+            console.error("Failed to poll download status:", err);
+        }
+    }
+
+    function ensureDownloadStatusPolling() {
+        if (downloadStatusPollInterval) {
+            return;
+        }
+
+        void pollActiveDownloadStatuses();
+        downloadStatusPollInterval = window.setInterval(() => {
+            void pollActiveDownloadStatuses();
+        }, 1000);
     }
 
     async function applyCsmQuantizeSelection() {
@@ -222,15 +373,34 @@
         }
     }
 
+    async function handleGemmaVariantChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        const nextVariant = target.value as GemmaVariant;
+        const previousVariant = selectedGemmaVariant;
+
+        selectedGemmaVariant = nextVariant;
+
+        try {
+            await invoke("set_gemma_variant", { variant: nextVariant });
+            await syncModelStatus();
+        } catch (err) {
+            selectedGemmaVariant = previousVariant;
+            console.error("Failed to update Gemma variant:", err);
+            alert(`Failed to update Gemma variant.\n${String(err)}`);
+        }
+    }
+
     async function syncModelStatus() {
         try {
             const [
+                gemmaVariant,
                 gemmaDownloaded,
                 gemmaLoaded,
                 csmDownloaded,
                 csmLoaded,
                 csmQuantized,
             ] = await Promise.all([
+                invoke<GemmaVariant>("get_gemma_variant"),
                 invoke<boolean>("check_model_status"),
                 invoke<boolean>("is_server_running"),
                 invoke<boolean>("check_csm_status"),
@@ -238,6 +408,7 @@
                 invoke<boolean>("get_csm_quantize"),
             ]);
 
+            selectedGemmaVariant = gemmaVariant;
             isGemmaDownloaded = gemmaDownloaded;
             isGemmaLoaded = gemmaLoaded;
             isCsmDownloaded = csmDownloaded;
@@ -505,15 +676,47 @@
 
     async function handleDownloadGemma() {
         isDownloadingGemma = true;
+        isCancellingGemmaDownload = false;
         resetDownloadState("gemma");
+        ensureDownloadStatusPolling();
         try {
             await invoke("download_model");
             await syncModelStatus();
         } catch (err) {
             console.error("Download model failed:", err);
-            alert(`Gemma download failed.\n${String(err)}`);
+            if (!String(err).toLowerCase().includes("cancelled")) {
+                const message = normalizeDownloadErrorMessage(err);
+                gemmaDownloadError = message;
+                gemmaDownloadMessage = message;
+                gemmaDownloadProgress = null;
+                gemmaDownloadIndeterminate = true;
+            }
         } finally {
             isDownloadingGemma = false;
+            isCancellingGemmaDownload = false;
+            if (!isDownloadingCsm) {
+                stopDownloadStatusPolling();
+            }
+            await syncModelStatus();
+        }
+    }
+
+    async function handleCancelGemmaDownload() {
+        if (!isDownloadingGemma) {
+            return;
+        }
+
+        isCancellingGemmaDownload = true;
+        gemmaDownloadMessage = "Cancelling download...";
+        gemmaDownloadProgress = null;
+        gemmaDownloadIndeterminate = true;
+
+        try {
+            await invoke("cancel_model_download", { model: "gemma" });
+        } catch (err) {
+            isCancellingGemmaDownload = false;
+            console.error("Failed to cancel Gemma download:", err);
+            alert(`Failed to cancel Gemma download.\n${String(err)}`);
         }
     }
 
@@ -540,14 +743,22 @@
     async function handleDownloadCsm() {
         isDownloadingCsm = true;
         resetDownloadState("csm");
+        ensureDownloadStatusPolling();
         try {
             await invoke("download_csm_model");
             await syncModelStatus();
         } catch (err) {
             console.error("Download CSM failed:", err);
-            alert(`CSM download failed.\n${String(err)}`);
+            const message = normalizeDownloadErrorMessage(err);
+            csmDownloadError = message;
+            csmDownloadMessage = message;
+            csmDownloadProgress = null;
+            csmDownloadIndeterminate = true;
         } finally {
             isDownloadingCsm = false;
+            if (!isDownloadingGemma) {
+                stopDownloadStatusPolling();
+            }
         }
     }
 
@@ -709,6 +920,7 @@
         if (healthCheckInterval) {
             clearInterval(healthCheckInterval);
         }
+        stopDownloadStatusPolling();
         if (callTimerInterval) {
             clearInterval(callTimerInterval);
         }
@@ -739,11 +951,49 @@
             >
                 {#if isDownloadingGemma}
                     <div class="download-content">
+                        <div class="banner-row">
+                            <div class="banner-heading-row">
+                                <span class="banner-title">Gemma</span>
+                                <div class="tooltip-shell variant-select-shell">
+                                    <select
+                                        class="variant-select"
+                                        value={selectedGemmaVariant}
+                                        aria-label="Gemma variant"
+                                        disabled={gemmaVariantDisabled}
+                                        onchange={handleGemmaVariantChange}
+                                    >
+                                        {#each gemmaVariantOptions as option}
+                                            <option value={option.value}
+                                                >{option.label}</option
+                                            >
+                                        {/each}
+                                    </select>
+                                    <div class="tooltip-bubble variant-tooltip">
+                                        {gemmaVariantTooltip}
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                class="utility-btn"
+                                disabled={isCancellingGemmaDownload}
+                                onclick={handleCancelGemmaDownload}
+                            >
+                                {isCancellingGemmaDownload
+                                    ? "Cancelling..."
+                                    : "Cancel"}
+                            </button>
+                        </div>
                         <div class="download-row">
-                            <span>Gemma 3: {gemmaDownloadMessage}</span>
+                            <span
+                                class="download-status-text"
+                                class:failed={!!gemmaDownloadError}
+                                >{gemmaDownloadMessage}</span
+                            >
                             {#if gemmaDownloadProgress !== null}
                                 <span class="download-percent"
-                                    >{Math.round(gemmaDownloadProgress)}%</span
+                                    >{formatDownloadPercent(
+                                        gemmaDownloadProgress,
+                                    )}</span
                                 >
                             {/if}
                         </div>
@@ -751,6 +1001,7 @@
                             <div
                                 class="progress-fill"
                                 class:indeterminate={gemmaDownloadIndeterminate}
+                                class:failed={!!gemmaDownloadError}
                                 style:width={gemmaDownloadIndeterminate
                                     ? "38%"
                                     : `${gemmaDownloadProgress ?? 0}%`}
@@ -762,7 +1013,31 @@
                         {#if isGemmaLoaded}
                             <div class="banner-status">
                                 <div class="banner-copy">
-                                    <span class="banner-title">Gemma 3</span>
+                                    <div class="banner-heading-row">
+                                        <span class="banner-title">Gemma</span>
+                                        <div
+                                            class="tooltip-shell variant-select-shell"
+                                        >
+                                            <select
+                                                class="variant-select"
+                                                value={selectedGemmaVariant}
+                                                aria-label="Gemma variant"
+                                                disabled={gemmaVariantDisabled}
+                                                onchange={handleGemmaVariantChange}
+                                            >
+                                                {#each gemmaVariantOptions as option}
+                                                    <option value={option.value}
+                                                        >{option.label}</option
+                                                    >
+                                                {/each}
+                                            </select>
+                                            <div
+                                                class="tooltip-bubble variant-tooltip"
+                                            >
+                                                {gemmaVariantTooltip}
+                                            </div>
+                                        </div>
+                                    </div>
                                     <span class="banner-subtitle">Loaded</span>
                                 </div>
                                 <div class="loaded-actions">
@@ -795,7 +1070,31 @@
                             </div>
                         {:else}
                             <div class="banner-copy">
-                                <span class="banner-title">Gemma 3</span>
+                                <div class="banner-heading-row">
+                                    <span class="banner-title">Gemma</span>
+                                    <div
+                                        class="tooltip-shell variant-select-shell"
+                                    >
+                                        <select
+                                            class="variant-select"
+                                            value={selectedGemmaVariant}
+                                            aria-label="Gemma variant"
+                                            disabled={gemmaVariantDisabled}
+                                            onchange={handleGemmaVariantChange}
+                                        >
+                                            {#each gemmaVariantOptions as option}
+                                                <option value={option.value}
+                                                    >{option.label}</option
+                                                >
+                                            {/each}
+                                        </select>
+                                        <div
+                                            class="tooltip-bubble variant-tooltip"
+                                        >
+                                            {gemmaVariantTooltip}
+                                        </div>
+                                    </div>
+                                </div>
                                 <span class="banner-subtitle">Downloaded</span>
                             </div>
                             <button
@@ -810,10 +1109,39 @@
                 {:else}
                     <div class="banner-row">
                         <div class="banner-copy">
-                            <span class="banner-title">Gemma 3</span>
-                            <span class="banner-subtitle"
-                                >Model not found in cache</span
-                            >
+                            <div class="banner-heading-row">
+                                <span class="banner-title">Gemma</span>
+                                <div class="tooltip-shell variant-select-shell">
+                                    <select
+                                        class="variant-select"
+                                        value={selectedGemmaVariant}
+                                        aria-label="Gemma variant"
+                                        disabled={gemmaVariantDisabled}
+                                        onchange={handleGemmaVariantChange}
+                                    >
+                                        {#each gemmaVariantOptions as option}
+                                            <option value={option.value}
+                                                >{option.label}</option
+                                            >
+                                        {/each}
+                                    </select>
+                                    <div class="tooltip-bubble variant-tooltip">
+                                        {gemmaVariantTooltip}
+                                    </div>
+                                </div>
+                            </div>
+                            {#if gemmaDownloadError}
+                                <span class="banner-subtitle error"
+                                    >Download failed</span
+                                >
+                                <span class="banner-detail error"
+                                    >{gemmaDownloadError}</span
+                                >
+                            {:else}
+                                <span class="banner-subtitle"
+                                    >Model not found in cache</span
+                                >
+                            {/if}
                         </div>
                         <button
                             class="download-btn"
@@ -822,7 +1150,9 @@
                         >
                             {isDownloadingGemma
                                 ? "Downloading..."
-                                : "Download Model"}
+                                : gemmaDownloadError
+                                  ? "Retry Download"
+                                  : "Download Model"}
                         </button>
                     </div>
                 {/if}
@@ -835,10 +1165,16 @@
                 {#if isDownloadingCsm}
                     <div class="download-content">
                         <div class="download-row">
-                            <span>CSM Expressiva 1B: {csmDownloadMessage}</span>
+                            <span
+                                class="download-status-text"
+                                class:failed={!!csmDownloadError}
+                                >CSM Expressiva 1B: {csmDownloadMessage}</span
+                            >
                             {#if csmDownloadProgress !== null}
                                 <span class="download-percent"
-                                    >{Math.round(csmDownloadProgress)}%</span
+                                    >{formatDownloadPercent(
+                                        csmDownloadProgress,
+                                    )}</span
                                 >
                             {/if}
                         </div>
@@ -846,6 +1182,7 @@
                             <div
                                 class="progress-fill"
                                 class:indeterminate={csmDownloadIndeterminate}
+                                class:failed={!!csmDownloadError}
                                 style:width={csmDownloadIndeterminate
                                     ? "38%"
                                     : `${csmDownloadProgress ?? 0}%`}
@@ -955,9 +1292,18 @@
                                     </div>
                                 </div>
                             </div>
-                            <span class="banner-subtitle"
-                                >Model not found in cache</span
-                            >
+                            {#if csmDownloadError}
+                                <span class="banner-subtitle error"
+                                    >Download failed</span
+                                >
+                                <span class="banner-detail error"
+                                    >{csmDownloadError}</span
+                                >
+                            {:else}
+                                <span class="banner-subtitle"
+                                    >Model not found in cache</span
+                                >
+                            {/if}
                         </div>
                         <button
                             class="download-btn"
@@ -966,7 +1312,9 @@
                         >
                             {isDownloadingCsm
                                 ? "Downloading..."
-                                : "Download Model"}
+                                : csmDownloadError
+                                  ? "Retry Download"
+                                  : "Download Model"}
                         </button>
                     </div>
                 {/if}
@@ -1030,14 +1378,20 @@
                     </button>
                 </div>
 
-                <div class="conversation-log" bind:this={conversationLogViewport}>
+                <div
+                    class="conversation-log"
+                    bind:this={conversationLogViewport}
+                >
                     {#if conversationLogEntries.length === 0}
                         <div class="conversation-empty">
                             Start talking and the transcript will appear here.
                         </div>
                     {:else}
                         {#each conversationLogEntries as entry (entry.id)}
-                            <div class="conversation-entry" data-role={entry.role}>
+                            <div
+                                class="conversation-entry"
+                                data-role={entry.role}
+                            >
                                 <div
                                     class="conversation-bubble"
                                     data-role={entry.role}
@@ -1078,11 +1432,7 @@
                             stroke-width="2.2"
                             stroke-linecap="round"
                             stroke-linejoin="round"
-                            ><path
-                                d="M7 10h8"
-                            /><path
-                                d="M7 14h5"
-                            /><path
+                            ><path d="M7 10h8" /><path d="M7 14h5" /><path
                                 d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"
                             /></svg
                         >
@@ -1276,6 +1626,7 @@
         align-items: center;
         width: min(calc(100vw - 48px), 560px);
         z-index: 10;
+        isolation: isolate;
     }
 
     .control-bar-wrapper {
@@ -1341,12 +1692,11 @@
         gap: 14px;
         padding: 18px;
         border-radius: 24px;
-        background:
-            linear-gradient(
-                180deg,
-                rgba(34, 31, 16, 0.94) 0%,
-                rgba(18, 18, 20, 0.94) 100%
-            );
+        background: linear-gradient(
+            180deg,
+            rgba(34, 31, 16, 0.94) 0%,
+            rgba(18, 18, 20, 0.94) 100%
+        );
         border: 1px solid rgba(255, 220, 102, 0.16);
         box-shadow:
             0 28px 70px rgba(0, 0, 0, 0.42),
@@ -1532,6 +1882,7 @@
     }
 
     .download-banner {
+        position: relative;
         background: rgba(28, 28, 30, 0.9);
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 16px;
@@ -1545,6 +1896,11 @@
         box-sizing: border-box;
         width: 100%;
         min-width: 0;
+    }
+
+    .download-banner:hover,
+    .download-banner:focus-within {
+        z-index: 2;
     }
 
     .download-banner.ready {
@@ -1611,6 +1967,21 @@
         letter-spacing: -0.01em;
     }
 
+    .banner-subtitle.error {
+        color: #ffb3ad;
+    }
+
+    .banner-detail {
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 0.84rem;
+        line-height: 1.35;
+        letter-spacing: -0.01em;
+    }
+
+    .banner-detail.error {
+        color: rgba(255, 196, 191, 0.92);
+    }
+
     .banner-status {
         display: flex;
         align-items: center;
@@ -1631,6 +2002,10 @@
         font-variant-numeric: tabular-nums;
     }
 
+    .download-status-text.failed {
+        color: #ffb3ad;
+    }
+
     .progress-track {
         position: relative;
         width: 100%;
@@ -1645,6 +2020,10 @@
         border-radius: 999px;
         background: linear-gradient(90deg, #7fe37c 0%, #34c759 100%);
         transition: width 0.2s ease;
+    }
+
+    .progress-fill.failed {
+        background: linear-gradient(90deg, #ff8d86 0%, #ff5f57 100%);
     }
 
     .progress-fill.indeterminate {
@@ -1665,7 +2044,8 @@
 
     .download-btn:disabled,
     .utility-btn:disabled,
-    .quantize-toggle:disabled {
+    .quantize-toggle:disabled,
+    .variant-select:disabled {
         opacity: 0.5;
         cursor: not-allowed;
     }
@@ -1692,6 +2072,53 @@
     .tooltip-shell {
         position: relative;
         display: inline-flex;
+    }
+
+    .variant-select-shell {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+    }
+
+    .variant-select-shell::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: 12px;
+        width: 7px;
+        height: 7px;
+        border-right: 1.5px solid rgba(255, 255, 255, 0.66);
+        border-bottom: 1.5px solid rgba(255, 255, 255, 0.66);
+        transform: translateY(-60%) rotate(45deg);
+        pointer-events: none;
+    }
+
+    .variant-select {
+        appearance: none;
+        -webkit-appearance: none;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        color: rgba(255, 255, 255, 0.82);
+        padding: 5px 30px 5px 12px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        cursor: pointer;
+        transition:
+            background-color 0.2s ease,
+            border-color 0.2s ease,
+            color 0.2s ease;
+    }
+
+    .variant-select:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.1);
+    }
+
+    .variant-select:focus-visible {
+        outline: none;
+        border-color: rgba(127, 227, 124, 0.4);
+        box-shadow: 0 0 0 3px rgba(127, 227, 124, 0.14);
     }
 
     .quantize-toggle {
@@ -1758,6 +2185,21 @@
             opacity 0.18s ease,
             transform 0.18s ease;
         z-index: 20;
+    }
+
+    .tooltip-bubble.variant-tooltip {
+        top: calc(100% + 10px);
+        bottom: auto;
+        transform: translateX(-65%) translateY(-6px);
+    }
+
+    .tooltip-bubble.variant-tooltip::after {
+        top: auto;
+        bottom: 100%;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        border-left: 1px solid rgba(255, 255, 255, 0.08);
+        border-right: none;
+        border-bottom: none;
     }
 
     .tooltip-bubble::after {

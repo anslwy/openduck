@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -14,8 +14,6 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, error, info, warn};
 
-const GEMMA_MODEL: &str = "mlx-community/gemma-3n-E4B-it-4bit";
-const GEMMA_CACHE_DIR: &str = "models--mlx-community--gemma-3n-E4B-it-4bit";
 const CSM_MODEL_REPO: &str = "senstella/csm-expressiva-1b";
 const CSM_CACHE_DIR: &str = "models--senstella--csm-expressiva-1b";
 const CSM_MODEL_FILE: &str = "mlx-ckpt.safetensors";
@@ -45,6 +43,50 @@ const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 2;
 const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with no more than 2 short sentences.";
 const TRANSCRIPTION_PROMPT: &str =
     "You are a voice-based AI. Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GemmaVariant {
+    E4b,
+    E2b,
+}
+
+impl GemmaVariant {
+    fn from_key(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "e4b" => Ok(Self::E4b),
+            "e2b" => Ok(Self::E2b),
+            other => Err(format!("Unsupported Gemma variant: {other}")),
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::E4b => "e4b",
+            Self::E2b => "e2b",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::E4b => "E4B",
+            Self::E2b => "E2B",
+        }
+    }
+
+    fn repo_id(self) -> &'static str {
+        match self {
+            Self::E4b => "mlx-community/gemma-3n-E4B-it-4bit",
+            Self::E2b => "mlx-community/gemma-3n-E2B-it-4bit",
+        }
+    }
+
+    fn cache_dir(self) -> &'static str {
+        match self {
+            Self::E4b => "models--mlx-community--gemma-3n-E4B-it-4bit",
+            Self::E2b => "models--mlx-community--gemma-3n-E2B-it-4bit",
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum CsmVoice {
@@ -108,6 +150,31 @@ struct CsmProcess {
 }
 
 #[derive(Clone)]
+struct DownloadProcess {
+    child: Arc<AsyncMutex<Child>>,
+}
+
+#[derive(Clone, Deserialize)]
+struct DownloadManifestFile {
+    file_size: u64,
+    local_path: PathBuf,
+    blob_path: Option<PathBuf>,
+    incomplete_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Deserialize)]
+struct DownloadManifest {
+    total_bytes: Option<u64>,
+    files: Vec<DownloadManifestFile>,
+}
+
+#[derive(Clone)]
+struct TrackedDownloadState {
+    latest_event: ModelDownloadEvent,
+    manifest: Option<DownloadManifest>,
+}
+
+#[derive(Clone)]
 struct ConversationTurn {
     user_text: String,
     assistant_text: String,
@@ -138,6 +205,14 @@ struct AppState {
     silent_chunks_count: Mutex<usize>,
     speaking_chunks_count: Mutex<usize>,
     is_speaking: Mutex<bool>,
+    selected_gemma_variant: Mutex<GemmaVariant>,
+    loaded_gemma_variant: Mutex<Option<GemmaVariant>>,
+    gemma_download_process: Mutex<Option<DownloadProcess>>,
+    csm_download_process: Mutex<Option<DownloadProcess>>,
+    gemma_download_state: Mutex<Option<TrackedDownloadState>>,
+    csm_download_state: Mutex<Option<TrackedDownloadState>>,
+    gemma_download_cancel_requested: Mutex<bool>,
+    csm_download_cancel_requested: Mutex<bool>,
     server_process: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     server_port: Mutex<Option<u16>>,
     csm_process: Mutex<Option<CsmProcess>>,
@@ -173,6 +248,29 @@ enum CsmWorkerEvent {
         request_id: Option<u64>,
         message: String,
     },
+}
+
+#[derive(Clone, Copy)]
+enum DownloadModel {
+    Gemma,
+    Csm,
+}
+
+impl DownloadModel {
+    fn from_key(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "gemma" => Ok(Self::Gemma),
+            "csm" => Ok(Self::Csm),
+            other => Err(format!("Unsupported download model: {other}")),
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Gemma => "gemma",
+            Self::Csm => "csm",
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -224,16 +322,26 @@ struct ModelDownloadEvent {
     phase: String,
     message: String,
     progress: Option<f32>,
+    downloaded_bytes: Option<u64>,
+    total_bytes: Option<u64>,
     indeterminate: bool,
 }
 
 #[derive(Clone, Deserialize)]
-struct DownloadWorkerEvent {
+struct DownloadManifestWorkerEvent {
+    total_bytes: Option<u64>,
+    files: Vec<DownloadManifestFile>,
+}
+
+#[derive(Clone, Deserialize)]
+struct DownloadProgressWorkerEvent {
     #[serde(rename = "type")]
     event_type: String,
     model: String,
     message: String,
     progress: Option<f32>,
+    downloaded_bytes: Option<u64>,
+    total_bytes: Option<u64>,
     #[serde(default)]
     indeterminate: bool,
 }
@@ -277,16 +385,58 @@ async fn is_csm_running(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(csm_process_is_ready(state.inner()).await)
 }
 
+fn selected_gemma_variant(state: &AppState) -> GemmaVariant {
+    *state.selected_gemma_variant.lock().unwrap()
+}
+
+fn loaded_gemma_variant(state: &AppState) -> Option<GemmaVariant> {
+    *state.loaded_gemma_variant.lock().unwrap()
+}
+
+#[tauri::command]
+fn get_gemma_variant(state: State<'_, AppState>) -> String {
+    selected_gemma_variant(state.inner()).key().to_string()
+}
+
+#[tauri::command]
+fn set_gemma_variant(state: State<'_, AppState>, variant: String) -> Result<(), String> {
+    let selected_variant = GemmaVariant::from_key(&variant)?;
+
+    if let Some(loaded_variant) = loaded_gemma_variant(state.inner()) {
+        if loaded_variant != selected_variant {
+            return Err(format!(
+                "Gemma {} is already loaded. Unload it before switching to {}.",
+                loaded_variant.label(),
+                selected_variant.label()
+            ));
+        }
+    }
+
+    let mut variant_guard = state.selected_gemma_variant.lock().unwrap();
+    *variant_guard = selected_variant;
+    Ok(())
+}
+
 #[tauri::command]
 async fn start_server(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let selected_variant = selected_gemma_variant(state.inner());
     let port;
     {
         let mut process_guard = state.server_process.lock().unwrap();
         let mut port_guard = state.server_port.lock().unwrap();
         if process_guard.is_some() {
+            if let Some(loaded_variant) = loaded_gemma_variant(state.inner()) {
+                if loaded_variant != selected_variant {
+                    return Err(format!(
+                        "Gemma {} is already loaded. Unload it before switching to {}.",
+                        loaded_variant.label(),
+                        selected_variant.label()
+                    ));
+                }
+            }
             return Ok(());
         }
 
@@ -297,7 +447,7 @@ async fn start_server(
             .shell()
             .sidecar("mlx-handler")
             .map_err(|e| e.to_string())?
-            .args(&["--server", "--model", GEMMA_MODEL, "--port", &port_arg]);
+            .args(&["--server", "--model", selected_variant.repo_id(), "--port", &port_arg]);
 
         let (mut rx, child) = sidecar_command.spawn().map_err(|e| e.to_string())?;
         tauri::async_runtime::spawn(async move {
@@ -331,6 +481,7 @@ async fn start_server(
 
         *process_guard = Some(child);
         *port_guard = Some(port);
+        *state.loaded_gemma_variant.lock().unwrap() = Some(selected_variant);
     }
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -500,6 +651,7 @@ async fn stop_server(state: State<'_, AppState>) -> Result<(), String> {
         child.kill().map_err(|e| e.to_string())?;
     }
     *port_guard = None;
+    *state.loaded_gemma_variant.lock().unwrap() = None;
     Ok(())
 }
 
@@ -567,10 +719,15 @@ fn process_audio_with_server(samples: &[f32], server_port: u16, app_handle: taur
     let audio_path = create_temp_wav_path();
     let generation_id;
     let conversation_session_id;
+    let gemma_model;
     {
         let state = app_handle.state::<AppState>();
         generation_id = state.next_generation_id.fetch_add(1, Ordering::Relaxed);
         conversation_session_id = current_conversation_session_id(state.inner());
+        gemma_model = loaded_gemma_variant(state.inner())
+            .unwrap_or_else(|| selected_gemma_variant(state.inner()))
+            .repo_id()
+            .to_string();
     }
     let spec = hound::WavSpec {
         channels: 1,
@@ -613,7 +770,7 @@ fn process_audio_with_server(samples: &[f32], server_port: u16, app_handle: taur
             audio_path.display()
         );
 
-        match transcribe_audio_with_gemma(server_port, &audio_path).await {
+        match transcribe_audio_with_gemma(server_port, &gemma_model, &audio_path).await {
             Ok(user_text) => {
                 let _ = std::fs::remove_file(&audio_path);
 
@@ -671,6 +828,7 @@ fn process_audio_with_server(samples: &[f32], server_port: u16, app_handle: taur
                     server_port,
                     generation_id,
                     conversation_session_id,
+                    gemma_model,
                     user_text,
                 );
             }
@@ -695,11 +853,19 @@ fn start_response_generation(
     server_port: u16,
     generation_id: u64,
     conversation_session_id: u64,
+    gemma_model: String,
     user_text: String,
 ) {
     let app_handle_for_task = app_handle.clone();
     let handle = tauri::async_runtime::spawn(async move {
-        match stream_gemma_response_to_csm(&app_handle_for_task, server_port, &user_text).await {
+        match stream_gemma_response_to_csm(
+            &app_handle_for_task,
+            server_port,
+            &gemma_model,
+            &user_text,
+        )
+        .await
+        {
             Ok(response_text) => {
                 if response_text.is_empty() {
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
@@ -748,11 +914,12 @@ fn start_response_generation(
 
 async fn transcribe_audio_with_gemma(
     server_port: u16,
+    gemma_model: &str,
     audio_path: &Path,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
     let request = ChatRequest {
-        model: GEMMA_MODEL.to_string(),
+        model: gemma_model.to_string(),
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
@@ -820,6 +987,7 @@ async fn transcribe_audio_with_gemma(
 async fn stream_gemma_response_to_csm(
     app_handle: &tauri::AppHandle,
     server_port: u16,
+    gemma_model: &str,
     user_text: &str,
 ) -> Result<String, String> {
     start_csm_server_inner(app_handle, app_handle.state::<AppState>().inner()).await?;
@@ -867,7 +1035,7 @@ async fn stream_gemma_response_to_csm(
     });
 
     let request = ChatRequest {
-        model: GEMMA_MODEL.to_string(),
+        model: gemma_model.to_string(),
         messages,
         max_tokens: 64,
         stream: false,
@@ -1902,19 +2070,15 @@ fn server_base_url(port: u16) -> String {
     format!("http://127.0.0.1:{}", port)
 }
 
-fn huggingface_model_cache_exists(model_dir_name: &str) -> bool {
+fn huggingface_cache_root(model_dir_name: &str) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
     std::path::Path::new(&home)
         .join(".cache/huggingface/hub")
         .join(model_dir_name)
-        .exists()
 }
 
 fn huggingface_cached_file_exists(model_dir_name: &str, file_name: &str) -> bool {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let model_dir = std::path::Path::new(&home)
-        .join(".cache/huggingface/hub")
-        .join(model_dir_name);
+    let model_dir = huggingface_cache_root(model_dir_name);
 
     if !model_dir.exists() {
         return false;
@@ -1945,6 +2109,257 @@ fn huggingface_cached_file_exists(model_dir_name: &str, file_name: &str) -> bool
     false
 }
 
+fn gemma_snapshot_is_complete(snapshot_dir: &Path) -> bool {
+    if !snapshot_dir.join("config.json").exists() || !snapshot_dir.join("tokenizer.model").exists()
+    {
+        return false;
+    }
+
+    if snapshot_dir.join("model.safetensors").exists() {
+        return true;
+    }
+
+    let Ok(entries) = std::fs::read_dir(snapshot_dir) else {
+        return false;
+    };
+
+    let mut shard_numbers_by_total = std::collections::BTreeMap::<u32, HashSet<u32>>::new();
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        let Some(file_name) = file_name.strip_prefix("model-") else {
+            continue;
+        };
+        let Some(file_name) = file_name.strip_suffix(".safetensors") else {
+            continue;
+        };
+        let Some((shard_number, shard_total)) = file_name.split_once("-of-") else {
+            continue;
+        };
+        let (Ok(shard_number), Ok(shard_total)) =
+            (shard_number.parse::<u32>(), shard_total.parse::<u32>())
+        else {
+            continue;
+        };
+
+        shard_numbers_by_total
+            .entry(shard_total)
+            .or_default()
+            .insert(shard_number);
+    }
+
+    if shard_numbers_by_total.len() != 1 {
+        return false;
+    }
+
+    let Some((shard_total, shard_numbers)) = shard_numbers_by_total.into_iter().next() else {
+        return false;
+    };
+
+    (1..=shard_total).all(|shard_number| shard_numbers.contains(&shard_number))
+}
+
+fn any_snapshot_matches(model_dir_name: &str, predicate: impl Fn(&Path) -> bool) -> bool {
+    let snapshots_dir = huggingface_cache_root(model_dir_name).join("snapshots");
+    let Ok(entries) = std::fs::read_dir(snapshots_dir) else {
+        return false;
+    };
+
+    for entry in entries.flatten() {
+        let snapshot_dir = entry.path();
+        if !snapshot_dir.is_dir() {
+            continue;
+        }
+
+        if predicate(&snapshot_dir) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn gemma_model_cache_exists(variant: GemmaVariant) -> bool {
+    any_snapshot_matches(variant.cache_dir(), gemma_snapshot_is_complete)
+}
+
+fn active_download_process(state: &AppState, model: DownloadModel) -> Option<DownloadProcess> {
+    match model {
+        DownloadModel::Gemma => state.gemma_download_process.lock().unwrap().clone(),
+        DownloadModel::Csm => state.csm_download_process.lock().unwrap().clone(),
+    }
+}
+
+fn set_active_download_process(
+    state: &AppState,
+    model: DownloadModel,
+    process: Option<DownloadProcess>,
+) {
+    match model {
+        DownloadModel::Gemma => {
+            *state.gemma_download_process.lock().unwrap() = process;
+        }
+        DownloadModel::Csm => {
+            *state.csm_download_process.lock().unwrap() = process;
+        }
+    }
+}
+
+fn tracked_download_state(state: &AppState, model: DownloadModel) -> Option<TrackedDownloadState> {
+    match model {
+        DownloadModel::Gemma => state.gemma_download_state.lock().unwrap().clone(),
+        DownloadModel::Csm => state.csm_download_state.lock().unwrap().clone(),
+    }
+}
+
+fn set_tracked_download_state(
+    state: &AppState,
+    model: DownloadModel,
+    tracked_state: Option<TrackedDownloadState>,
+) {
+    match model {
+        DownloadModel::Gemma => {
+            *state.gemma_download_state.lock().unwrap() = tracked_state;
+        }
+        DownloadModel::Csm => {
+            *state.csm_download_state.lock().unwrap() = tracked_state;
+        }
+    }
+}
+
+fn update_tracked_download_event(
+    state: &AppState,
+    model: DownloadModel,
+    latest_event: ModelDownloadEvent,
+) {
+    let mut tracked_state = tracked_download_state(state, model).unwrap_or(TrackedDownloadState {
+        latest_event: latest_event.clone(),
+        manifest: None,
+    });
+    tracked_state.latest_event = latest_event;
+    set_tracked_download_state(state, model, Some(tracked_state));
+}
+
+fn update_tracked_download_manifest(
+    state: &AppState,
+    model: DownloadModel,
+    manifest: DownloadManifest,
+) {
+    let mut tracked_state = tracked_download_state(state, model).unwrap_or(TrackedDownloadState {
+        latest_event: ModelDownloadEvent {
+            model: model.key().to_string(),
+            phase: "progress".to_string(),
+            message: "Preparing download...".to_string(),
+            progress: Some(0.0),
+            downloaded_bytes: Some(0),
+            total_bytes: manifest.total_bytes,
+            indeterminate: manifest.total_bytes.is_none(),
+        },
+        manifest: None,
+    });
+    tracked_state.manifest = Some(manifest);
+    if let Some(manifest) = tracked_state.manifest.as_ref() {
+        tracked_state.latest_event.total_bytes = manifest.total_bytes;
+    }
+    set_tracked_download_state(state, model, Some(tracked_state));
+}
+
+fn resolve_downloaded_file_bytes(file: &DownloadManifestFile) -> u64 {
+    if file.local_path.exists() {
+        return file.file_size;
+    }
+
+    if let Some(blob_path) = file.blob_path.as_ref() {
+        if let Ok(metadata) = std::fs::metadata(blob_path) {
+            return metadata.len().min(file.file_size);
+        }
+    }
+
+    if let Some(incomplete_path) = file.incomplete_path.as_ref() {
+        if let Ok(metadata) = std::fs::metadata(incomplete_path) {
+            return metadata.len().min(file.file_size);
+        }
+    }
+
+    0
+}
+
+fn poll_tracked_download_event(tracked_state: &TrackedDownloadState) -> ModelDownloadEvent {
+    if tracked_state.latest_event.phase != "progress" {
+        return tracked_state.latest_event.clone();
+    }
+
+    let Some(manifest) = tracked_state.manifest.as_ref() else {
+        return tracked_state.latest_event.clone();
+    };
+    let total_bytes = manifest
+        .total_bytes
+        .unwrap_or_else(|| manifest.files.iter().map(|file| file.file_size).sum());
+
+    if total_bytes == 0 {
+        return tracked_state.latest_event.clone();
+    }
+
+    let scanned_bytes = manifest
+        .files
+        .iter()
+        .map(resolve_downloaded_file_bytes)
+        .sum::<u64>()
+        .min(total_bytes);
+    let merged_bytes = tracked_state
+        .latest_event
+        .downloaded_bytes
+        .unwrap_or(0)
+        .max(scanned_bytes)
+        .min(total_bytes);
+    let mut event = tracked_state.latest_event.clone();
+    event.total_bytes = Some(total_bytes);
+    event.downloaded_bytes = Some(merged_bytes);
+    event.progress = Some((merged_bytes as f64 / total_bytes as f64 * 100.0) as f32);
+    event.indeterminate = false;
+
+    if event.message.trim().is_empty() {
+        event.message = "Downloading model files...".to_string();
+    }
+
+    event
+}
+
+fn set_download_cancel_requested(state: &AppState, model: DownloadModel, requested: bool) {
+    match model {
+        DownloadModel::Gemma => {
+            *state.gemma_download_cancel_requested.lock().unwrap() = requested;
+        }
+        DownloadModel::Csm => {
+            *state.csm_download_cancel_requested.lock().unwrap() = requested;
+        }
+    }
+}
+
+fn take_download_cancel_requested(state: &AppState, model: DownloadModel) -> bool {
+    let cancel_requested = match model {
+        DownloadModel::Gemma => &state.gemma_download_cancel_requested,
+        DownloadModel::Csm => &state.csm_download_cancel_requested,
+    };
+    let mut guard = cancel_requested.lock().unwrap();
+    let was_requested = *guard;
+    *guard = false;
+    was_requested
+}
+
+#[tauri::command]
+fn get_model_download_status(
+    state: State<'_, AppState>,
+    model: String,
+) -> Result<Option<ModelDownloadEvent>, String> {
+    let download_model = DownloadModel::from_key(&model)?;
+    let Some(tracked_state) = tracked_download_state(state.inner(), download_model) else {
+        return Ok(None);
+    };
+
+    Ok(Some(poll_tracked_download_event(&tracked_state)))
+}
+
 fn resolve_gemma_python_executable(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     resolve_existing_path_dev_first(
         app_handle,
@@ -1958,6 +2373,14 @@ fn resolve_csm_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, S
         app_handle,
         Path::new("resources/csm_env/venv/lib/python3.11/site-packages"),
         "bundled CSM site-packages",
+    )
+}
+
+fn resolve_gemma_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    resolve_existing_path_dev_first(
+        app_handle,
+        Path::new("resources/python_env/venv/lib/python3.11/site-packages"),
+        "bundled Gemma site-packages",
     )
 }
 
@@ -2072,8 +2495,8 @@ fn reap_stale_model_processes(app_handle: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-async fn check_model_status() -> bool {
-    huggingface_model_cache_exists(GEMMA_CACHE_DIR)
+fn check_model_status(state: State<'_, AppState>) -> bool {
+    gemma_model_cache_exists(selected_gemma_variant(state.inner()))
 }
 
 #[tauri::command]
@@ -2082,9 +2505,20 @@ async fn check_csm_status() -> bool {
 }
 
 #[tauri::command]
-async fn download_model(app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn download_model(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let selected_variant = selected_gemma_variant(state.inner());
     let python_executable = resolve_gemma_python_executable(&app_handle)?;
-    run_hf_download(&app_handle, python_executable, "gemma", GEMMA_MODEL, &[]).await
+    run_hf_download(
+        &app_handle,
+        python_executable,
+        "gemma",
+        selected_variant.repo_id(),
+        &[],
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2100,6 +2534,32 @@ async fn download_csm_model(app_handle: tauri::AppHandle) -> Result<(), String> 
     .await
 }
 
+#[tauri::command]
+async fn cancel_model_download(
+    state: State<'_, AppState>,
+    model: String,
+) -> Result<(), String> {
+    let download_model = DownloadModel::from_key(&model)?;
+    let Some(download_process) = active_download_process(state.inner(), download_model) else {
+        return Ok(());
+    };
+
+    let mut child_guard = download_process.child.lock().await;
+    if child_guard
+        .try_wait()
+        .map_err(|e| format!("Failed to inspect {} download state: {e}", model))?
+        .is_none()
+    {
+        set_download_cancel_requested(state.inner(), download_model, true);
+        child_guard
+            .kill()
+            .await
+            .map_err(|e| format!("Failed to cancel {} download: {e}", model))?;
+    }
+
+    Ok(())
+}
+
 async fn run_hf_download(
     app_handle: &tauri::AppHandle,
     python_executable: PathBuf,
@@ -2107,6 +2567,31 @@ async fn run_hf_download(
     repo_id: &str,
     allow_patterns: &[&str],
 ) -> Result<(), String> {
+    let download_model = DownloadModel::from_key(model_key)?;
+    let state = app_handle.state::<AppState>();
+
+    if active_download_process(state.inner(), download_model).is_some() {
+        return Err(format!("{model_key} download already in progress"));
+    }
+
+    set_download_cancel_requested(state.inner(), download_model, false);
+    set_tracked_download_state(
+        state.inner(),
+        download_model,
+        Some(TrackedDownloadState {
+            latest_event: ModelDownloadEvent {
+                model: model_key.to_string(),
+                phase: "progress".to_string(),
+                message: "Preparing download...".to_string(),
+                progress: Some(0.0),
+                downloaded_bytes: Some(0),
+                total_bytes: None,
+                indeterminate: true,
+            },
+            manifest: None,
+        }),
+    );
+
     let script = resolve_resource_file(app_handle, "hf_download.py")?;
     let python_home = python_executable
         .parent()
@@ -2125,12 +2610,16 @@ async fn run_hf_download(
         .arg(model_key)
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONHOME", python_home)
+        .env("HF_HUB_DISABLE_XET", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     if model_key == "csm" {
         let csm_site_packages = resolve_csm_site_packages(app_handle)?;
         command.env("PYTHONPATH", csm_site_packages);
+    } else {
+        let gemma_site_packages = resolve_gemma_site_packages(app_handle)?;
+        command.env("PYTHONPATH", gemma_site_packages);
     }
 
     for pattern in allow_patterns {
@@ -2149,13 +2638,26 @@ async fn run_hf_download(
         .stderr
         .take()
         .ok_or_else(|| format!("Failed to capture stderr for {model_key} download"))?;
+    let child = Arc::new(AsyncMutex::new(child));
+    set_active_download_process(
+        state.inner(),
+        download_model,
+        Some(DownloadProcess {
+            child: child.clone(),
+        }),
+    );
 
     let stderr_handle = tauri::async_runtime::spawn(async move {
         let mut stderr_lines = BufReader::new(stderr).lines();
         let mut collected = Vec::new();
         while let Ok(Some(line)) = stderr_lines.next_line().await {
             if !line.trim().is_empty() {
-                error!("Downloader stderr: {}", line);
+                let normalized = line.to_ascii_lowercase();
+                if normalized.contains("warning") {
+                    warn!("Downloader stderr: {}", line);
+                } else {
+                    error!("Downloader stderr: {}", line);
+                }
                 collected.push(line);
             }
         }
@@ -2171,49 +2673,124 @@ async fn run_hf_download(
             continue;
         }
 
-        match serde_json::from_str::<DownloadWorkerEvent>(trimmed) {
-            Ok(event) => {
-                let phase = match event.event_type.as_str() {
-                    "completed" => "completed",
-                    "error" => "error",
-                    _ => "progress",
-                };
-
-                emit_model_download_event(
-                    app_handle,
-                    ModelDownloadEvent {
-                        model: event.model.clone(),
-                        phase: phase.to_string(),
-                        message: event.message.clone(),
-                        progress: event.progress,
-                        indeterminate: event.indeterminate,
-                    },
-                );
-
-                if event.event_type == "error" {
-                    last_error_message = Some(event.message);
-                }
-            }
+        let parsed = match serde_json::from_str::<serde_json::Value>(trimmed) {
+            Ok(parsed) => parsed,
             Err(err) => {
                 warn!(
                     "Failed to parse downloader output for {}: {} ({})",
                     model_key, err, trimmed
                 );
+                continue;
             }
+        };
+        let Some(event_type) = parsed
+            .get("type")
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+        else {
+            warn!("Downloader output for {} is missing a type: {}", model_key, trimmed);
+            continue;
+        };
+
+        match event_type.as_str() {
+            "manifest" => match serde_json::from_value::<DownloadManifestWorkerEvent>(parsed) {
+                Ok(event) => {
+                    update_tracked_download_manifest(
+                        state.inner(),
+                        download_model,
+                        DownloadManifest {
+                            total_bytes: event.total_bytes,
+                            files: event.files,
+                        },
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "Failed to parse downloader manifest for {}: {} ({})",
+                        model_key, err, trimmed
+                    );
+                }
+            },
+            _ => match serde_json::from_value::<DownloadProgressWorkerEvent>(parsed) {
+                Ok(event) => {
+                let phase = match event.event_type.as_str() {
+                    "completed" => "completed",
+                    "error" => "error",
+                    _ => "progress",
+                };
+                let model_event = ModelDownloadEvent {
+                    model: event.model.clone(),
+                    phase: phase.to_string(),
+                    message: event.message.clone(),
+                    progress: event.progress,
+                    downloaded_bytes: event.downloaded_bytes,
+                    total_bytes: event.total_bytes,
+                    indeterminate: event.indeterminate,
+                };
+                update_tracked_download_event(state.inner(), download_model, model_event.clone());
+
+                emit_model_download_event(app_handle, model_event);
+
+                if event.event_type == "error" {
+                    last_error_message = Some(event.message);
+                }
+                }
+                Err(err) => {
+                    warn!(
+                        "Failed to parse downloader output for {}: {} ({})",
+                        model_key, err, trimmed
+                    );
+                }
+            },
         }
     }
 
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("Failed to wait for {model_key} downloader: {e}"))?;
+    let status = {
+        let mut child_guard = child.lock().await;
+        child_guard
+            .wait()
+            .await
+            .map_err(|e| format!("Failed to wait for {model_key} downloader: {e}"))?
+    };
     let stderr_output = stderr_handle.await.unwrap_or_default();
+    let cancelled = take_download_cancel_requested(state.inner(), download_model);
+    set_active_download_process(state.inner(), download_model, None);
+
+    if cancelled {
+        let cancelled_event = ModelDownloadEvent {
+            model: download_model.key().to_string(),
+            phase: "cancelled".to_string(),
+            message: "Download cancelled.".to_string(),
+            progress: None,
+            downloaded_bytes: None,
+            total_bytes: None,
+            indeterminate: false,
+        };
+        update_tracked_download_event(state.inner(), download_model, cancelled_event.clone());
+        emit_model_download_event(app_handle, cancelled_event);
+        info!("{} download cancelled", model_key);
+        return Err(format!("{model_key} download cancelled"));
+    }
 
     if status.success() {
+        update_tracked_download_event(
+            state.inner(),
+            download_model,
+            ModelDownloadEvent {
+                model: download_model.key().to_string(),
+                phase: "completed".to_string(),
+                message: "Download complete.".to_string(),
+                progress: Some(100.0),
+                downloaded_bytes: None,
+                total_bytes: tracked_download_state(state.inner(), download_model)
+                    .and_then(|tracked| tracked.manifest.and_then(|manifest| manifest.total_bytes)),
+                indeterminate: false,
+            },
+        );
         info!("{} download completed successfully", model_key);
         Ok(())
     } else {
-        Err(last_error_message
+        let error_message = last_error_message
             .or_else(|| {
                 let trimmed = stderr_output.trim();
                 if trimmed.is_empty() {
@@ -2222,7 +2799,22 @@ async fn run_hf_download(
                     Some(trimmed.to_string())
                 }
             })
-            .unwrap_or_else(|| format!("{model_key} download failed with status {status}")))
+            .unwrap_or_else(|| format!("{model_key} download failed with status {status}"));
+        update_tracked_download_event(
+            state.inner(),
+            download_model,
+            ModelDownloadEvent {
+                model: download_model.key().to_string(),
+                phase: "error".to_string(),
+                message: error_message.clone(),
+                progress: None,
+                downloaded_bytes: None,
+                total_bytes: tracked_download_state(state.inner(), download_model)
+                    .and_then(|tracked| tracked.manifest.and_then(|manifest| manifest.total_bytes)),
+                indeterminate: true,
+            },
+        );
+        Err(error_message)
     }
 }
 
@@ -2253,6 +2845,14 @@ pub fn run() {
             silent_chunks_count: Mutex::new(0),
             speaking_chunks_count: Mutex::new(0),
             is_speaking: Mutex::new(false),
+            selected_gemma_variant: Mutex::new(GemmaVariant::E4b),
+            loaded_gemma_variant: Mutex::new(None),
+            gemma_download_process: Mutex::new(None),
+            csm_download_process: Mutex::new(None),
+            gemma_download_state: Mutex::new(None),
+            csm_download_state: Mutex::new(None),
+            gemma_download_cancel_requested: Mutex::new(false),
+            csm_download_cancel_requested: Mutex::new(false),
             server_process: Mutex::new(None),
             server_port: Mutex::new(None),
             csm_process: Mutex::new(None),
@@ -2272,10 +2872,14 @@ pub fn run() {
             receive_audio_chunk,
             ping,
             reset_call_session,
+            get_gemma_variant,
+            set_gemma_variant,
             check_model_status,
             check_csm_status,
+            get_model_download_status,
             download_model,
             download_csm_model,
+            cancel_model_download,
             is_server_running,
             is_csm_running,
             start_server,
