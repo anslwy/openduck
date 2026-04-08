@@ -43,7 +43,7 @@ const MAX_CONVERSATION_TURNS: usize = 24;
 const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 2;
 const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with no more than 2 short sentences.";
 const TRANSCRIPTION_PROMPT: &str =
-    "Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
+    "You are a voice-based AI. Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
 
 #[derive(Clone, Copy)]
 enum CsmVoice {
@@ -1153,6 +1153,7 @@ fn sanitize_for_voice_output(text: &str) -> String {
             .replace('`', "")
             .replace('*', "")
             .replace('#', "");
+        let cleaned = strip_nonspoken_symbols(&cleaned);
         let cleaned = cleaned.trim();
 
         if !cleaned.is_empty() {
@@ -1208,8 +1209,99 @@ fn trim_leading_list_marker(text: &str) -> &str {
     text
 }
 
+fn strip_nonspoken_symbols(text: &str) -> String {
+    let mut cleaned = String::with_capacity(text.len());
+
+    for ch in text.chars() {
+        if is_emoji_joiner_or_modifier(ch) {
+            continue;
+        }
+
+        if is_nonspoken_symbol(ch) {
+            if !cleaned.ends_with(' ') {
+                cleaned.push(' ');
+            }
+            continue;
+        }
+
+        cleaned.push(ch);
+    }
+
+    normalize_punctuation_spacing(&collapse_whitespace(&cleaned))
+}
+
+fn is_emoji_joiner_or_modifier(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x200D
+            | 0x20E3
+            | 0xFE0E
+            | 0xFE0F
+            | 0xE0020..=0xE007F
+            | 0x1F3FB..=0x1F3FF
+    )
+}
+
+fn is_nonspoken_symbol(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x00A9
+            | 0x00AE
+            | 0x203C
+            | 0x2049
+            | 0x2122
+            | 0x2139
+            | 0x2194..=0x2199
+            | 0x21A9..=0x21AA
+            | 0x231A..=0x231B
+            | 0x2328
+            | 0x23CF
+            | 0x23E9..=0x23FA
+            | 0x24C2
+            | 0x25AA..=0x25AB
+            | 0x25B6
+            | 0x25C0
+            | 0x25FB..=0x25FE
+            | 0x2600..=0x27BF
+            | 0x2934..=0x2935
+            | 0x2B05..=0x2B07
+            | 0x2B1B..=0x2B1C
+            | 0x2B50
+            | 0x2B55
+            | 0x3030
+            | 0x303D
+            | 0x3297
+            | 0x3299
+            | 0x1F000..=0x1FAFF
+    )
+}
+
 fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn normalize_punctuation_spacing(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == ' '
+            && chars
+                .peek()
+                .copied()
+                .is_some_and(is_tight_trailing_punctuation)
+        {
+            continue;
+        }
+
+        normalized.push(ch);
+    }
+
+    normalized.trim().to_string()
+}
+
+fn is_tight_trailing_punctuation(ch: char) -> bool {
+    matches!(ch, '.' | ',' | '!' | '?' | ':' | ';' | ')' | ']' | '}')
 }
 
 fn prepare_spoken_response_segments_for_csm(text: &str) -> Vec<String> {
@@ -1277,6 +1369,53 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
     }
 
     end
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{prepare_spoken_response_segments_for_csm, sanitize_for_voice_output};
+
+    #[test]
+    fn sanitize_for_voice_output_removes_plain_emoji() {
+        assert_eq!(
+            sanitize_for_voice_output("Hello 😊 there."),
+            "Hello there."
+        );
+    }
+
+    #[test]
+    fn sanitize_for_voice_output_removes_joined_emoji_sequences() {
+        assert_eq!(
+            sanitize_for_voice_output("Family: 👨‍👩‍👧‍👦 Ready 👍🏽"),
+            "Family: Ready"
+        );
+    }
+
+    #[test]
+    fn sanitize_for_voice_output_removes_flags_and_keycaps() {
+        assert_eq!(
+            sanitize_for_voice_output("Press 1️⃣ now 🇺🇸"),
+            "Press 1 now"
+        );
+    }
+
+    #[test]
+    fn sanitize_for_voice_output_preserves_spoken_unicode_text() {
+        assert_eq!(
+            sanitize_for_voice_output("Bonjour, ça va très bien."),
+            "Bonjour, ça va très bien."
+        );
+    }
+
+    #[test]
+    fn spoken_segments_stay_clean_after_symbol_stripping() {
+        assert_eq!(
+            prepare_spoken_response_segments_for_csm(&sanitize_for_voice_output(
+                "Sure 😊. I can help with that 👍."
+            )),
+            vec!["Sure. I can help with that.".to_string()]
+        );
+    }
 }
 
 async fn csm_process_is_ready(state: &AppState) -> bool {
