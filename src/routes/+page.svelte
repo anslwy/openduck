@@ -42,8 +42,6 @@
 		indeterminate: boolean;
 	};
 
-	type CsmVoiceOption = 'male' | 'female';
-
 	let calling = $state(false);
 	let micMuted = $state(false);
 	let time = $state(0);
@@ -66,8 +64,6 @@
 	let csmDownloadIndeterminate = $state(true);
 	let csmLoadMessage = $state('Starting worker...');
 	let isCsmQuantized = $state(false);
-	let selectedCsmVoice = $state<CsmVoiceOption>('male');
-	let lastAppliedCsmVoice = $state<CsmVoiceOption>('male');
 
 	let captureContext: AudioContext | null = null;
 	let mediaStream: MediaStream | null = null;
@@ -124,23 +120,6 @@
 		csmDownloadMessage = payload.message;
 		csmDownloadProgress = payload.progress ?? null;
 		csmDownloadIndeterminate = payload.indeterminate;
-	}
-
-	async function applyCsmVoiceSelection() {
-		await invoke('set_csm_voice', { voice: selectedCsmVoice });
-		lastAppliedCsmVoice = selectedCsmVoice;
-	}
-
-	async function handleCsmVoiceChange() {
-		const attemptedVoice = selectedCsmVoice;
-
-		try {
-			await applyCsmVoiceSelection();
-		} catch (err) {
-			selectedCsmVoice = lastAppliedCsmVoice;
-			console.error('Failed to update CSM voice:', err);
-			alert(`Failed to switch CSM voice to ${attemptedVoice}.\n${String(err)}`);
-		}
 	}
 
 	async function applyCsmQuantizeSelection() {
@@ -370,14 +349,6 @@
 		}
 
 		try {
-			await applyCsmVoiceSelection();
-		} catch (err) {
-			console.error('Failed to apply CSM voice:', err);
-			alert(`Failed to set CSM voice.\n${String(err)}`);
-			return;
-		}
-
-		try {
 			await invoke('reset_call_session');
 		} catch (err) {
 			console.error('Failed to reset call session:', err);
@@ -482,7 +453,6 @@
 		csmLoadMessage = 'Starting worker...';
 		try {
 			await applyCsmQuantizeSelection();
-			await applyCsmVoiceSelection();
 			await invoke('start_csm_server');
 			isCsmLoaded = true;
 		} catch (err) {
@@ -687,7 +657,7 @@
 				{#if isDownloadingCsm}
 					<div class="download-content">
 						<div class="download-row">
-							<span>CSM 1B: {csmDownloadMessage}</span>
+							<span>CSM Expressiva 1B: {csmDownloadMessage}</span>
 							{#if csmDownloadProgress !== null}
 								<span class="download-percent">{Math.round(csmDownloadProgress)}%</span>
 							{/if}
@@ -705,7 +675,7 @@
 						{#if isCsmLoaded}
 							<div class="banner-status">
 								<div class="banner-copy">
-									<span class="banner-title">CSM 1B</span>
+									<span class="banner-title">CSM Expressiva 1B</span>
 									<span class="banner-subtitle">Loaded</span>
 								</div>
 								<div class="loaded-actions">
@@ -720,7 +690,7 @@
 						{:else}
 							<div class="banner-copy">
 								<div class="banner-heading-row">
-									<span class="banner-title">CSM 1B</span>
+									<span class="banner-title">CSM Expressiva 1B</span>
 									<div class="tooltip-shell">
 										<button
 											type="button"
@@ -748,7 +718,7 @@
 					<div class="banner-row">
 						<div class="banner-copy">
 							<div class="banner-heading-row">
-								<span class="banner-title">CSM 1B</span>
+								<span class="banner-title">CSM Expressiva 1B</span>
 								<div class="tooltip-shell">
 									<button
 										type="button"
@@ -772,37 +742,6 @@
 						</button>
 					</div>
 				{/if}
-
-				<div class="voice-select-row">
-					<label class="voice-label" for="csm-voice-select">Voice</label>
-					<div class="voice-select-shell">
-						<select
-							id="csm-voice-select"
-							class="voice-select"
-							bind:value={selectedCsmVoice}
-							disabled={isLoadingCsm || isUnloadingCsm}
-							onchange={handleCsmVoiceChange}
-						>
-							<option value="female">Female</option>
-							<option value="male">Male</option>
-						</select>
-						<svg
-							class="voice-select-chevron"
-							xmlns="http://www.w3.org/2000/svg"
-							width="16"
-							height="16"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2.4"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							aria-hidden="true"
-						>
-							<path d="m6 9 6 6 6-6"></path>
-						</svg>
-					</div>
-				</div>
 			</div>
 		</div>
 	{/if}
@@ -1333,69 +1272,6 @@
 
 	.status-icon :global(svg) {
 		display: block;
-	}
-
-	.voice-select-row {
-		display: flex;
-		flex-direction: column;
-		align-items: stretch;
-		gap: 10px;
-		padding-top: 14px;
-		border-top: 1px solid rgba(255, 255, 255, 0.08);
-	}
-
-	.voice-label {
-		color: rgba(255, 255, 255, 0.58);
-		font-size: 0.78rem;
-		font-weight: 600;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-	}
-
-	.voice-select-shell {
-		position: relative;
-		width: 100%;
-		min-width: 0;
-	}
-
-	.voice-select {
-		appearance: none;
-		width: 100%;
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 14px;
-		background: rgba(255, 255, 255, 0.07);
-		color: white;
-		padding: 13px 42px 13px 16px;
-		font-size: 1rem;
-		font-weight: 600;
-		letter-spacing: -0.01em;
-		outline: none;
-		cursor: pointer;
-		color-scheme: dark;
-		transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
-	}
-
-	.voice-select:focus {
-		border-color: rgba(127, 227, 124, 0.45);
-		box-shadow: 0 0 0 3px rgba(127, 227, 124, 0.12);
-	}
-
-	.voice-select:hover:not(:disabled) {
-		background: rgba(255, 255, 255, 0.1);
-	}
-
-	.voice-select:disabled {
-		opacity: 0.55;
-		cursor: not-allowed;
-	}
-
-	.voice-select-chevron {
-		position: absolute;
-		top: 50%;
-		right: 12px;
-		transform: translateY(-50%);
-		color: rgba(255, 255, 255, 0.62);
-		pointer-events: none;
 	}
 
 	@keyframes slideDown {

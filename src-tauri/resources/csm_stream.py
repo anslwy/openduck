@@ -2,7 +2,9 @@ import argparse
 import base64
 import gc
 import io
+import inspect
 import json
+import os
 import sys
 import traceback
 import wave
@@ -10,10 +12,13 @@ from pathlib import Path
 
 import numpy as np
 from huggingface_hub import hf_hub_download
+from tqdm.auto import tqdm
 
-MODEL_REPO = "senstella/csm-1b-mlx"
-MODEL_FILE = "ckpt.safetensors"
+MODEL_REPO = "senstella/csm-expressiva-1b"
+MODEL_FILE = "mlx-ckpt.safetensors"
+MODEL_SPEAKER = 4
 SAMPLE_RATE = 24_000
+DEVNULL = open(os.devnull, "w")
 
 
 def emit(payload: dict) -> None:
@@ -25,8 +30,52 @@ def emit_status(message: str) -> None:
     emit({"type": "status", "message": message})
 
 
+class CheckpointProgressTqdm(tqdm):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("file", DEVNULL)
+        kwargs.setdefault("leave", False)
+        kwargs.setdefault("mininterval", 0.25)
+        super().__init__(*args, **kwargs)
+        self._emit_progress()
+
+    def update(self, n=1):
+        result = super().update(n)
+        self._emit_progress()
+        return result
+
+    def close(self):
+        self._emit_progress(force=True)
+        return super().close()
+
+    def _emit_progress(self, force: bool = False) -> None:
+        if self.total:
+            progress = max(0.0, min(100.0, float(self.n) / float(self.total) * 100.0))
+            emit_status(f"Downloading CSM checkpoint... {progress:.0f}%")
+        elif force:
+            emit_status("Download complete. Initializing CSM model...")
+        else:
+            emit_status("Downloading CSM checkpoint...")
+
+
 def download_weights() -> str:
     emit_status("Resolving CSM checkpoint...")
+    try:
+        return hf_hub_download(
+            repo_id=MODEL_REPO,
+            filename=MODEL_FILE,
+            local_files_only=True,
+        )
+    except Exception:
+        emit_status("Downloading CSM checkpoint... This can take a while on first load.")
+
+    supports_hf_tqdm = "tqdm_class" in inspect.signature(hf_hub_download).parameters
+    if supports_hf_tqdm:
+        return hf_hub_download(
+            repo_id=MODEL_REPO,
+            filename=MODEL_FILE,
+            tqdm_class=CheckpointProgressTqdm,
+        )
+
     return hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILE)
 
 
@@ -142,7 +191,7 @@ def run_server(
             continue
 
         request_id = int(request.get("request_id"))
-        speaker = int(request.get("speaker", 0))
+        speaker = MODEL_SPEAKER
         text = str(request.get("text", "")).strip()
         if not text:
             emit(

@@ -16,7 +16,10 @@ use tracing::{error, info, warn};
 
 const GEMMA_MODEL: &str = "mlx-community/gemma-3n-E4B-it-4bit";
 const GEMMA_CACHE_DIR: &str = "models--mlx-community--gemma-3n-E4B-it-4bit";
-const CSM_CACHE_DIR: &str = "models--senstella--csm-1b-mlx";
+const CSM_MODEL_REPO: &str = "senstella/csm-expressiva-1b";
+const CSM_CACHE_DIR: &str = "models--senstella--csm-expressiva-1b";
+const CSM_MODEL_FILE: &str = "mlx-ckpt.safetensors";
+const CSM_SPEAKER_ID: u32 = 4;
 const SILENCE_THRESHOLD: f32 = 0.02;
 const SILENCE_DURATION_CHUNKS: usize = 150;
 const MIN_SPEAKING_CHUNKS: usize = 10;
@@ -37,8 +40,8 @@ const CSM_STDERR_TAIL_LIMIT: usize = 8;
 const CSM_MALE_REFERENCE_AUDIO_FILE: &str = "sample-male.mp3";
 const CSM_FEMALE_REFERENCE_AUDIO_FILE: &str = "sample-female.mp3";
 const MAX_CONVERSATION_TURNS: usize = 12;
-const MAX_SPOKEN_SENTENCES: usize = 3;
-const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with no more than 3 short sentences, and prefer 1 or 2 short sentences whenever possible.";
+const MAX_SPOKEN_SENTENCES: usize = 2;
+const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with no more than 2 short sentences.";
 const TRANSCRIPTION_PROMPT: &str =
     "Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
 
@@ -385,8 +388,6 @@ async fn start_csm_server_inner(
         .ok_or_else(|| "Failed to resolve Gemma Python home".to_string())?;
     let csm_site_packages = resolve_csm_site_packages(app_handle)?;
     let csm_script = resolve_resource_file(app_handle, "csm_stream.py")?;
-    let selected_voice = *state.selected_csm_voice.lock().unwrap();
-    let csm_context_audio = resolve_csm_context_audio_file(app_handle, selected_voice)?;
 
     info!("Starting CSM worker with {}", python_executable.display());
 
@@ -394,8 +395,6 @@ async fn start_csm_server_inner(
     command
         .arg(&csm_script)
         .arg("--server")
-        .arg("--context-audio")
-        .arg(&csm_context_audio)
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONHOME", &python_home)
         .env("PYTHONPATH", &csm_site_packages)
@@ -857,7 +856,7 @@ async fn stream_gemma_response_to_csm(
     let request = ChatRequest {
         model: GEMMA_MODEL.to_string(),
         messages,
-        max_tokens: 96,
+        max_tokens: 64,
         stream: false,
     };
 
@@ -898,7 +897,12 @@ async fn stream_gemma_response_to_csm(
     if response_text.is_empty() {
         warn!("Gemma returned an empty response, skipping CSM synthesis");
     } else {
-        let speech_units = split_response_into_speech_units(&response_text);
+        let spoken_response = prepare_spoken_response_for_csm(&response_text);
+        if spoken_response.is_empty() {
+            warn!("Gemma response became empty after spoken-response trimming, skipping CSM synthesis");
+            return Ok(response_text);
+        }
+
         emit_call_stage(app_handle, "generating_audio", "Generating Audio");
         app_handle
             .emit(
@@ -906,14 +910,15 @@ async fn stream_gemma_response_to_csm(
                 CsmAudioStartEvent {
                     request_id: response_id,
                     text: response_text.clone(),
-                    total_segments: speech_units.len(),
+                    total_segments: 1,
                 },
             )
             .map_err(|e| e.to_string())?;
-        for speech_unit in speech_units {
-            info!("Queueing CSM sentence: {}", speech_unit);
-            send_csm_synthesis_request(app_handle, response_id, &speech_unit).await?;
-        }
+        info!(
+            "Queueing CSM response as a single synthesis request: {}",
+            spoken_response
+        );
+        send_csm_synthesis_request(app_handle, response_id, &spoken_response).await?;
         info!("MLX Server Output: {}", response_text);
     }
 
@@ -955,7 +960,7 @@ async fn send_csm_synthesis_request(
         "type": "synthesize",
         "request_id": request_id,
         "text": text,
-        "speaker": 0,
+        "speaker": CSM_SPEAKER_ID,
         "max_audio_length_ms": CSM_MAX_AUDIO_LENGTH_MS,
         "temperature": CSM_TEMPERATURE,
         "top_k": CSM_TOP_K,
@@ -1173,23 +1178,8 @@ fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn split_response_into_speech_units(text: &str) -> Vec<String> {
-    let limited_text = truncate_to_spoken_sentence_limit(text, MAX_SPOKEN_SENTENCES);
-    let mut remaining = limited_text.trim().to_string();
-    let mut speech_units = Vec::new();
-
-    while !remaining.is_empty() {
-        let boundary = find_next_speech_boundary(&remaining).unwrap_or(remaining.len());
-        let remainder = remaining.split_off(boundary);
-        let speech_unit = remaining.trim().to_string();
-        remaining = remainder.trim_start().to_string();
-
-        if !speech_unit.is_empty() {
-            speech_units.push(speech_unit.replace(",", ""));
-        }
-    }
-
-    speech_units
+fn prepare_spoken_response_for_csm(text: &str) -> String {
+    truncate_to_spoken_sentence_limit(text, MAX_SPOKEN_SENTENCES).replace(",", "")
 }
 
 fn truncate_to_spoken_sentence_limit(text: &str, max_sentences: usize) -> String {
@@ -1210,16 +1200,6 @@ fn truncate_to_spoken_sentence_limit(text: &str, max_sentences: usize) -> String
     }
 
     normalized
-}
-
-fn find_next_speech_boundary(text: &str) -> Option<usize> {
-    for (idx, ch) in text.char_indices() {
-        if matches!(ch, '.' | '!' | '?' | '\n') {
-            return Some(expand_speech_boundary(text, idx + ch.len_utf8()));
-        }
-    }
-
-    None
 }
 
 fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
@@ -1713,6 +1693,41 @@ fn huggingface_model_cache_exists(model_dir_name: &str) -> bool {
         .exists()
 }
 
+fn huggingface_cached_file_exists(model_dir_name: &str, file_name: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let model_dir = std::path::Path::new(&home)
+        .join(".cache/huggingface/hub")
+        .join(model_dir_name);
+
+    if !model_dir.exists() {
+        return false;
+    }
+
+    let refs_main = model_dir.join("refs").join("main");
+    if let Ok(revision) = std::fs::read_to_string(&refs_main) {
+        let snapshot_file = model_dir
+            .join("snapshots")
+            .join(revision.trim())
+            .join(file_name);
+        if snapshot_file.exists() {
+            return true;
+        }
+    }
+
+    let snapshots_dir = model_dir.join("snapshots");
+    let Ok(entries) = std::fs::read_dir(snapshots_dir) else {
+        return false;
+    };
+
+    for entry in entries.flatten() {
+        if entry.path().join(file_name).exists() {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn resolve_gemma_python_executable(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     resolve_existing_path_dev_first(
         app_handle,
@@ -1846,7 +1861,7 @@ async fn check_model_status() -> bool {
 
 #[tauri::command]
 async fn check_csm_status() -> bool {
-    huggingface_model_cache_exists(CSM_CACHE_DIR)
+    huggingface_cached_file_exists(CSM_CACHE_DIR, CSM_MODEL_FILE)
 }
 
 #[tauri::command]
@@ -1862,8 +1877,8 @@ async fn download_csm_model(app_handle: tauri::AppHandle) -> Result<(), String> 
         &app_handle,
         python_executable,
         "csm",
-        "senstella/csm-1b-mlx",
-        &["ckpt.safetensors"],
+        CSM_MODEL_REPO,
+        &[CSM_MODEL_FILE],
     )
     .await
 }
