@@ -42,6 +42,8 @@
 		indeterminate: boolean;
 	};
 
+	type CsmVoiceOption = 'male' | 'female';
+
 	let calling = $state(false);
 	let micMuted = $state(false);
 	let time = $state(0);
@@ -60,6 +62,8 @@
 	let csmDownloadProgress = $state<number | null>(null);
 	let csmDownloadIndeterminate = $state(true);
 	let csmLoadMessage = $state('Starting worker...');
+	let selectedCsmVoice = $state<CsmVoiceOption>('male');
+	let lastAppliedCsmVoice = $state<CsmVoiceOption>('male');
 
 	let captureContext: AudioContext | null = null;
 	let mediaStream: MediaStream | null = null;
@@ -116,6 +120,23 @@
 		csmDownloadMessage = payload.message;
 		csmDownloadProgress = payload.progress ?? null;
 		csmDownloadIndeterminate = payload.indeterminate;
+	}
+
+	async function applyCsmVoiceSelection() {
+		await invoke('set_csm_voice', { voice: selectedCsmVoice });
+		lastAppliedCsmVoice = selectedCsmVoice;
+	}
+
+	async function handleCsmVoiceChange() {
+		const attemptedVoice = selectedCsmVoice;
+
+		try {
+			await applyCsmVoiceSelection();
+		} catch (err) {
+			selectedCsmVoice = lastAppliedCsmVoice;
+			console.error('Failed to update CSM voice:', err);
+			alert(`Failed to switch CSM voice to ${attemptedVoice}.\n${String(err)}`);
+		}
 	}
 
 	async function syncModelStatus() {
@@ -323,6 +344,14 @@
 		}
 
 		try {
+			await applyCsmVoiceSelection();
+		} catch (err) {
+			console.error('Failed to apply CSM voice:', err);
+			alert(`Failed to set CSM voice.\n${String(err)}`);
+			return;
+		}
+
+		try {
 			await invoke('reset_call_session');
 		} catch (err) {
 			console.error('Failed to reset call session:', err);
@@ -426,6 +455,7 @@
 		isLoadingCsm = true;
 		csmLoadMessage = 'Starting worker...';
 		try {
+			await applyCsmVoiceSelection();
 			await invoke('start_csm_server');
 			isCsmLoaded = true;
 		} catch (err) {
@@ -559,26 +589,41 @@
 						</div>
 					</div>
 				{:else if isGemmaDownloaded}
-					{#if isGemmaLoaded}
-						<div class="status-icon">
-							<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-						</div>
-						<span>Gemma 3: Loaded</span>
-					{:else}
-						<span>Gemma 3: Downloaded</span>
-						<button class="download-btn" disabled={isLoadingGemma} onclick={handleLoadGemma}>
-							{isLoadingGemma ? 'Loading...' : 'Load Model'}
-						</button>
-					{/if}
+					<div class="banner-row">
+						{#if isGemmaLoaded}
+							<div class="banner-status">
+								<div class="banner-copy">
+									<span class="banner-title">Gemma 3</span>
+									<span class="banner-subtitle">Loaded</span>
+								</div>
+								<div class="status-icon">
+									<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+								</div>
+							</div>
+						{:else}
+							<div class="banner-copy">
+								<span class="banner-title">Gemma 3</span>
+								<span class="banner-subtitle">Downloaded</span>
+							</div>
+							<button class="download-btn" disabled={isLoadingGemma} onclick={handleLoadGemma}>
+								{isLoadingGemma ? 'Loading...' : 'Load Model'}
+							</button>
+						{/if}
+					</div>
 				{:else}
-					<span>Gemma 3 model not found in cache.</span>
-					<button class="download-btn" disabled={isDownloadingGemma} onclick={handleDownloadGemma}>
-						{isDownloadingGemma ? 'Downloading...' : 'Download Model'}
-					</button>
+					<div class="banner-row">
+						<div class="banner-copy">
+							<span class="banner-title">Gemma 3</span>
+							<span class="banner-subtitle">Model not found in cache</span>
+						</div>
+						<button class="download-btn" disabled={isDownloadingGemma} onclick={handleDownloadGemma}>
+							{isDownloadingGemma ? 'Downloading...' : 'Download Model'}
+						</button>
+					</div>
 				{/if}
 			</div>
 
-			<div class="download-banner" class:ready={isCsmDownloaded && isCsmLoaded}>
+			<div class="download-banner voice-config-banner" class:ready={isCsmDownloaded && isCsmLoaded}>
 				{#if isDownloadingCsm}
 					<div class="download-content">
 						<div class="download-row">
@@ -596,28 +641,74 @@
 						</div>
 					</div>
 				{:else if isCsmDownloaded}
-					{#if isCsmLoaded}
-						<div class="status-icon">
-							<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-						</div>
-						<span>CSM 1B: Loaded</span>
-					{:else}
-						<span>CSM 1B: {isLoadingCsm ? csmLoadMessage : 'Downloaded'}</span>
-						<button class="download-btn" disabled={isLoadingCsm} onclick={handleLoadCsm}>
-							{isLoadingCsm ? 'Loading...' : 'Load Model'}
-						</button>
-					{/if}
+					<div class="banner-row">
+						{#if isCsmLoaded}
+							<div class="banner-status">
+								<div class="banner-copy">
+									<span class="banner-title">CSM 1B</span>
+									<span class="banner-subtitle">Loaded</span>
+								</div>
+								<div class="status-icon">
+									<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+								</div>
+							</div>
+						{:else}
+							<div class="banner-copy">
+								<span class="banner-title">CSM 1B</span>
+								<span class="banner-subtitle">{isLoadingCsm ? csmLoadMessage : 'Downloaded'}</span>
+							</div>
+							<button class="download-btn" disabled={isLoadingCsm} onclick={handleLoadCsm}>
+								{isLoadingCsm ? 'Loading...' : 'Load Model'}
+							</button>
+						{/if}
+					</div>
 				{:else}
-					<span>CSM 1B model not found in cache.</span>
-					<button class="download-btn" disabled={isDownloadingCsm} onclick={handleDownloadCsm}>
-						{isDownloadingCsm ? 'Downloading...' : 'Download Model'}
-					</button>
+					<div class="banner-row">
+						<div class="banner-copy">
+							<span class="banner-title">CSM 1B</span>
+							<span class="banner-subtitle">Model not found in cache</span>
+						</div>
+						<button class="download-btn" disabled={isDownloadingCsm} onclick={handleDownloadCsm}>
+							{isDownloadingCsm ? 'Downloading...' : 'Download Model'}
+						</button>
+					</div>
 				{/if}
+
+				<div class="voice-select-row">
+					<label class="voice-label" for="csm-voice-select">Voice</label>
+					<div class="voice-select-shell">
+						<select
+							id="csm-voice-select"
+							class="voice-select"
+							bind:value={selectedCsmVoice}
+							disabled={isLoadingCsm}
+							onchange={handleCsmVoiceChange}
+						>
+							<option value="female">Female</option>
+							<option value="male">Male</option>
+						</select>
+						<svg
+							class="voice-select-chevron"
+							xmlns="http://www.w3.org/2000/svg"
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.4"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+						>
+							<path d="m6 9 6 6 6-6"></path>
+						</svg>
+					</div>
+				</div>
 			</div>
 		</div>
 	{/if}
 
-	<main>
+	<main class:idle-layout={!calling}>
 		{#if calling && callStageMessage}
 			<div class="call-stage-banner" data-phase={callStagePhase}>
 				<span class="call-stage-dot"></span>
@@ -699,6 +790,13 @@
 		align-items: center;
 		justify-content: center;
 		gap: 28px;
+		width: 100%;
+		box-sizing: border-box;
+		padding: 0 24px;
+	}
+
+	main.idle-layout {
+		padding-top: clamp(144px, 24vh, 196px);
 	}
 
 	.call-stage-banner {
@@ -767,7 +865,7 @@
 		display: flex;
 		flex-direction: column;
 		align-items: center;
-		gap: 12px;
+		width: min(calc(100vw - 48px), 560px);
 		z-index: 10;
 	}
 
@@ -887,20 +985,32 @@
 	.download-banner {
 		background: rgba(28, 28, 30, 0.9);
 		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 12px;
-		padding: 12px 20px;
+		border-radius: 16px;
+		padding: 14px 24px;
 		display: flex;
 		align-items: center;
 		gap: 16px;
 		color: white;
 		backdrop-filter: blur(10px);
 		animation: slideDown 0.3s ease-out;
-		min-width: 420px;
+		box-sizing: border-box;
+		width: 100%;
+		min-width: 0;
 	}
 
 	.download-banner.ready {
 		background: rgba(28, 28, 30, 0.6);
-		padding: 8px 16px;
+		padding: 10px 20px;
+	}
+
+	.download-banner.voice-config-banner {
+		align-items: stretch;
+		flex-direction: column;
+		gap: 14px;
+	}
+
+	.download-banner.voice-config-banner.ready {
+		padding: 14px 24px;
 	}
 
 	.download-content {
@@ -915,6 +1025,42 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 16px;
+	}
+
+	.banner-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 20px;
+		width: 100%;
+	}
+
+	.banner-copy {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		flex: 1;
+		min-width: 0;
+	}
+
+	.banner-title {
+		font-size: 1rem;
+		font-weight: 600;
+		letter-spacing: -0.015em;
+	}
+
+	.banner-subtitle {
+		color: rgba(255, 255, 255, 0.62);
+		font-size: 0.92rem;
+		letter-spacing: -0.01em;
+	}
+
+	.banner-status {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+		width: 100%;
 	}
 
 	.download-percent {
@@ -963,6 +1109,78 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		width: 28px;
+		height: 28px;
+		border-radius: 999px;
+		background: rgba(52, 199, 89, 0.12);
+		flex-shrink: 0;
+	}
+
+	.status-icon :global(svg) {
+		display: block;
+	}
+
+	.voice-select-row {
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 10px;
+		padding-top: 14px;
+		border-top: 1px solid rgba(255, 255, 255, 0.08);
+	}
+
+	.voice-label {
+		color: rgba(255, 255, 255, 0.58);
+		font-size: 0.78rem;
+		font-weight: 600;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.voice-select-shell {
+		position: relative;
+		width: 100%;
+		min-width: 0;
+	}
+
+	.voice-select {
+		appearance: none;
+		width: 100%;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 14px;
+		background: rgba(255, 255, 255, 0.07);
+		color: white;
+		padding: 13px 42px 13px 16px;
+		font-size: 1rem;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		outline: none;
+		cursor: pointer;
+		color-scheme: dark;
+		transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+	}
+
+	.voice-select:focus {
+		border-color: rgba(127, 227, 124, 0.45);
+		box-shadow: 0 0 0 3px rgba(127, 227, 124, 0.12);
+	}
+
+	.voice-select:hover:not(:disabled) {
+		background: rgba(255, 255, 255, 0.1);
+	}
+
+	.voice-select:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
+
+	.voice-select-chevron {
+		position: absolute;
+		top: 50%;
+		right: 12px;
+		transform: translateY(-50%);
+		color: rgba(255, 255, 255, 0.62);
+		pointer-events: none;
 	}
 
 	@keyframes slideDown {

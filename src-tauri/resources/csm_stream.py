@@ -66,6 +66,14 @@ def build_model(quantize: bool):
     return model
 
 
+def load_reference_audio(context_audio: Path | None, read_audio) -> np.ndarray | None:
+    if context_audio is None:
+        return None
+
+    emit_status(f"Loading voice reference from {context_audio.name}...")
+    return read_audio(context_audio, SAMPLE_RATE)
+
+
 def run_server(
     quantize: bool, context_audio: Path | None = None, context_text: str = ""
 ) -> int:
@@ -93,8 +101,7 @@ def run_server(
     reference_audio = None
     if context_audio is not None:
         try:
-            emit_status(f"Loading voice reference from {context_audio.name}...")
-            reference_audio = read_audio(context_audio, SAMPLE_RATE)
+            reference_audio = load_reference_audio(context_audio, read_audio)
         except Exception as exc:
             emit({"type": "error", "message": f"Failed to load context audio: {exc}"})
             traceback.print_exc(file=sys.stderr)
@@ -114,6 +121,18 @@ def run_server(
         request_type = request.get("type")
         if request_type == "shutdown":
             break
+        if request_type == "set_context":
+            context_audio_path = request.get("context_audio_path")
+            try:
+                reference_audio = (
+                    load_reference_audio(Path(str(context_audio_path)), read_audio)
+                    if context_audio_path
+                    else None
+                )
+            except Exception as exc:
+                emit({"type": "error", "message": f"Failed to load context audio: {exc}"})
+                traceback.print_exc(file=sys.stderr)
+            continue
         if request_type == "reset_context":
             continue
         if request_type == "finalize_response":

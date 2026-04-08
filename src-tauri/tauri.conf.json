@@ -30,7 +30,8 @@
       "targets": "all",
       "resources": [
         "resources/**/*",
-        "../sample-male.mp3"
+        "../sample-male.mp3",
+        "../sample-female.mp3"
       ],
       "externalBin": [
         "bin/mlx-handler"

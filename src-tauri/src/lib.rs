@@ -34,12 +34,36 @@ const CALL_STAGE_EVENT: &str = "call-stage";
 const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";
 const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 const CSM_STDERR_TAIL_LIMIT: usize = 8;
-const CSM_REFERENCE_AUDIO_FILE: &str = "sample-male.mp3";
+const CSM_MALE_REFERENCE_AUDIO_FILE: &str = "sample-male.mp3";
+const CSM_FEMALE_REFERENCE_AUDIO_FILE: &str = "sample-female.mp3";
 const MAX_CONVERSATION_TURNS: usize = 12;
 const MAX_SPOKEN_SENTENCES: usize = 3;
 const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with no more than 3 short sentences, and prefer 1 or 2 short sentences whenever possible.";
 const TRANSCRIPTION_PROMPT: &str =
     "Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
+
+#[derive(Clone, Copy)]
+enum CsmVoice {
+    Male,
+    Female,
+}
+
+impl CsmVoice {
+    fn from_key(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "male" => Ok(Self::Male),
+            "female" => Ok(Self::Female),
+            other => Err(format!("Unsupported CSM voice: {other}")),
+        }
+    }
+
+    fn file_name(self) -> &'static str {
+        match self {
+            Self::Male => CSM_MALE_REFERENCE_AUDIO_FILE,
+            Self::Female => CSM_FEMALE_REFERENCE_AUDIO_FILE,
+        }
+    }
+}
 
 #[derive(Clone, Deserialize)]
 struct AudioPayload {
@@ -116,6 +140,7 @@ struct AppState {
     csm_ready: Mutex<bool>,
     csm_startup_message: Mutex<Option<String>>,
     csm_stderr_tail: Mutex<VecDeque<String>>,
+    selected_csm_voice: Mutex<CsmVoice>,
     next_csm_request_id: AtomicU64,
     next_generation_id: AtomicU64,
     active_generation: Mutex<Option<ActiveGeneration>>,
@@ -311,6 +336,23 @@ async fn start_csm_server(
     start_csm_server_inner(&app_handle, state.inner()).await
 }
 
+#[tauri::command]
+async fn set_csm_voice(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    voice: String,
+) -> Result<(), String> {
+    let selected_voice = CsmVoice::from_key(&voice)?;
+    let context_audio = resolve_csm_context_audio_file(&app_handle, selected_voice)?;
+
+    {
+        let mut selected_voice_guard = state.selected_csm_voice.lock().unwrap();
+        *selected_voice_guard = selected_voice;
+    }
+
+    apply_csm_voice_context(state.inner(), &context_audio).await
+}
+
 async fn start_csm_server_inner(
     app_handle: &tauri::AppHandle,
     state: &AppState,
@@ -331,7 +373,8 @@ async fn start_csm_server_inner(
         .ok_or_else(|| "Failed to resolve Gemma Python home".to_string())?;
     let csm_site_packages = resolve_csm_site_packages(app_handle)?;
     let csm_script = resolve_resource_file(app_handle, "csm_stream.py")?;
-    let csm_context_audio = resolve_csm_context_audio_file(app_handle)?;
+    let selected_voice = *state.selected_csm_voice.lock().unwrap();
+    let csm_context_audio = resolve_csm_context_audio_file(app_handle, selected_voice)?;
 
     info!("Starting CSM worker with {}", python_executable.display());
 
@@ -987,6 +1030,38 @@ async fn reset_csm_reference_context(app_handle: &tauri::AppHandle) -> Result<()
         .flush()
         .await
         .map_err(|e| format!("Failed to flush CSM reset request: {e}"))?;
+
+    Ok(())
+}
+
+async fn apply_csm_voice_context(state: &AppState, context_audio: &Path) -> Result<(), String> {
+    let process = {
+        let csm_process_guard = state.csm_process.lock().unwrap();
+        csm_process_guard.clone()
+    };
+
+    let Some(process) = process else {
+        return Ok(());
+    };
+
+    let request = serde_json::json!({
+        "type": "set_context",
+        "context_audio_path": context_audio.to_string_lossy(),
+    });
+
+    let mut stdin = process.stdin.lock().await;
+    stdin
+        .write_all(request.to_string().as_bytes())
+        .await
+        .map_err(|e| format!("Failed to update CSM voice context: {e}"))?;
+    stdin
+        .write_all(b"\n")
+        .await
+        .map_err(|e| format!("Failed to terminate CSM voice update: {e}"))?;
+    stdin
+        .flush()
+        .await
+        .map_err(|e| format!("Failed to flush CSM voice update: {e}"))?;
 
     Ok(())
 }
@@ -1681,36 +1756,36 @@ fn resolve_existing_path_dev_first(
         .ok_or_else(|| format!("Unable to locate {} at {}", label, relative_path.display()))
 }
 
-fn resolve_csm_context_audio_file(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn resolve_csm_context_audio_file(
+    app_handle: &tauri::AppHandle,
+    voice: CsmVoice,
+) -> Result<PathBuf, String> {
+    let reference_audio_file = voice.file_name();
     let mut candidates = Vec::new();
 
     if let Ok(current_dir) = std::env::current_dir() {
-        candidates.push(current_dir.join(CSM_REFERENCE_AUDIO_FILE));
+        candidates.push(current_dir.join(reference_audio_file));
         candidates.push(
             current_dir
                 .join("src-tauri")
                 .join("..")
-                .join(CSM_REFERENCE_AUDIO_FILE),
+                .join(reference_audio_file),
         );
 
         if current_dir.ends_with("src-tauri") {
-            candidates.push(current_dir.join("..").join(CSM_REFERENCE_AUDIO_FILE));
+            candidates.push(current_dir.join("..").join(reference_audio_file));
         }
     }
 
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
-        candidates.push(resource_dir.join(CSM_REFERENCE_AUDIO_FILE));
-        candidates.push(
-            resource_dir
-                .join("resources")
-                .join(CSM_REFERENCE_AUDIO_FILE),
-        );
+        candidates.push(resource_dir.join(reference_audio_file));
+        candidates.push(resource_dir.join("resources").join(reference_audio_file));
     }
 
     candidates
         .into_iter()
         .find(|candidate| candidate.exists())
-        .ok_or_else(|| format!("Unable to locate {}", CSM_REFERENCE_AUDIO_FILE))
+        .ok_or_else(|| format!("Unable to locate {}", reference_audio_file))
 }
 
 fn reap_stale_model_processes(app_handle: &tauri::AppHandle) {
@@ -1929,6 +2004,7 @@ pub fn run() {
             csm_ready: Mutex::new(false),
             csm_startup_message: Mutex::new(None),
             csm_stderr_tail: Mutex::new(VecDeque::new()),
+            selected_csm_voice: Mutex::new(CsmVoice::Male),
             next_csm_request_id: AtomicU64::new(1),
             next_generation_id: AtomicU64::new(1),
             active_generation: Mutex::new(None),
@@ -1948,6 +2024,7 @@ pub fn run() {
             is_csm_running,
             start_server,
             start_csm_server,
+            set_csm_voice,
             stop_server,
             stop_csm_server
         ])
