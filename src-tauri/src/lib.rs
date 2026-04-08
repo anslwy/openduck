@@ -12,7 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 const GEMMA_MODEL: &str = "mlx-community/gemma-3n-E4B-it-4bit";
 const GEMMA_CACHE_DIR: &str = "models--mlx-community--gemma-3n-E4B-it-4bit";
@@ -40,7 +40,7 @@ const CSM_STDERR_TAIL_LIMIT: usize = 8;
 const CSM_MALE_REFERENCE_AUDIO_FILE: &str = "sample-male.mp3";
 const CSM_FEMALE_REFERENCE_AUDIO_FILE: &str = "sample-female.mp3";
 const MAX_CONVERSATION_TURNS: usize = 12;
-const MAX_SPOKEN_SENTENCES: usize = 2;
+const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 2;
 const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with no more than 2 short sentences.";
 const TRANSCRIPTION_PROMPT: &str =
     "Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
@@ -813,8 +813,9 @@ async fn stream_gemma_response_to_csm(
     start_csm_server_inner(app_handle, app_handle.state::<AppState>().inner()).await?;
 
     let client = reqwest::Client::new();
-    let conversation_turns = {
+    let (conversation_session_id, conversation_turns) = {
         let state = app_handle.state::<AppState>();
+        let session_id = current_conversation_session_id(state.inner());
         let turns = state
             .conversation_turns
             .lock()
@@ -822,7 +823,7 @@ async fn stream_gemma_response_to_csm(
             .iter()
             .cloned()
             .collect::<Vec<_>>();
-        turns
+        (session_id, turns)
     };
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
@@ -859,6 +860,7 @@ async fn stream_gemma_response_to_csm(
         max_tokens: 64,
         stream: false,
     };
+    log_chat_request_debug(conversation_session_id, &request);
 
     let response = client
         .post(format!(
@@ -897,9 +899,11 @@ async fn stream_gemma_response_to_csm(
     if response_text.is_empty() {
         warn!("Gemma returned an empty response, skipping CSM synthesis");
     } else {
-        let spoken_response = prepare_spoken_response_for_csm(&response_text);
-        if spoken_response.is_empty() {
-            warn!("Gemma response became empty after spoken-response trimming, skipping CSM synthesis");
+        let spoken_segments = prepare_spoken_response_segments_for_csm(&response_text);
+        if spoken_segments.is_empty() {
+            warn!(
+                "Gemma response became empty after spoken-response preparation, skipping CSM synthesis"
+            );
             return Ok(response_text);
         }
 
@@ -910,15 +914,30 @@ async fn stream_gemma_response_to_csm(
                 CsmAudioStartEvent {
                     request_id: response_id,
                     text: response_text.clone(),
-                    total_segments: 1,
+                    total_segments: spoken_segments.len(),
                 },
             )
             .map_err(|e| e.to_string())?;
-        info!(
-            "Queueing CSM response as a single synthesis request: {}",
-            spoken_response
-        );
-        send_csm_synthesis_request(app_handle, response_id, &spoken_response).await?;
+        if spoken_segments.len() == 1 {
+            info!(
+                "Queueing CSM response as a single synthesis request: {}",
+                spoken_segments[0]
+            );
+        } else {
+            info!(
+                "Queueing CSM response across {} synthesis segments",
+                spoken_segments.len()
+            );
+        }
+        for (index, spoken_segment) in spoken_segments.iter().enumerate() {
+            info!(
+                "Queueing CSM response segment {}/{}: {}",
+                index + 1,
+                spoken_segments.len(),
+                spoken_segment
+            );
+            send_csm_synthesis_request(app_handle, response_id, spoken_segment).await?;
+        }
         info!("MLX Server Output: {}", response_text);
     }
 
@@ -1099,6 +1118,21 @@ fn extract_chat_content_text(content: serde_json::Value) -> String {
     }
 }
 
+fn log_chat_request_debug(conversation_session_id: u64, request: &ChatRequest) {
+    match serde_json::to_string_pretty(&request.messages) {
+        Ok(messages_json) => debug!(
+            "Sending chat request for conversation session {} with {} messages:\n{}",
+            conversation_session_id,
+            request.messages.len(),
+            messages_json
+        ),
+        Err(err) => warn!(
+            "Failed to serialize conversation log for session {}: {}",
+            conversation_session_id, err
+        ),
+    }
+}
+
 fn sanitize_for_voice_output(text: &str) -> String {
     let mut cleaned_lines = Vec::new();
 
@@ -1178,28 +1212,54 @@ fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn prepare_spoken_response_for_csm(text: &str) -> String {
-    truncate_to_spoken_sentence_limit(text, MAX_SPOKEN_SENTENCES).replace(",", "")
+fn prepare_spoken_response_segments_for_csm(text: &str) -> Vec<String> {
+    split_spoken_response_into_segments(text, MAX_SPOKEN_SENTENCES_PER_SEGMENT)
+        .into_iter()
+        .map(|segment| segment.replace(",", ""))
+        .filter(|segment| !segment.trim().is_empty())
+        .collect()
 }
 
-fn truncate_to_spoken_sentence_limit(text: &str, max_sentences: usize) -> String {
+fn split_spoken_response_into_segments(text: &str, max_sentences: usize) -> Vec<String> {
     let normalized = collapse_whitespace(text);
     if normalized.is_empty() || max_sentences == 0 {
-        return String::new();
+        return Vec::new();
     }
 
+    let mut segments = Vec::new();
+    let mut segment_start = 0;
     let mut sentence_count = 0;
     for (idx, ch) in normalized.char_indices() {
         if matches!(ch, '.' | '!' | '?' | '\n') {
             sentence_count += 1;
             if sentence_count >= max_sentences {
                 let end = expand_speech_boundary(&normalized, idx + ch.len_utf8());
-                return normalized[..end].trim().to_string();
+                let segment = normalized[segment_start..end].trim();
+                if !segment.is_empty() {
+                    segments.push(segment.to_string());
+                }
+                segment_start = end;
+                while segment_start < normalized.len() {
+                    let Some(ch) = normalized[segment_start..].chars().next() else {
+                        break;
+                    };
+                    if ch.is_whitespace() {
+                        segment_start += ch.len_utf8();
+                        continue;
+                    }
+                    break;
+                }
+                sentence_count = 0;
             }
         }
     }
 
-    normalized
+    let trailing_segment = normalized[segment_start..].trim();
+    if !trailing_segment.is_empty() {
+        segments.push(trailing_segment.to_string());
+    }
+
+    segments
 }
 
 fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
@@ -2011,7 +2071,9 @@ async fn run_hf_download(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt().with_env_filter("info").init();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,openduck_lib=debug"));
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     info!("Starting OpenDuck application");
     let default_csm_quantized =
