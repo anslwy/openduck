@@ -2076,8 +2076,15 @@ pub fn run() {
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     info!("Starting OpenDuck application");
-    let default_csm_quantized =
-        std::env::var("OPEN_DUCK_CSM_QUANTIZE").ok().as_deref() == Some("1");
+    let default_csm_quantized = std::env::var("OPEN_DUCK_CSM_QUANTIZE")
+        .ok()
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+        .unwrap_or(true);
 
     tauri::Builder::default()
         .setup(|app| {
