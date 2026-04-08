@@ -30,6 +30,7 @@ const CSM_AUDIO_DONE_EVENT: &str = "csm-audio-done";
 const CSM_AUDIO_STOP_EVENT: &str = "csm-audio-stop";
 const CSM_ERROR_EVENT: &str = "csm-error";
 const CSM_STATUS_EVENT: &str = "csm-status";
+const CALL_STAGE_EVENT: &str = "call-stage";
 const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";
 const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 const CSM_STDERR_TAIL_LIMIT: usize = 8;
@@ -86,7 +87,6 @@ struct ConversationTurn {
 
 struct ActiveGeneration {
     id: u64,
-    audio_path: PathBuf,
     handle: tauri::async_runtime::JoinHandle<()>,
 }
 
@@ -149,6 +149,7 @@ enum CsmWorkerEvent {
 struct CsmAudioStartEvent {
     request_id: u64,
     text: String,
+    total_segments: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -173,6 +174,12 @@ struct CsmErrorEvent {
 
 #[derive(Clone, Serialize)]
 struct CsmStatusEvent {
+    message: String,
+}
+
+#[derive(Clone, Serialize)]
+struct CallStageEvent {
+    phase: String,
     message: String,
 }
 
@@ -471,10 +478,6 @@ fn receive_audio_chunk(
     if !*is_speaking && *speaking_count >= MIN_SPEAKING_CHUNKS {
         *is_speaking = true;
         info!("Speech detected");
-        let app_handle = app_handle.clone();
-        tauri::async_runtime::spawn(async move {
-            interrupt_active_generation(&app_handle).await;
-        });
     }
 
     if *is_speaking {
@@ -482,6 +485,7 @@ fn receive_audio_chunk(
 
         if *silent_count >= SILENCE_DURATION_CHUNKS {
             info!("Silence detected, sending to MLX Server...");
+            emit_call_stage(&app_handle, "processing_audio", "Processing Audio");
             let server_port = {
                 let port_guard = state.server_port.lock().unwrap();
                 *port_guard
@@ -542,9 +546,8 @@ fn process_audio_with_server(samples: &[f32], server_port: u16, app_handle: taur
         return;
     }
 
-    let generation_audio_path = audio_path.clone();
     let app_handle_for_task = app_handle.clone();
-    let handle = tauri::async_runtime::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         info!(
             "Sending audio to MLX Server (saved at: {})",
             audio_path.display()
@@ -556,10 +559,18 @@ fn process_audio_with_server(samples: &[f32], server_port: u16, app_handle: taur
 
                 if user_text.is_empty() {
                     warn!("Gemma transcription was empty, skipping response generation");
+                    emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
                 }
 
-                info!("Gemma transcription: {}", user_text);
+                if !is_meaningful_transcript(&user_text) {
+                    info!(
+                        "Ignoring non-meaningful transcript for interruption: {:?}",
+                        user_text
+                    );
+                    emit_call_stage(&app_handle_for_task, "listening", "Listening");
+                    return;
+                }
 
                 if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
                     != conversation_session_id
@@ -567,38 +578,35 @@ fn process_audio_with_server(samples: &[f32], server_port: u16, app_handle: taur
                     return;
                 }
 
-                match stream_gemma_response_to_csm(&app_handle_for_task, server_port, &user_text)
-                    .await
-                {
-                    Ok(response_text) => {
-                        if response_text.is_empty() {
-                            return;
-                        }
-
-                        if current_conversation_session_id(
-                            app_handle_for_task.state::<AppState>().inner(),
-                        ) != conversation_session_id
-                        {
-                            return;
-                        }
-
-                        append_conversation_turn(
-                            app_handle_for_task.state::<AppState>().inner(),
-                            user_text,
-                            response_text,
-                        );
-                    }
-                    Err(err) => {
-                        emit_csm_error(
-                            &app_handle_for_task,
-                            CsmErrorEvent {
-                                request_id: None,
-                                message: err.clone(),
-                            },
-                        );
-                        error!("Failed to stream Gemma response via CSM: {}", err);
-                    }
+                if active_generation_is_newer(
+                    app_handle_for_task.state::<AppState>().inner(),
+                    generation_id,
+                ) {
+                    info!(
+                        "Skipping stale transcript for generation {} because a newer reply is active",
+                        generation_id
+                    );
+                    emit_call_stage(&app_handle_for_task, "listening", "Listening");
+                    return;
                 }
+
+                info!("Gemma transcription: {}", user_text);
+                interrupt_active_generation(&app_handle_for_task).await;
+
+                if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
+                    != conversation_session_id
+                {
+                    return;
+                }
+
+                emit_call_stage(&app_handle_for_task, "thinking", "Thinking");
+                start_response_generation(
+                    &app_handle_for_task,
+                    server_port,
+                    generation_id,
+                    conversation_session_id,
+                    user_text,
+                );
             }
             Err(err) => {
                 emit_csm_error(
@@ -610,23 +618,66 @@ fn process_audio_with_server(samples: &[f32], server_port: u16, app_handle: taur
                 );
                 error!("Failed to transcribe audio with Gemma: {}", err);
                 let _ = std::fs::remove_file(&audio_path);
+                emit_call_stage(&app_handle_for_task, "listening", "Listening");
+            }
+        }
+    });
+}
+
+fn start_response_generation(
+    app_handle: &tauri::AppHandle,
+    server_port: u16,
+    generation_id: u64,
+    conversation_session_id: u64,
+    user_text: String,
+) {
+    let app_handle_for_task = app_handle.clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        match stream_gemma_response_to_csm(&app_handle_for_task, server_port, &user_text).await {
+            Ok(response_text) => {
+                if response_text.is_empty() {
+                    emit_call_stage(&app_handle_for_task, "listening", "Listening");
+                    return;
+                }
+
+                if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
+                    != conversation_session_id
+                {
+                    return;
+                }
+
+                append_conversation_turn(
+                    app_handle_for_task.state::<AppState>().inner(),
+                    user_text,
+                    response_text,
+                );
+            }
+            Err(err) => {
+                emit_csm_error(
+                    &app_handle_for_task,
+                    CsmErrorEvent {
+                        request_id: None,
+                        message: err.clone(),
+                    },
+                );
+                error!("Failed to stream Gemma response via CSM: {}", err);
+                emit_call_stage(&app_handle_for_task, "listening", "Listening");
             }
         }
 
         clear_active_generation_if_matches(&app_handle_for_task, generation_id);
     });
 
-    let state = app_handle.state::<AppState>();
-    let mut active_generation_guard = state.active_generation.lock().unwrap();
-    if let Some(previous_generation) = active_generation_guard.take() {
-        previous_generation.handle.abort();
-        let _ = std::fs::remove_file(previous_generation.audio_path);
-    }
-    *active_generation_guard = Some(ActiveGeneration {
-        id: generation_id,
-        audio_path: generation_audio_path,
+    if !register_active_generation_if_newer(
+        app_handle.state::<AppState>().inner(),
+        generation_id,
         handle,
-    });
+    ) {
+        warn!(
+            "Skipping response generation {} because a newer generation is already active",
+            generation_id
+        );
+    }
 }
 
 async fn transcribe_audio_with_gemma(
@@ -793,12 +844,14 @@ async fn stream_gemma_response_to_csm(
         warn!("Gemma returned an empty response, skipping CSM synthesis");
     } else {
         let speech_units = split_response_into_speech_units(&response_text);
+        emit_call_stage(app_handle, "generating_audio", "Generating Audio");
         app_handle
             .emit(
                 CSM_AUDIO_START_EVENT,
                 CsmAudioStartEvent {
                     request_id: response_id,
                     text: response_text.clone(),
+                    total_segments: speech_units.len(),
                 },
             )
             .map_err(|e| e.to_string())?;
@@ -982,6 +1035,36 @@ fn sanitize_for_voice_output(text: &str) -> String {
     }
 
     collapse_whitespace(&cleaned_lines.join(" "))
+}
+
+fn is_meaningful_transcript(text: &str) -> bool {
+    let normalized = collapse_whitespace(text);
+    if normalized.is_empty() {
+        return false;
+    }
+
+    let words = normalized
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '\'')
+        .filter_map(|word| {
+            let trimmed = word.trim_matches('\'');
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_ascii_lowercase())
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if words.is_empty() {
+        return false;
+    }
+
+    !words.iter().all(|word| {
+        matches!(
+            word.as_str(),
+            "uh" | "um" | "umm" | "hmm" | "hm" | "mmm" | "mm" | "erm" | "ah" | "eh" | "huh" | "mhm"
+        )
+    })
 }
 
 fn trim_leading_list_marker(text: &str) -> &str {
@@ -1306,6 +1389,18 @@ fn emit_csm_status(app_handle: &tauri::AppHandle, payload: CsmStatusEvent) {
     }
 }
 
+fn emit_call_stage(app_handle: &tauri::AppHandle, phase: &str, message: &str) {
+    if let Err(err) = app_handle.emit(
+        CALL_STAGE_EVENT,
+        CallStageEvent {
+            phase: phase.to_string(),
+            message: message.to_string(),
+        },
+    ) {
+        error!("Failed to emit call stage event: {}", err);
+    }
+}
+
 fn emit_model_download_event(app_handle: &tauri::AppHandle, payload: ModelDownloadEvent) {
     if let Err(err) = app_handle.emit(MODEL_DOWNLOAD_EVENT, payload) {
         error!("Failed to emit model download event: {}", err);
@@ -1326,7 +1421,6 @@ async fn cancel_active_generation(app_handle: &tauri::AppHandle, stop_csm_worker
     if let Some(active_generation) = active_generation {
         info!("Interrupting active generation {}", active_generation.id);
         active_generation.handle.abort();
-        let _ = std::fs::remove_file(active_generation.audio_path);
     }
 
     emit_csm_audio_stop(app_handle);
@@ -1354,6 +1448,43 @@ fn clear_active_generation_if_matches(app_handle: &tauri::AppHandle, generation_
     if should_clear {
         active_generation_guard.take();
     }
+}
+
+fn active_generation_is_newer(state: &AppState, generation_id: u64) -> bool {
+    state
+        .active_generation
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|active_generation| active_generation.id > generation_id)
+        .unwrap_or(false)
+}
+
+fn register_active_generation_if_newer(
+    state: &AppState,
+    generation_id: u64,
+    handle: tauri::async_runtime::JoinHandle<()>,
+) -> bool {
+    let mut active_generation_guard = state.active_generation.lock().unwrap();
+
+    if active_generation_guard
+        .as_ref()
+        .map(|active_generation| active_generation.id > generation_id)
+        .unwrap_or(false)
+    {
+        handle.abort();
+        return false;
+    }
+
+    if let Some(previous_generation) = active_generation_guard.take() {
+        previous_generation.handle.abort();
+    }
+
+    *active_generation_guard = Some(ActiveGeneration {
+        id: generation_id,
+        handle,
+    });
+    true
 }
 
 fn append_conversation_turn(state: &AppState, user_text: String, assistant_text: String) {
@@ -1582,6 +1713,45 @@ fn resolve_csm_context_audio_file(app_handle: &tauri::AppHandle) -> Result<PathB
         .ok_or_else(|| format!("Unable to locate {}", CSM_REFERENCE_AUDIO_FILE))
 }
 
+fn reap_stale_model_processes(app_handle: &tauri::AppHandle) {
+    for resource_name in ["patch_mlx_vlm.py", "csm_stream.py"] {
+        let Ok(resource_path) = resolve_resource_file(app_handle, resource_name) else {
+            warn!(
+                "Skipping stale worker cleanup because {} could not be located",
+                resource_name
+            );
+            continue;
+        };
+
+        match std::process::Command::new("pkill")
+            .args(["-f", &resource_path.to_string_lossy()])
+            .status()
+        {
+            Ok(status) if status.success() => {
+                info!(
+                    "Reaped stale model workers matching {}",
+                    resource_path.display()
+                );
+            }
+            Ok(status) if status.code() == Some(1) => {}
+            Ok(status) => {
+                warn!(
+                    "pkill returned {} while cleaning up stale workers for {}",
+                    status,
+                    resource_path.display()
+                );
+            }
+            Err(err) => {
+                warn!(
+                    "Failed to run pkill while cleaning stale workers for {}: {}",
+                    resource_path.display(),
+                    err
+                );
+            }
+        }
+    }
+}
+
 #[tauri::command]
 async fn check_model_status() -> bool {
     huggingface_model_cache_exists(GEMMA_CACHE_DIR)
@@ -1744,6 +1914,10 @@ pub fn run() {
     info!("Starting OpenDuck application");
 
     tauri::Builder::default()
+        .setup(|app| {
+            reap_stale_model_processes(app.handle());
+            Ok(())
+        })
         .manage(AppState {
             audio_buffer: Mutex::new(Vec::new()),
             silent_chunks_count: Mutex::new(0),

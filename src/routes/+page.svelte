@@ -6,6 +6,7 @@
 	type CsmAudioStartEvent = {
 		request_id: number;
 		text: string;
+		total_segments: number;
 	};
 
 	type CsmAudioChunkEvent = {
@@ -25,6 +26,11 @@
 	};
 
 	type CsmStatusEvent = {
+		message: string;
+	};
+
+	type CallStageEvent = {
+		phase: string;
 		message: string;
 	};
 
@@ -61,11 +67,15 @@
 	let processor: AudioWorkletNode | null = null;
 	let healthCheckInterval: ReturnType<typeof window.setInterval> | null = null;
 	let callTimerInterval: ReturnType<typeof window.setInterval> | null = null;
+	let playbackIdleTimeout: ReturnType<typeof window.setTimeout> | null = null;
 	let eventUnlisteners: UnlistenFn[] = [];
 	let activeTtsRequestId: number | null = null;
+	let pendingTtsSegments = $state(0);
 	let activePlaybackAudio: HTMLAudioElement | null = null;
 	let activePlaybackUrl: string | null = null;
 	let queuedPlaybackUrls: string[] = [];
+	let callStagePhase = $state<'idle' | 'listening' | 'processing_audio' | 'thinking' | 'generating_audio' | 'speaking'>('idle');
+	let callStageMessage = $state('');
 
 	const formattedTime = $derived(
 		`${Math.floor(time / 60)
@@ -73,6 +83,14 @@
 			.padStart(2, '0')}:${(time % 60).toString().padStart(2, '0')}`
 	);
 	const modelsReady = $derived(isGemmaLoaded && isCsmLoaded);
+
+	function setCallStage(
+		phase: 'idle' | 'listening' | 'processing_audio' | 'thinking' | 'generating_audio' | 'speaking',
+		message: string
+	) {
+		callStagePhase = phase;
+		callStageMessage = message;
+	}
 
 	function resetDownloadState(model: 'gemma' | 'csm') {
 		if (model === 'gemma') {
@@ -178,6 +196,10 @@
 	}
 
 	function stopPlayback(_closeContext = false) {
+		if (playbackIdleTimeout) {
+			clearTimeout(playbackIdleTimeout);
+			playbackIdleTimeout = null;
+		}
 		if (activePlaybackAudio) {
 			activePlaybackAudio.pause();
 			activePlaybackAudio.src = '';
@@ -192,6 +214,25 @@
 		}
 		queuedPlaybackUrls = [];
 		activeTtsRequestId = null;
+		pendingTtsSegments = 0;
+	}
+
+	function updateStageAfterPlaybackStateChange() {
+		if (!calling) {
+			return;
+		}
+
+		if (activePlaybackAudio || queuedPlaybackUrls.length > 0) {
+			setCallStage('speaking', 'Speaking');
+			return;
+		}
+
+		if (pendingTtsSegments > 0) {
+			setCallStage('generating_audio', 'Generating Audio');
+			return;
+		}
+
+		setCallStage('listening', 'Listening');
 	}
 
 	function decodeBase64Bytes(audioBase64: string) {
@@ -219,6 +260,11 @@
 		activePlaybackAudio = audio;
 		activePlaybackUrl = nextUrl;
 		audio.preload = 'auto';
+		if (playbackIdleTimeout) {
+			clearTimeout(playbackIdleTimeout);
+			playbackIdleTimeout = null;
+		}
+		updateStageAfterPlaybackStateChange();
 
 		const finishPlayback = () => {
 			if (activePlaybackAudio === audio) {
@@ -229,6 +275,14 @@
 			if (activePlaybackUrl === nextUrl) {
 				URL.revokeObjectURL(nextUrl);
 				activePlaybackUrl = null;
+			}
+			if (queuedPlaybackUrls.length === 0 && calling) {
+				playbackIdleTimeout = window.setTimeout(() => {
+					if (!activePlaybackAudio && queuedPlaybackUrls.length === 0 && calling) {
+						updateStageAfterPlaybackStateChange();
+					}
+					playbackIdleTimeout = null;
+				}, 450);
 			}
 			playNextQueuedAudio();
 		};
@@ -277,6 +331,7 @@
 		calling = true;
 		time = 0;
 		activeTtsRequestId = null;
+		setCallStage('listening', 'Listening');
 
 		void startAudioCapture();
 		void invoke('ping').catch((err) => console.error('Backend ping failed', err));
@@ -301,6 +356,7 @@
 		calling = false;
 		stopAudioCapture();
 		stopPlayback();
+		setCallStage('idle', '');
 
 		if (callTimerInterval) {
 			clearInterval(callTimerInterval);
@@ -398,6 +454,7 @@
 
 						stopPlayback();
 						activeTtsRequestId = payload.request_id;
+						pendingTtsSegments = payload.total_segments;
 						console.log('Synthesizing response:', payload.text);
 					}),
 					listen<CsmAudioChunkEvent>('csm-audio-chunk', ({ payload }) => {
@@ -405,21 +462,47 @@
 					}),
 					listen<CsmAudioDoneEvent>('csm-audio-done', ({ payload }) => {
 						if (payload.request_id === activeTtsRequestId) {
+							pendingTtsSegments = Math.max(0, pendingTtsSegments - 1);
+							if (!activePlaybackAudio && queuedPlaybackUrls.length === 0) {
+								updateStageAfterPlaybackStateChange();
+							}
 							console.log('Finished streaming CSM response');
 						}
 					}),
 					listen<CsmAudioStopEvent>('csm-audio-stop', () => {
 						stopPlayback();
+						if (calling) {
+							updateStageAfterPlaybackStateChange();
+						}
 					}),
 					listen<CsmErrorEvent>('csm-error', ({ payload }) => {
 						console.error('CSM error:', payload.message);
 						if (payload.request_id == null || payload.request_id === activeTtsRequestId) {
 							stopPlayback();
+							if (calling) {
+								updateStageAfterPlaybackStateChange();
+							}
 						}
 					}),
 					listen<CsmStatusEvent>('csm-status', ({ payload }) => {
 						if (isLoadingCsm) {
 							csmLoadMessage = payload.message;
+						}
+					}),
+					listen<CallStageEvent>('call-stage', ({ payload }) => {
+						if (!calling) {
+							return;
+						}
+
+						if (
+							payload.phase === 'processing_audio' ||
+							payload.phase === 'thinking' ||
+							payload.phase === 'generating_audio'
+						) {
+							setCallStage(
+								payload.phase,
+								payload.message
+							);
 						}
 					}),
 					listen<ModelDownloadProgressEvent>('model-download-progress', ({ payload }) => {
@@ -438,6 +521,9 @@
 		}
 		if (callTimerInterval) {
 			clearInterval(callTimerInterval);
+		}
+		if (playbackIdleTimeout) {
+			clearTimeout(playbackIdleTimeout);
 		}
 
 		stopAudioCapture();
@@ -532,6 +618,12 @@
 	{/if}
 
 	<main>
+		{#if calling && callStageMessage}
+			<div class="call-stage-banner" data-phase={callStagePhase}>
+				<span class="call-stage-dot"></span>
+				<span>{callStageMessage}</span>
+			</div>
+		{/if}
 		<div class="avatar-container">
 			<div class="avatar" class:calling></div>
 		</div>
@@ -603,8 +695,55 @@
 	main {
 		flex: 1;
 		display: flex;
+		flex-direction: column;
 		align-items: center;
 		justify-content: center;
+		gap: 28px;
+	}
+
+	.call-stage-banner {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 10px 16px;
+		border-radius: 999px;
+		background: rgba(28, 28, 30, 0.78);
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		color: rgba(255, 255, 255, 0.92);
+		backdrop-filter: blur(14px);
+		font-size: 0.98rem;
+		font-weight: 600;
+		letter-spacing: -0.01em;
+		box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+	}
+
+	.call-stage-dot {
+		width: 10px;
+		height: 10px;
+		border-radius: 50%;
+		background: #7fe37c;
+		box-shadow: 0 0 0 0 rgba(127, 227, 124, 0.5);
+		animation: callPulse 1.4s ease-out infinite;
+	}
+
+	.call-stage-banner[data-phase='processing_audio'] .call-stage-dot {
+		background: #ffd25f;
+		box-shadow: 0 0 0 0 rgba(255, 210, 95, 0.5);
+	}
+
+	.call-stage-banner[data-phase='thinking'] .call-stage-dot {
+		background: #7cc8ff;
+		box-shadow: 0 0 0 0 rgba(124, 200, 255, 0.5);
+	}
+
+	.call-stage-banner[data-phase='generating_audio'] .call-stage-dot {
+		background: #ff9f68;
+		box-shadow: 0 0 0 0 rgba(255, 159, 104, 0.5);
+	}
+
+	.call-stage-banner[data-phase='speaking'] .call-stage-dot {
+		background: #7fe37c;
+		box-shadow: 0 0 0 0 rgba(127, 227, 124, 0.5);
 	}
 
 	.avatar {
@@ -843,6 +982,21 @@
 		}
 		to {
 			transform: translateX(320%);
+		}
+	}
+
+	@keyframes callPulse {
+		0% {
+			transform: scale(1);
+			box-shadow: 0 0 0 0 currentColor;
+		}
+		70% {
+			transform: scale(1.08);
+			box-shadow: 0 0 0 10px rgba(255, 255, 255, 0);
+		}
+		100% {
+			transform: scale(1);
+			box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
 		}
 	}
 </style>
