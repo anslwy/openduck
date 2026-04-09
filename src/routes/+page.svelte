@@ -85,8 +85,10 @@
 
     let captureContext: AudioContext | null = null;
     let mediaStream: MediaStream | null = null;
-    let source: MediaStreamAudioSourceNode | null = null;
-    let processor: AudioWorkletNode | null = null;
+    let captureSource: MediaStreamAudioSourceNode | null = null;
+    let captureProcessor: AudioWorkletNode | null = null;
+    let playbackProcessor: AudioWorkletNode | null = null;
+    let silentCaptureSink: GainNode | null = null;
     let healthCheckInterval: ReturnType<typeof window.setInterval> | null =
         null;
     let downloadStatusPollInterval:
@@ -97,9 +99,7 @@
     let eventUnlisteners: UnlistenFn[] = [];
     let activeTtsRequestId: number | null = null;
     let pendingTtsSegments = $state(0);
-    let activePlaybackAudio: HTMLAudioElement | null = null;
-    let activePlaybackUrl: string | null = null;
-    let queuedPlaybackUrls: string[] = [];
+    let queuedPlaybackChunkCount = $state(0);
     let showConversationPopup = $state(false);
     let conversationLogEntries = $state<ConversationLogEntry[]>([]);
     let nextConversationEntryId = 1;
@@ -139,6 +139,7 @@
             ? "E4B uses more RAM but is generally more capable. Recommended for Macs with 24 GB+ of unified memory."
             : "E2B uses less RAM but is generally less capable. Recommended for Macs with 16 GB+ of unified memory.",
     );
+    const PLAYBACK_PREBUFFER_SAMPLES = 2048;
 
     function setCallStage(
         phase:
@@ -432,23 +433,80 @@
             captureContext = new AudioContext();
 
             await captureContext.audioWorklet.addModule("/audio-processor.js");
+            await captureContext.audioWorklet.addModule(
+                "/playback-processor.js",
+            );
 
-            source = captureContext.createMediaStreamSource(mediaStream);
-            processor = new AudioWorkletNode(captureContext, "audio-processor");
+            captureSource = captureContext.createMediaStreamSource(mediaStream);
+            captureProcessor = new AudioWorkletNode(
+                captureContext,
+                "audio-processor",
+            );
+            playbackProcessor = new AudioWorkletNode(
+                captureContext,
+                "playback-processor",
+            );
+            silentCaptureSink = captureContext.createGain();
+            silentCaptureSink.gain.value = 0;
 
-            processor.port.onmessage = (event) => {
+            captureProcessor.port.onmessage = (event) => {
                 if (micMuted || !calling) {
                     return;
                 }
 
-                const inputData = event.data as Float32Array;
+                const {
+                    inputData,
+                    playbackReferenceData,
+                    playbackActive,
+                } = event.data as {
+                    inputData: Float32Array;
+                    playbackReferenceData?: Float32Array;
+                    playbackActive?: boolean;
+                };
                 void invoke("receive_audio_chunk", {
-                    payload: { data: Array.from(inputData) },
+                    payload: {
+                        data: Array.from(inputData),
+                        playback_reference:
+                            playbackActive && playbackReferenceData
+                                ? Array.from(playbackReferenceData)
+                                : null,
+                        playback_active: Boolean(playbackActive),
+                    },
                 }).catch((err) => console.error("Invoke error:", err));
             };
 
-            source.connect(processor);
-            processor.connect(captureContext.destination);
+            playbackProcessor.port.onmessage = (event) => {
+                const { type, requestId } = event.data as {
+                    type?: string;
+                    requestId?: number;
+                };
+
+                if (type !== "chunk-finished") {
+                    return;
+                }
+
+                if (requestId === activeTtsRequestId) {
+                    queuedPlaybackChunkCount = Math.max(
+                        0,
+                        queuedPlaybackChunkCount - 1,
+                    );
+                    if (queuedPlaybackChunkCount === 0 && calling) {
+                        playbackIdleTimeout = window.setTimeout(() => {
+                            if (queuedPlaybackChunkCount === 0 && calling) {
+                                updateStageAfterPlaybackStateChange();
+                            }
+                            playbackIdleTimeout = null;
+                        }, 450);
+                    } else {
+                        updateStageAfterPlaybackStateChange();
+                    }
+                }
+            };
+
+            captureSource.connect(captureProcessor);
+            captureProcessor.connect(silentCaptureSink);
+            silentCaptureSink.connect(captureContext.destination);
+            playbackProcessor.connect(captureContext.destination);
 
             if (captureContext.state === "suspended") {
                 await captureContext.resume();
@@ -460,13 +518,21 @@
     }
 
     function stopAudioCapture() {
-        if (processor) {
-            processor.disconnect();
-            processor = null;
+        if (captureProcessor) {
+            captureProcessor.disconnect();
+            captureProcessor = null;
         }
-        if (source) {
-            source.disconnect();
-            source = null;
+        if (playbackProcessor) {
+            playbackProcessor.disconnect();
+            playbackProcessor = null;
+        }
+        if (silentCaptureSink) {
+            silentCaptureSink.disconnect();
+            silentCaptureSink = null;
+        }
+        if (captureSource) {
+            captureSource.disconnect();
+            captureSource = null;
         }
         if (captureContext) {
             void captureContext.close();
@@ -483,19 +549,10 @@
             clearTimeout(playbackIdleTimeout);
             playbackIdleTimeout = null;
         }
-        if (activePlaybackAudio) {
-            activePlaybackAudio.pause();
-            activePlaybackAudio.src = "";
-            activePlaybackAudio = null;
+        if (playbackProcessor) {
+            playbackProcessor.port.postMessage({ type: "stop" });
         }
-        if (activePlaybackUrl) {
-            URL.revokeObjectURL(activePlaybackUrl);
-            activePlaybackUrl = null;
-        }
-        for (const url of queuedPlaybackUrls) {
-            URL.revokeObjectURL(url);
-        }
-        queuedPlaybackUrls = [];
+        queuedPlaybackChunkCount = 0;
         activeTtsRequestId = null;
         pendingTtsSegments = 0;
     }
@@ -505,7 +562,7 @@
             return;
         }
 
-        if (activePlaybackAudio || queuedPlaybackUrls.length > 0) {
+        if (queuedPlaybackChunkCount > 0) {
             setCallStage("speaking", "Speaking");
             return;
         }
@@ -529,65 +586,26 @@
         return bytes;
     }
 
-    function playNextQueuedAudio() {
-        if (
-            !calling ||
-            activePlaybackAudio ||
-            queuedPlaybackUrls.length === 0
-        ) {
-            return;
+    function mixAudioBufferToMono(audioBuffer: AudioBuffer) {
+        if (audioBuffer.numberOfChannels === 0 || audioBuffer.length === 0) {
+            return new Float32Array();
         }
 
-        const nextUrl = queuedPlaybackUrls.shift();
-        if (!nextUrl) {
-            return;
+        if (audioBuffer.numberOfChannels === 1) {
+            return new Float32Array(audioBuffer.getChannelData(0));
         }
 
-        const audio = new Audio(nextUrl);
-        activePlaybackAudio = audio;
-        activePlaybackUrl = nextUrl;
-        audio.preload = "auto";
-        if (playbackIdleTimeout) {
-            clearTimeout(playbackIdleTimeout);
-            playbackIdleTimeout = null;
+        const mono = new Float32Array(audioBuffer.length);
+        const mixScale = 1 / audioBuffer.numberOfChannels;
+
+        for (let channelIndex = 0; channelIndex < audioBuffer.numberOfChannels; channelIndex += 1) {
+            const channelData = audioBuffer.getChannelData(channelIndex);
+            for (let sampleIndex = 0; sampleIndex < channelData.length; sampleIndex += 1) {
+                mono[sampleIndex] += channelData[sampleIndex] * mixScale;
+            }
         }
-        updateStageAfterPlaybackStateChange();
 
-        const finishPlayback = () => {
-            if (activePlaybackAudio === audio) {
-                activePlaybackAudio.pause();
-                activePlaybackAudio.src = "";
-                activePlaybackAudio = null;
-            }
-            if (activePlaybackUrl === nextUrl) {
-                URL.revokeObjectURL(nextUrl);
-                activePlaybackUrl = null;
-            }
-            if (queuedPlaybackUrls.length === 0 && calling) {
-                playbackIdleTimeout = window.setTimeout(() => {
-                    if (
-                        !activePlaybackAudio &&
-                        queuedPlaybackUrls.length === 0 &&
-                        calling
-                    ) {
-                        updateStageAfterPlaybackStateChange();
-                    }
-                    playbackIdleTimeout = null;
-                }, 450);
-            }
-            playNextQueuedAudio();
-        };
-
-        audio.onended = finishPlayback;
-        audio.onerror = () => {
-            console.error("Failed to play queued CSM audio");
-            finishPlayback();
-        };
-
-        void audio.play().catch((err) => {
-            console.error("Failed to start queued CSM audio:", err);
-            finishPlayback();
-        });
+        return mono;
     }
 
     async function queuePlaybackChunk(payload: CsmAudioChunkEvent) {
@@ -597,18 +615,47 @@
         if (activeTtsRequestId !== payload.request_id) {
             return;
         }
+        if (!captureContext || !playbackProcessor) {
+            return;
+        }
 
         const audioBytes = decodeBase64Bytes(payload.audio_wav_base64);
         if (audioBytes.length === 0) {
             return;
         }
 
-        const audioBlob = new Blob([audioBytes], { type: "audio/wav" });
-        queuedPlaybackUrls = [
-            ...queuedPlaybackUrls,
-            URL.createObjectURL(audioBlob),
-        ];
-        playNextQueuedAudio();
+        try {
+            const decodedAudio = await captureContext.decodeAudioData(
+                audioBytes.slice().buffer,
+            );
+            if (!calling || activeTtsRequestId !== payload.request_id) {
+                return;
+            }
+
+            const playbackSamples = mixAudioBufferToMono(decodedAudio);
+            if (playbackSamples.length === 0) {
+                return;
+            }
+
+            if (playbackIdleTimeout) {
+                clearTimeout(playbackIdleTimeout);
+                playbackIdleTimeout = null;
+            }
+
+            queuedPlaybackChunkCount += 1;
+            updateStageAfterPlaybackStateChange();
+            playbackProcessor.port.postMessage(
+                {
+                    type: "push",
+                    requestId: payload.request_id,
+                    samples: playbackSamples,
+                    prebufferSamples: PLAYBACK_PREBUFFER_SAMPLES,
+                },
+                [playbackSamples.buffer],
+            );
+        } catch (err) {
+            console.error("Failed to decode queued CSM audio:", err);
+        }
     }
 
     async function handleStartCall() {
@@ -652,8 +699,8 @@
 
     async function handleEndCall() {
         calling = false;
-        stopAudioCapture();
         stopPlayback();
+        stopAudioCapture();
         closeConversationPopup();
         resetConversationLog();
         setCallStage("idle", "");
@@ -847,10 +894,7 @@
                                     0,
                                     pendingTtsSegments - 1,
                                 );
-                                if (
-                                    !activePlaybackAudio &&
-                                    queuedPlaybackUrls.length === 0
-                                ) {
+                                if (queuedPlaybackChunkCount === 0) {
                                     updateStageAfterPlaybackStateChange();
                                 }
                                 console.log("Finished streaming CSM response");
@@ -928,8 +972,8 @@
             clearTimeout(playbackIdleTimeout);
         }
 
-        stopAudioCapture();
         stopPlayback(true);
+        stopAudioCapture();
 
         for (const unlisten of eventUnlisteners) {
             unlisten();

@@ -40,6 +40,8 @@ const CSM_MALE_REFERENCE_AUDIO_FILE: &str = "sample-male.mp3";
 const CSM_FEMALE_REFERENCE_AUDIO_FILE: &str = "sample-female.mp3";
 const MAX_CONVERSATION_TURNS: usize = 24;
 const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 2;
+const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
+const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
 const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with no more than 2 short sentences.";
 const TRANSCRIPTION_PROMPT: &str =
     "You are a voice-based AI. Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
@@ -114,6 +116,10 @@ impl CsmVoice {
 #[derive(Clone, Deserialize)]
 struct AudioPayload {
     data: Vec<f32>,
+    #[serde(default)]
+    playback_reference: Option<Vec<f32>>,
+    #[serde(default)]
+    playback_active: bool,
 }
 
 #[derive(Serialize)]
@@ -447,7 +453,13 @@ async fn start_server(
             .shell()
             .sidecar("mlx-handler")
             .map_err(|e| e.to_string())?
-            .args(&["--server", "--model", selected_variant.repo_id(), "--port", &port_arg]);
+            .args(&[
+                "--server",
+                "--model",
+                selected_variant.repo_id(),
+                "--port",
+                &port_arg,
+            ]);
 
         let (mut rx, child) = sidecar_command.spawn().map_err(|e| e.to_string())?;
         tauri::async_runtime::spawn(async move {
@@ -660,6 +672,89 @@ async fn stop_csm_server(state: State<'_, AppState>) -> Result<(), String> {
     stop_csm_server_inner(state.inner()).await
 }
 
+struct PreparedAudioChunk {
+    samples: Vec<f32>,
+    rms: f32,
+}
+
+fn calculate_rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+
+    (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
+fn suppress_playback_echo(mut payload: AudioPayload) -> PreparedAudioChunk {
+    let mic_rms = calculate_rms(&payload.data);
+    if !payload.playback_active {
+        return PreparedAudioChunk {
+            samples: payload.data,
+            rms: mic_rms,
+        };
+    }
+
+    let Some(playback_reference) = payload.playback_reference.as_deref() else {
+        return PreparedAudioChunk {
+            samples: payload.data,
+            rms: mic_rms,
+        };
+    };
+
+    if playback_reference.len() != payload.data.len() {
+        return PreparedAudioChunk {
+            samples: payload.data,
+            rms: mic_rms,
+        };
+    }
+
+    let reference_rms = calculate_rms(playback_reference);
+    if reference_rms < PLAYBACK_REFERENCE_MIN_RMS {
+        return PreparedAudioChunk {
+            samples: payload.data,
+            rms: mic_rms,
+        };
+    }
+
+    let reference_energy = playback_reference
+        .iter()
+        .map(|sample| sample * sample)
+        .sum::<f32>();
+    if reference_energy <= f32::EPSILON {
+        return PreparedAudioChunk {
+            samples: payload.data,
+            rms: mic_rms,
+        };
+    }
+
+    let echo_gain = (payload
+        .data
+        .iter()
+        .zip(playback_reference.iter())
+        .map(|(sample, reference)| sample * reference)
+        .sum::<f32>()
+        / reference_energy)
+        .clamp(0.0, PLAYBACK_ECHO_MAX_GAIN);
+
+    if echo_gain <= 0.0 {
+        return PreparedAudioChunk {
+            samples: payload.data,
+            rms: mic_rms,
+        };
+    }
+
+    let mut residual_energy = 0.0;
+    for (sample, reference) in payload.data.iter_mut().zip(playback_reference.iter()) {
+        *sample = (*sample - echo_gain * reference).clamp(-1.0, 1.0);
+        residual_energy += *sample * *sample;
+    }
+
+    PreparedAudioChunk {
+        rms: (residual_energy / payload.data.len() as f32).sqrt(),
+        samples: payload.data,
+    }
+}
+
 #[tauri::command]
 fn receive_audio_chunk(
     payload: AudioPayload,
@@ -670,12 +765,17 @@ fn receive_audio_chunk(
         return;
     }
 
+    let prepared_chunk = suppress_playback_echo(payload);
+    if prepared_chunk.samples.is_empty() {
+        return;
+    }
+
     let mut buffer = state.audio_buffer.lock().unwrap();
     let mut silent_count = state.silent_chunks_count.lock().unwrap();
     let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
     let mut is_speaking = state.is_speaking.lock().unwrap();
 
-    let rms = (payload.data.iter().map(|&x| x * x).sum::<f32>() / payload.data.len() as f32).sqrt();
+    let rms = prepared_chunk.rms;
 
     if rms > SILENCE_THRESHOLD {
         *speaking_count += 1;
@@ -693,7 +793,7 @@ fn receive_audio_chunk(
     }
 
     if *is_speaking {
-        buffer.extend_from_slice(&payload.data);
+        buffer.extend_from_slice(&prepared_chunk.samples);
 
         if *silent_count >= SILENCE_DURATION_CHUNKS {
             info!("Silence detected, sending to MLX Server...");
@@ -1553,14 +1653,14 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_spoken_response_segments_for_csm, sanitize_for_voice_output};
+    use super::{
+        prepare_spoken_response_segments_for_csm, sanitize_for_voice_output,
+        suppress_playback_echo, AudioPayload,
+    };
 
     #[test]
     fn sanitize_for_voice_output_removes_plain_emoji() {
-        assert_eq!(
-            sanitize_for_voice_output("Hello 😊 there."),
-            "Hello there."
-        );
+        assert_eq!(sanitize_for_voice_output("Hello 😊 there."), "Hello there.");
     }
 
     #[test]
@@ -1573,10 +1673,7 @@ mod tests {
 
     #[test]
     fn sanitize_for_voice_output_removes_flags_and_keycaps() {
-        assert_eq!(
-            sanitize_for_voice_output("Press 1️⃣ now 🇺🇸"),
-            "Press 1 now"
-        );
+        assert_eq!(sanitize_for_voice_output("Press 1️⃣ now 🇺🇸"), "Press 1 now");
     }
 
     #[test]
@@ -1595,6 +1692,51 @@ mod tests {
             )),
             vec!["Sure. I can help with that.".to_string()]
         );
+    }
+
+    #[test]
+    fn playback_echo_suppression_removes_reference_only_audio() {
+        let playback_reference = vec![0.25, -0.2, 0.1, -0.05, 0.15, -0.1];
+        let payload = AudioPayload {
+            data: playback_reference
+                .iter()
+                .map(|sample| sample * 0.8)
+                .collect(),
+            playback_reference: Some(playback_reference),
+            playback_active: true,
+        };
+
+        let prepared_chunk = suppress_playback_echo(payload);
+
+        assert!(prepared_chunk.rms < 0.001);
+        assert!(prepared_chunk
+            .samples
+            .iter()
+            .all(|sample| sample.abs() < 0.001));
+    }
+
+    #[test]
+    fn playback_echo_suppression_keeps_near_end_speech_energy() {
+        let playback_reference = vec![0.2, -0.18, 0.12, -0.08, 0.1, -0.06];
+        let user_voice = [0.04, 0.03, -0.02, -0.05, 0.01, 0.02];
+        let payload = AudioPayload {
+            data: playback_reference
+                .iter()
+                .zip(user_voice.iter())
+                .map(|(playback_sample, user_sample)| playback_sample * 0.75 + user_sample)
+                .collect(),
+            playback_reference: Some(playback_reference),
+            playback_active: true,
+        };
+
+        let prepared_chunk = suppress_playback_echo(payload);
+
+        assert!(prepared_chunk.rms > 0.02);
+        assert!(prepared_chunk
+            .samples
+            .iter()
+            .zip(user_voice.iter())
+            .all(|(sample, expected)| (sample - expected).abs() < 0.02));
     }
 }
 
@@ -2535,10 +2677,7 @@ async fn download_csm_model(app_handle: tauri::AppHandle) -> Result<(), String> 
 }
 
 #[tauri::command]
-async fn cancel_model_download(
-    state: State<'_, AppState>,
-    model: String,
-) -> Result<(), String> {
+async fn cancel_model_download(state: State<'_, AppState>, model: String) -> Result<(), String> {
     let download_model = DownloadModel::from_key(&model)?;
     let Some(download_process) = active_download_process(state.inner(), download_model) else {
         return Ok(());
@@ -2688,7 +2827,10 @@ async fn run_hf_download(
             .and_then(|value| value.as_str())
             .map(str::to_string)
         else {
-            warn!("Downloader output for {} is missing a type: {}", model_key, trimmed);
+            warn!(
+                "Downloader output for {} is missing a type: {}",
+                model_key, trimmed
+            );
             continue;
         };
 
@@ -2713,27 +2855,31 @@ async fn run_hf_download(
             },
             _ => match serde_json::from_value::<DownloadProgressWorkerEvent>(parsed) {
                 Ok(event) => {
-                let phase = match event.event_type.as_str() {
-                    "completed" => "completed",
-                    "error" => "error",
-                    _ => "progress",
-                };
-                let model_event = ModelDownloadEvent {
-                    model: event.model.clone(),
-                    phase: phase.to_string(),
-                    message: event.message.clone(),
-                    progress: event.progress,
-                    downloaded_bytes: event.downloaded_bytes,
-                    total_bytes: event.total_bytes,
-                    indeterminate: event.indeterminate,
-                };
-                update_tracked_download_event(state.inner(), download_model, model_event.clone());
+                    let phase = match event.event_type.as_str() {
+                        "completed" => "completed",
+                        "error" => "error",
+                        _ => "progress",
+                    };
+                    let model_event = ModelDownloadEvent {
+                        model: event.model.clone(),
+                        phase: phase.to_string(),
+                        message: event.message.clone(),
+                        progress: event.progress,
+                        downloaded_bytes: event.downloaded_bytes,
+                        total_bytes: event.total_bytes,
+                        indeterminate: event.indeterminate,
+                    };
+                    update_tracked_download_event(
+                        state.inner(),
+                        download_model,
+                        model_event.clone(),
+                    );
 
-                emit_model_download_event(app_handle, model_event);
+                    emit_model_download_event(app_handle, model_event);
 
-                if event.event_type == "error" {
-                    last_error_message = Some(event.message);
-                }
+                    if event.event_type == "error" {
+                        last_error_message = Some(event.message);
+                    }
                 }
                 Err(err) => {
                     warn!(

@@ -1,3 +1,26 @@
+const PLAYBACK_REFERENCE_STATE_KEY = "__openduckPlaybackReferenceState";
+
+function getPlaybackReferenceState() {
+  if (!globalThis[PLAYBACK_REFERENCE_STATE_KEY]) {
+    globalThis[PLAYBACK_REFERENCE_STATE_KEY] = {
+      ringBuffer: new Float32Array(1 << 18),
+      writeIndex: 0,
+    };
+  }
+
+  return globalThis[PLAYBACK_REFERENCE_STATE_KEY];
+}
+
+function writePlaybackSamples(samples) {
+  const state = getPlaybackReferenceState();
+  const { ringBuffer } = state;
+
+  for (let index = 0; index < samples.length; index += 1) {
+    ringBuffer[state.writeIndex] = samples[index];
+    state.writeIndex = (state.writeIndex + 1) % ringBuffer.length;
+  }
+}
+
 class PlaybackProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -26,14 +49,18 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this.currentRequestId = requestId;
       }
 
-      const chunk = samples instanceof Float32Array ? samples : new Float32Array(samples);
+      const chunk =
+        samples instanceof Float32Array ? samples : new Float32Array(samples);
       if (chunk.length === 0) {
         return;
       }
 
-      this.queue.push(chunk);
+      this.queue.push({ requestId, samples: chunk });
       this.bufferedSamples += chunk.length;
-      this.prebufferSamples = Math.max(0, prebufferSamples ?? this.prebufferSamples);
+      this.prebufferSamples = Math.max(
+        0,
+        prebufferSamples ?? this.prebufferSamples,
+      );
 
       if (!this.started && this.bufferedSamples >= this.prebufferSamples) {
         this.started = true;
@@ -57,35 +84,45 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
     output.fill(0);
 
-    if (!this.started) {
-      if (this.bufferedSamples >= this.prebufferSamples && this.bufferedSamples > 0) {
-        this.started = true;
-      } else {
-        return true;
+    if (
+      !this.started &&
+      this.bufferedSamples >= this.prebufferSamples &&
+      this.bufferedSamples > 0
+    ) {
+      this.started = true;
+    }
+
+    if (this.started) {
+      let writeIndex = 0;
+      while (writeIndex < output.length) {
+        const head = this.queue[0];
+        if (!head) {
+          this.started = false;
+          break;
+        }
+
+        const available = head.samples.length - this.offset;
+        const toCopy = Math.min(available, output.length - writeIndex);
+        output.set(
+          head.samples.subarray(this.offset, this.offset + toCopy),
+          writeIndex,
+        );
+        this.offset += toCopy;
+        writeIndex += toCopy;
+        this.bufferedSamples -= toCopy;
+
+        if (this.offset >= head.samples.length) {
+          this.queue.shift();
+          this.offset = 0;
+          this.port.postMessage({
+            type: "chunk-finished",
+            requestId: head.requestId,
+          });
+        }
       }
     }
 
-    let writeIndex = 0;
-    while (writeIndex < output.length) {
-      const head = this.queue[0];
-      if (!head) {
-        this.started = false;
-        break;
-      }
-
-      const available = head.length - this.offset;
-      const toCopy = Math.min(available, output.length - writeIndex);
-      output.set(head.subarray(this.offset, this.offset + toCopy), writeIndex);
-      this.offset += toCopy;
-      writeIndex += toCopy;
-      this.bufferedSamples -= toCopy;
-
-      if (this.offset >= head.length) {
-        this.queue.shift();
-        this.offset = 0;
-      }
-    }
-
+    writePlaybackSamples(output);
     return true;
   }
 }
