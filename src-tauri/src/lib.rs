@@ -51,7 +51,7 @@ const MAX_CONVERSATION_TURNS: usize = 24;
 const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 1;
 const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
-const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with no more than 3 short sentences and each sentence must contain less than 10 words";
+const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
 const TRANSCRIPTION_PROMPT: &str =
     "You are a voice-based AI. Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
 
