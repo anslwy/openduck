@@ -78,14 +78,14 @@ impl GemmaVariant {
 
     fn repo_id(self) -> &'static str {
         match self {
-            Self::E4b => "mlx-community/gemma-3n-E4B-it-4bit",
+            Self::E4b => "mlx-community/gemma-3n-E4B-it-8bit",
             Self::E2b => "mlx-community/gemma-3n-E2B-it-4bit",
         }
     }
 
     fn cache_dir(self) -> &'static str {
         match self {
-            Self::E4b => "models--mlx-community--gemma-3n-E4B-it-4bit",
+            Self::E4b => "models--mlx-community--gemma-3n-E4B-it-8bit",
             Self::E2b => "models--mlx-community--gemma-3n-E2B-it-4bit",
         }
     }
