@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
@@ -39,7 +40,7 @@ const CSM_STDERR_TAIL_LIMIT: usize = 8;
 const CSM_MALE_REFERENCE_AUDIO_FILE: &str = "sample-male.mp3";
 const CSM_FEMALE_REFERENCE_AUDIO_FILE: &str = "sample-female.mp3";
 const MAX_CONVERSATION_TURNS: usize = 24;
-const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 2;
+const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 1;
 const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
 const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with no more than 2 short sentences.";
@@ -242,6 +243,11 @@ enum CsmWorkerEvent {
     },
     Ready {
         sample_rate: Option<u32>,
+    },
+    Timing {
+        request_id: u64,
+        text: String,
+        elapsed_ms: f64,
     },
     Chunk {
         request_id: u64,
@@ -1017,6 +1023,7 @@ async fn transcribe_audio_with_gemma(
     gemma_model: &str,
     audio_path: &Path,
 ) -> Result<String, String> {
+    let stt_started_at = Instant::now();
     let client = reqwest::Client::new();
     let request = ChatRequest {
         model: gemma_model.to_string(),
@@ -1081,6 +1088,12 @@ async fn transcribe_audio_with_gemma(
         );
     }
 
+    info!(
+        "STT response received in {:.1} ms ({} chars)",
+        stt_started_at.elapsed().as_secs_f64() * 1000.0,
+        sanitized_transcript.chars().count()
+    );
+
     Ok(sanitized_transcript)
 }
 
@@ -1092,6 +1105,7 @@ async fn stream_gemma_response_to_csm(
 ) -> Result<String, String> {
     start_csm_server_inner(app_handle, app_handle.state::<AppState>().inner()).await?;
 
+    let llm_started_at = Instant::now();
     let client = reqwest::Client::new();
     let (conversation_session_id, conversation_turns) = {
         let state = app_handle.state::<AppState>();
@@ -1175,6 +1189,12 @@ async fn stream_gemma_response_to_csm(
         .map(extract_chat_content_text)
         .map(|text| sanitize_for_voice_output(&text))
         .unwrap_or_default();
+
+    info!(
+        "LLM full response received in {:.1} ms ({} chars)",
+        llm_started_at.elapsed().as_secs_f64() * 1000.0,
+        response_text.chars().count()
+    );
 
     if response_text.is_empty() {
         warn!("Gemma returned an empty response, skipping CSM synthesis");
@@ -1833,6 +1853,16 @@ async fn csm_stdout_task(
                 *csm_ready_guard = true;
                 update_csm_startup_message(&app_handle, None, false);
                 send_ready_signal(&ready_tx, Ok(()));
+            }
+            Ok(CsmWorkerEvent::Timing {
+                request_id,
+                text,
+                elapsed_ms,
+            }) => {
+                info!(
+                    "CSM synthesis completed in {:.1} ms for request {}: {}",
+                    elapsed_ms, request_id, text
+                );
             }
             Ok(CsmWorkerEvent::Chunk {
                 request_id,

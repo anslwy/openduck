@@ -6,6 +6,7 @@ import inspect
 import json
 import os
 import sys
+import time
 import traceback
 import wave
 from pathlib import Path
@@ -204,6 +205,7 @@ def run_server(
             continue
 
         try:
+            synthesis_started_at = time.perf_counter()
             sampler = make_sampler(
                 temp=float(request.get("temperature", 0.8)),
                 top_k=int(request.get("top_k", 50)),
@@ -234,6 +236,16 @@ def run_server(
                         "audio_wav_base64": audio_wav_base64,
                     }
                 )
+            emit(
+                {
+                    "type": "timing",
+                    "request_id": request_id,
+                    "text": text,
+                    "elapsed_ms": round(
+                        (time.perf_counter() - synthesis_started_at) * 1000.0, 2
+                    ),
+                }
+            )
             emit({"type": "done", "request_id": request_id})
         except Exception as exc:
             emit(
