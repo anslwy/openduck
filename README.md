@@ -20,10 +20,10 @@ If you want to use Kokoro in a fresh checkout, run `scripts/setup_python_env.sh`
 2. Audio chunks are sent to `receive_audio_chunk` in `src-tauri/src/lib.rs`. The backend uses simple voice activity detection to buffer speech and treat a long enough silence as the end of a turn.
 3. The buffered audio is written to a temporary WAV file and sent to Gemma for transcription. Empty or filler-only transcripts are ignored.
 4. A valid transcript interrupts any active reply, so the user can barge in while the assistant is speaking.
-5. The backend asks Gemma for a short spoken reply using the system prompt plus recent conversation history.
-6. The reply is sanitized, split into short spoken segments, and sent to the selected speech worker for text-to-speech generation.
-7. The frontend listens for `csm-audio-start`, `csm-audio-chunk`, `csm-audio-done`, and `call-stage` events, queues the generated audio, plays it sequentially, and updates the visible call state.
-8. Successful user and assistant turns are stored in memory with a rolling limit of 24 turns. Starting or ending a call clears that history and resets the session.
+5. The backend asks Gemma for a short spoken reply using the system prompt plus recent conversation history, with streaming enabled.
+6. As Gemma emits text, the backend sanitizes it, updates the visible assistant transcript, and sends each completed sentence to the selected speech worker instead of waiting for the full reply.
+7. The frontend listens for assistant text updates plus `csm-audio-start`, `csm-audio-queued`, `csm-audio-chunk`, `csm-audio-done`, and `call-stage` events, queues the generated audio, plays it sequentially, and updates the visible call state.
+8. Once the stream finishes, any trailing partial sentence is synthesized, the speech worker context is finalized, and the full assistant turn is stored in memory with a rolling limit of 24 turns. Starting or ending a call clears that history and resets the session.
 
 ## Flowchart
 
@@ -43,16 +43,20 @@ flowchart TD
     J -- No --> K[Return to Listening]
     J -- Yes --> L[Interrupt active reply]
     L --> M[Build prompt with system prompt and recent turns]
-    M --> N[Generate reply with Gemma]
-    N --> O[Sanitize and split into short spoken segments]
-    O --> P[Send segments to selected speech worker]
-    P --> Q[Emit audio and call-stage events]
-    Q --> R[Frontend queues and plays audio]
-    R --> S[Store user and assistant turn in memory]
-    S --> K
+    M --> N[Stream reply tokens from Gemma]
+    N --> O[Sanitize text and update assistant transcript]
+    O --> P{Sentence boundary reached?}
+    P -- Yes --> Q[Send completed sentence to selected speech worker]
+    P -- No --> N
+    Q --> R[Emit audio and call-stage events]
+    R --> S[Frontend queues and plays audio]
+    S --> T{Stream finished?}
+    T -- No --> N
+    T -- Yes --> U[Store user and assistant turn in memory]
+    U --> K
     K --> D
-    T[End Call] --> U[Stop capture and playback]
-    U --> B
+    V[End Call] --> W[Stop capture and playback]
+    W --> B
 ```
 
 ## Key Files

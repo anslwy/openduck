@@ -5,8 +5,10 @@
 
     type CsmAudioStartEvent = {
         request_id: number;
-        text: string;
-        total_segments: number;
+    };
+
+    type CsmAudioQueuedEvent = {
+        request_id: number;
     };
 
     type CsmAudioChunkEvent = {
@@ -36,6 +38,12 @@
 
     type TranscriptEvent = {
         text: string;
+    };
+
+    type AssistantResponseEvent = {
+        request_id: number;
+        text: string;
+        is_final: boolean;
     };
 
     type TrayEndCallEvent = Record<string, never>;
@@ -111,6 +119,8 @@
     let showConversationPopup = $state(false);
     let conversationLogEntries = $state<ConversationLogEntry[]>([]);
     let nextConversationEntryId = 1;
+    let activeAssistantResponseId: number | null = null;
+    let activeAssistantConversationEntryId: number | null = null;
     let callStagePhase = $state<
         | "idle"
         | "listening"
@@ -212,24 +222,57 @@
     ) {
         const normalizedText = text.trim();
         if (!normalizedText) {
-            return;
+            return null;
         }
 
+        const entryId = nextConversationEntryId;
         conversationLogEntries = [
             ...conversationLogEntries,
             {
-                id: nextConversationEntryId,
+                id: entryId,
                 role,
                 text: normalizedText,
             },
         ];
         nextConversationEntryId += 1;
         scrollConversationLogToBottom();
+        return entryId;
+    }
+
+    function upsertAssistantConversationLogEntry(
+        requestId: number,
+        text: string,
+    ) {
+        const normalizedText = text.trim();
+        if (!normalizedText) {
+            return;
+        }
+
+        if (
+            activeAssistantResponseId !== requestId ||
+            activeAssistantConversationEntryId == null
+        ) {
+            activeAssistantResponseId = requestId;
+            activeAssistantConversationEntryId = appendConversationLogEntry(
+                "assistant",
+                normalizedText,
+            );
+            return;
+        }
+
+        conversationLogEntries = conversationLogEntries.map((entry) =>
+            entry.id === activeAssistantConversationEntryId
+                ? { ...entry, text: normalizedText }
+                : entry,
+        );
+        scrollConversationLogToBottom();
     }
 
     function resetConversationLog() {
         conversationLogEntries = [];
         nextConversationEntryId = 1;
+        activeAssistantResponseId = null;
+        activeAssistantConversationEntryId = null;
     }
 
     function closeConversationPopup() {
@@ -1012,14 +1055,21 @@
                                 return;
                             }
 
-                            stopPlayback();
-                            activeTtsRequestId = payload.request_id;
-                            pendingTtsSegments = payload.total_segments;
-                            appendConversationLogEntry(
-                                "assistant",
-                                payload.text,
-                            );
-                            console.log("Synthesizing response:", payload.text);
+                            if (payload.request_id !== activeTtsRequestId) {
+                                stopPlayback();
+                                activeTtsRequestId = payload.request_id;
+                            }
+                        },
+                    ),
+                    listen<CsmAudioQueuedEvent>(
+                        "csm-audio-queued",
+                        ({ payload }) => {
+                            if (!calling || payload.request_id !== activeTtsRequestId) {
+                                return;
+                            }
+
+                            pendingTtsSegments += 1;
+                            updateStageAfterPlaybackStateChange();
                         },
                     ),
                     listen<CsmAudioChunkEvent>(
@@ -1067,6 +1117,19 @@
                             csmLoadMessage = payload.message;
                         }
                     }),
+                    listen<AssistantResponseEvent>(
+                        "assistant-response",
+                        ({ payload }) => {
+                            if (!calling) {
+                                return;
+                            }
+
+                            upsertAssistantConversationLogEntry(
+                                payload.request_id,
+                                payload.text,
+                            );
+                        },
+                    ),
                     listen<CallStageEvent>("call-stage", ({ payload }) => {
                         if (!calling) {
                             return;

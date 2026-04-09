@@ -37,6 +37,7 @@ const CSM_MAX_AUDIO_LENGTH_MS: u32 = 10_000;
 const CSM_TEMPERATURE: f32 = 0.3;
 const CSM_TOP_K: u32 = 20;
 const CSM_AUDIO_START_EVENT: &str = "csm-audio-start";
+const CSM_AUDIO_QUEUED_EVENT: &str = "csm-audio-queued";
 const CSM_AUDIO_CHUNK_EVENT: &str = "csm-audio-chunk";
 const CSM_AUDIO_DONE_EVENT: &str = "csm-audio-done";
 const CSM_AUDIO_STOP_EVENT: &str = "csm-audio-stop";
@@ -44,6 +45,7 @@ const CSM_ERROR_EVENT: &str = "csm-error";
 const CSM_STATUS_EVENT: &str = "csm-status";
 const CALL_STAGE_EVENT: &str = "call-stage";
 const TRANSCRIPT_EVENT: &str = "transcript-ready";
+const ASSISTANT_RESPONSE_EVENT: &str = "assistant-response";
 const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";
 const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 const CSM_STDERR_TAIL_LIMIT: usize = 8;
@@ -293,6 +295,26 @@ struct ChatCompletionMessage {
     content: Option<serde_json::Value>,
 }
 
+#[derive(Deserialize)]
+struct ChatCompletionStreamChunk {
+    choices: Vec<ChatCompletionStreamChoice>,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionStreamChoice {
+    #[serde(default)]
+    delta: Option<ChatCompletionStreamDelta>,
+    #[serde(default)]
+    message: Option<ChatCompletionMessage>,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionStreamDelta {
+    content: Option<serde_json::Value>,
+}
+
 struct AppState {
     audio_buffer: Mutex<Vec<f32>>,
     silent_chunks_count: Mutex<usize>,
@@ -381,8 +403,11 @@ impl DownloadModel {
 #[derive(Clone, Serialize)]
 struct CsmAudioStartEvent {
     request_id: u64,
-    text: String,
-    total_segments: usize,
+}
+
+#[derive(Clone, Serialize)]
+struct CsmAudioQueuedEvent {
+    request_id: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -419,6 +444,13 @@ struct CallStageEvent {
 #[derive(Clone, Serialize)]
 struct TranscriptEvent {
     text: String,
+}
+
+#[derive(Clone, Serialize)]
+struct AssistantResponseEvent {
+    request_id: u64,
+    text: String,
+    is_final: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -1356,11 +1388,11 @@ async fn stream_gemma_response_to_csm(
         model: gemma_model.to_string(),
         messages,
         max_tokens: 64,
-        stream: false,
+        stream: true,
     };
     log_chat_request_debug(conversation_session_id, &request);
 
-    let response = client
+    let mut response = client
         .post(format!(
             "{}/v1/chat/completions",
             server_base_url(server_port)
@@ -1380,22 +1412,97 @@ async fn stream_gemma_response_to_csm(
     }
 
     let response_id = allocate_csm_response_id(app_handle);
-    let payload = response
-        .json::<ChatCompletionResponse>()
-        .await
-        .map_err(|e| format!("Failed to parse Gemma response: {e}"))?;
+    let mut raw_response_text = String::new();
+    let mut latest_response_text = String::new();
+    let mut queued_response_bytes = 0usize;
+    let mut started_audio_response = false;
+    let mut raw_body = Vec::new();
+    let mut sse_buffer = Vec::new();
+    let mut saw_stream_event = false;
+    let mut saw_stream_done = false;
 
-    let response_text = payload
-        .choices
-        .into_iter()
-        .next()
-        .and_then(|choice| choice.message.content)
-        .map(extract_chat_content_text)
-        .map(|text| sanitize_for_voice_output(&text))
-        .unwrap_or_default();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("Failed while reading Gemma stream: {e}"))?
+    {
+        raw_body.extend_from_slice(&chunk);
+        sse_buffer.extend(chunk.iter().copied().filter(|byte| *byte != b'\r'));
+
+        while let Some(event_block) = drain_next_sse_event(&mut sse_buffer) {
+            let event_text = String::from_utf8(event_block)
+                .map_err(|err| format!("Failed to decode Gemma stream event: {err}"))?;
+            match parse_gemma_stream_event(&event_text)? {
+                ParsedGemmaStreamEvent::Ignore => {}
+                ParsedGemmaStreamEvent::Done => {
+                    saw_stream_event = true;
+                    saw_stream_done = true;
+                    break;
+                }
+                ParsedGemmaStreamEvent::Delta(text) => {
+                    saw_stream_event = true;
+                    raw_response_text.push_str(&text);
+                    emit_streamed_response_update(
+                        app_handle,
+                        response_id,
+                        &raw_response_text,
+                        &mut latest_response_text,
+                        &mut queued_response_bytes,
+                        &mut started_audio_response,
+                    )
+                    .await?;
+                }
+            }
+        }
+
+        if saw_stream_done {
+            break;
+        }
+    }
+
+    if !saw_stream_done && !sse_buffer.is_empty() {
+        let trailing_event = String::from_utf8(sse_buffer)
+            .map_err(|err| format!("Failed to decode trailing Gemma stream event: {err}"))?;
+        if !trailing_event.trim().is_empty() {
+            match parse_gemma_stream_event(trailing_event.trim())? {
+                ParsedGemmaStreamEvent::Ignore => {}
+                ParsedGemmaStreamEvent::Done => {
+                    saw_stream_event = true;
+                }
+                ParsedGemmaStreamEvent::Delta(text) => {
+                    saw_stream_event = true;
+                    raw_response_text.push_str(&text);
+                    emit_streamed_response_update(
+                        app_handle,
+                        response_id,
+                        &raw_response_text,
+                        &mut latest_response_text,
+                        &mut queued_response_bytes,
+                        &mut started_audio_response,
+                    )
+                    .await?;
+                }
+            }
+        }
+    }
+
+    if !saw_stream_event {
+        let payload = serde_json::from_slice::<ChatCompletionResponse>(&raw_body)
+            .map_err(|e| format!("Failed to parse Gemma response: {e}"))?;
+        raw_response_text = payload
+            .choices
+            .into_iter()
+            .next()
+            .and_then(|choice| choice.message.content)
+            .map(extract_chat_content_text)
+            .unwrap_or_default();
+        latest_response_text = sanitize_for_voice_output(&raw_response_text);
+    }
+
+    let response_text = sanitize_for_voice_output(&raw_response_text);
 
     info!(
-        "LLM full response received in {:.1} ms ({} chars)",
+        "LLM response completed in {:.1} ms ({} chars)",
         llm_started_at.elapsed().as_secs_f64() * 1000.0,
         response_text.chars().count()
     );
@@ -1403,44 +1510,37 @@ async fn stream_gemma_response_to_csm(
     if response_text.is_empty() {
         warn!("Gemma returned an empty response, skipping CSM synthesis");
     } else {
-        let spoken_segments = prepare_spoken_response_segments_for_csm(&response_text);
-        if spoken_segments.is_empty() {
-            warn!(
-                "Gemma response became empty after spoken-response preparation, skipping CSM synthesis"
-            );
-            return Ok(response_text);
-        }
-
-        emit_call_stage(app_handle, "generating_audio", "Generating Audio");
-        app_handle
-            .emit(
-                CSM_AUDIO_START_EVENT,
-                CsmAudioStartEvent {
+        if response_text != latest_response_text {
+            emit_assistant_response(
+                app_handle,
+                AssistantResponseEvent {
                     request_id: response_id,
                     text: response_text.clone(),
-                    total_segments: spoken_segments.len(),
+                    is_final: false,
                 },
-            )
-            .map_err(|e| e.to_string())?;
-        if spoken_segments.len() == 1 {
-            info!(
-                "Queueing CSM response as a single synthesis request: {}",
-                spoken_segments[0]
-            );
-        } else {
-            info!(
-                "Queueing CSM response across {} synthesis segments",
-                spoken_segments.len()
             );
         }
-        for (index, spoken_segment) in spoken_segments.iter().enumerate() {
-            info!(
-                "Queueing CSM response segment {}/{}: {}",
-                index + 1,
-                spoken_segments.len(),
-                spoken_segment
-            );
-            send_csm_synthesis_request(app_handle, response_id, spoken_segment).await?;
+        emit_assistant_response(
+            app_handle,
+            AssistantResponseEvent {
+                request_id: response_id,
+                text: response_text.clone(),
+                is_final: true,
+            },
+        );
+        let flushed_segments = queue_spoken_response_segments_for_csm(
+            app_handle,
+            response_id,
+            &response_text,
+            &mut queued_response_bytes,
+            &mut started_audio_response,
+            true,
+        )
+        .await?;
+        if flushed_segments == 0 && !started_audio_response {
+            warn!(
+                "Gemma response became empty after spoken-response preparation, skipping CSM synthesis"
+            )
         }
         info!("MLX Server Output: {}", response_text);
     }
@@ -1453,6 +1553,43 @@ async fn stream_gemma_response_to_csm(
     }
 
     Ok(response_text)
+}
+
+async fn emit_streamed_response_update(
+    app_handle: &tauri::AppHandle,
+    response_id: u64,
+    raw_response_text: &str,
+    latest_response_text: &mut String,
+    queued_response_bytes: &mut usize,
+    started_audio_response: &mut bool,
+) -> Result<(), String> {
+    let response_text = sanitize_for_voice_output(raw_response_text);
+    if response_text.is_empty() {
+        return Ok(());
+    }
+
+    if response_text != *latest_response_text {
+        emit_assistant_response(
+            app_handle,
+            AssistantResponseEvent {
+                request_id: response_id,
+                text: response_text.clone(),
+                is_final: false,
+            },
+        );
+        *latest_response_text = response_text.clone();
+    }
+    queue_spoken_response_segments_for_csm(
+        app_handle,
+        response_id,
+        &response_text,
+        queued_response_bytes,
+        started_audio_response,
+        false,
+    )
+    .await?;
+
+    Ok(())
 }
 
 fn allocate_csm_response_id(app_handle: &tauri::AppHandle) -> u64 {
@@ -1517,6 +1654,62 @@ async fn send_csm_synthesis_request(
         .map_err(|e| format!("Failed to flush CSM request: {e}"))?;
 
     Ok(())
+}
+
+async fn queue_spoken_response_segments_for_csm(
+    app_handle: &tauri::AppHandle,
+    request_id: u64,
+    response_text: &str,
+    queued_response_bytes: &mut usize,
+    started_audio_response: &mut bool,
+    flush_incomplete_segment: bool,
+) -> Result<usize, String> {
+    let queued_start = (*queued_response_bytes).min(response_text.len());
+    let pending_response_text = &response_text[queued_start..];
+    let (spoken_segments, consumed_len) = if flush_incomplete_segment {
+        (
+            prepare_spoken_response_segments_for_csm(pending_response_text),
+            pending_response_text.len(),
+        )
+    } else {
+        prepare_completed_spoken_response_segments_for_csm(pending_response_text)
+    };
+
+    if spoken_segments.is_empty() {
+        return Ok(0);
+    }
+
+    if !*started_audio_response {
+        emit_call_stage(app_handle, "generating_audio", "Generating Audio");
+        emit_csm_audio_start(app_handle, CsmAudioStartEvent { request_id });
+        *started_audio_response = true;
+    }
+
+    if spoken_segments.len() == 1 {
+        info!(
+            "Queueing CSM response as a single streamed synthesis request: {}",
+            spoken_segments[0]
+        );
+    } else {
+        info!(
+            "Queueing CSM response across {} streamed synthesis segments",
+            spoken_segments.len()
+        );
+    }
+
+    for (index, spoken_segment) in spoken_segments.iter().enumerate() {
+        info!(
+            "Queueing streamed CSM response segment {}/{}: {}",
+            index + 1,
+            spoken_segments.len(),
+            spoken_segment
+        );
+        emit_csm_audio_queued(app_handle, CsmAudioQueuedEvent { request_id });
+        send_csm_synthesis_request(app_handle, request_id, spoken_segment).await?;
+    }
+
+    *queued_response_bytes = queued_start + consumed_len;
+    Ok(spoken_segments.len())
 }
 
 async fn finalize_csm_response(
@@ -1633,6 +1826,66 @@ fn extract_chat_content_text(content: serde_json::Value) -> String {
             .join(" "),
         other => other.to_string(),
     }
+}
+
+enum ParsedGemmaStreamEvent {
+    Delta(String),
+    Done,
+    Ignore,
+}
+
+fn extract_stream_chunk_text(chunk: ChatCompletionStreamChunk) -> String {
+    chunk
+        .choices
+        .into_iter()
+        .find_map(|choice| {
+            choice
+                .delta
+                .and_then(|delta| delta.content)
+                .or_else(|| choice.message.and_then(|message| message.content))
+                .map(extract_chat_content_text)
+                .filter(|text| !text.is_empty())
+                .or_else(|| choice.finish_reason.map(|_| String::new()))
+        })
+        .unwrap_or_default()
+}
+
+fn parse_gemma_stream_event(event_block: &str) -> Result<ParsedGemmaStreamEvent, String> {
+    let mut data_lines = Vec::new();
+
+    for line in event_block.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with(':') {
+            continue;
+        }
+
+        if let Some(data) = trimmed.strip_prefix("data:") {
+            data_lines.push(data.trim_start());
+        }
+    }
+
+    if data_lines.is_empty() {
+        return Ok(ParsedGemmaStreamEvent::Ignore);
+    }
+
+    let data = data_lines.join("\n");
+    if data == "[DONE]" {
+        return Ok(ParsedGemmaStreamEvent::Done);
+    }
+
+    let chunk = serde_json::from_str::<ChatCompletionStreamChunk>(&data)
+        .map_err(|err| format!("Failed to parse streamed Gemma chunk: {err}"))?;
+    let text = extract_stream_chunk_text(chunk);
+    if text.is_empty() {
+        return Ok(ParsedGemmaStreamEvent::Ignore);
+    }
+
+    Ok(ParsedGemmaStreamEvent::Delta(text))
+}
+
+fn drain_next_sse_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
+    let separator = buffer.windows(2).position(|window| window == b"\n\n")?;
+    Some(buffer.drain(..separator + 2).take(separator).collect())
 }
 
 fn log_chat_request_debug(conversation_session_id: u64, request: &ChatRequest) {
@@ -1829,20 +2082,42 @@ fn prepare_spoken_response_segments_for_csm(text: &str) -> Vec<String> {
         .collect()
 }
 
+fn prepare_completed_spoken_response_segments_for_csm(text: &str) -> (Vec<String>, usize) {
+    let (segments, consumed_len) =
+        collect_spoken_response_segments(text, MAX_SPOKEN_SENTENCES_PER_SEGMENT, false);
+    (
+        segments
+            .into_iter()
+            .map(|segment| segment.replace(",", ""))
+            .filter(|segment| !segment.trim().is_empty())
+            .collect(),
+        consumed_len,
+    )
+}
+
 fn split_spoken_response_into_segments(text: &str, max_sentences: usize) -> Vec<String> {
     let normalized = collapse_whitespace(text);
+    collect_spoken_response_segments(&normalized, max_sentences, true).0
+}
+
+fn collect_spoken_response_segments(
+    normalized: &str,
+    max_sentences: usize,
+    include_trailing_incomplete: bool,
+) -> (Vec<String>, usize) {
     if normalized.is_empty() || max_sentences == 0 {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
 
     let mut segments = Vec::new();
     let mut segment_start = 0;
     let mut sentence_count = 0;
+    let mut consumed_len = 0;
     for (idx, ch) in normalized.char_indices() {
         if matches!(ch, '.' | '!' | '?' | '\n') {
             sentence_count += 1;
             if sentence_count >= max_sentences {
-                let end = expand_speech_boundary(&normalized, idx + ch.len_utf8());
+                let end = expand_speech_boundary(normalized, idx + ch.len_utf8());
                 let segment = normalized[segment_start..end].trim();
                 if !segment.is_empty() {
                     segments.push(segment.to_string());
@@ -1858,17 +2133,21 @@ fn split_spoken_response_into_segments(text: &str, max_sentences: usize) -> Vec<
                     }
                     break;
                 }
+                consumed_len = segment_start;
                 sentence_count = 0;
             }
         }
     }
 
-    let trailing_segment = normalized[segment_start..].trim();
-    if !trailing_segment.is_empty() {
-        segments.push(trailing_segment.to_string());
+    if include_trailing_incomplete {
+        let trailing_segment = normalized[segment_start..].trim();
+        if !trailing_segment.is_empty() {
+            segments.push(trailing_segment.to_string());
+            consumed_len = normalized.len();
+        }
     }
 
-    segments
+    (segments, consumed_len)
 }
 
 fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
@@ -1891,8 +2170,10 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
+        parse_gemma_stream_event, prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, resolve_capture_sample_rate,
-        sanitize_for_voice_output, suppress_playback_echo, AudioPayload, DEFAULT_SAMPLE_RATE,
+        sanitize_for_voice_output, suppress_playback_echo, AudioPayload, ParsedGemmaStreamEvent,
+        DEFAULT_SAMPLE_RATE,
     };
 
     #[test]
@@ -1929,6 +2210,35 @@ mod tests {
             )),
             vec!["Sure.".to_string(), "I can help with that.".to_string()]
         );
+    }
+
+    #[test]
+    fn completed_spoken_segments_wait_for_sentence_boundary() {
+        let response_text = "Hello there. How are";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(segments, vec!["Hello there.".to_string()]);
+        assert_eq!(&response_text[consumed_len..], "How are");
+    }
+
+    #[test]
+    fn gemma_stream_event_extracts_delta_text() {
+        let event =
+            parse_gemma_stream_event(r#"data: {"choices":[{"delta":{"content":"Hello there."}}]}"#)
+                .unwrap();
+
+        assert!(matches!(
+            event,
+            ParsedGemmaStreamEvent::Delta(text) if text == "Hello there."
+        ));
+    }
+
+    #[test]
+    fn gemma_stream_event_detects_done_signal() {
+        let event = parse_gemma_stream_event("data: [DONE]").unwrap();
+
+        assert!(matches!(event, ParsedGemmaStreamEvent::Done));
     }
 
     #[test]
@@ -2378,6 +2688,18 @@ fn emit_csm_error(app_handle: &tauri::AppHandle, payload: CsmErrorEvent) {
     }
 }
 
+fn emit_csm_audio_start(app_handle: &tauri::AppHandle, payload: CsmAudioStartEvent) {
+    if let Err(err) = app_handle.emit(CSM_AUDIO_START_EVENT, payload) {
+        error!("Failed to emit CSM audio start event: {}", err);
+    }
+}
+
+fn emit_csm_audio_queued(app_handle: &tauri::AppHandle, payload: CsmAudioQueuedEvent) {
+    if let Err(err) = app_handle.emit(CSM_AUDIO_QUEUED_EVENT, payload) {
+        error!("Failed to emit CSM audio queued event: {}", err);
+    }
+}
+
 fn emit_csm_audio_stop(app_handle: &tauri::AppHandle) {
     if let Err(err) = app_handle.emit(CSM_AUDIO_STOP_EVENT, CsmAudioStopEvent {}) {
         error!("Failed to emit CSM audio stop event: {}", err);
@@ -2405,6 +2727,12 @@ fn emit_call_stage(app_handle: &tauri::AppHandle, phase: &str, message: &str) {
 fn emit_transcript_event(app_handle: &tauri::AppHandle, payload: TranscriptEvent) {
     if let Err(err) = app_handle.emit(TRANSCRIPT_EVENT, payload) {
         error!("Failed to emit transcript event: {}", err);
+    }
+}
+
+fn emit_assistant_response(app_handle: &tauri::AppHandle, payload: AssistantResponseEvent) {
+    if let Err(err) = app_handle.emit(ASSISTANT_RESPONSE_EVENT, payload) {
+        error!("Failed to emit assistant response event: {}", err);
     }
 }
 
