@@ -517,6 +517,7 @@
                 void invoke("receive_audio_chunk", {
                     payload: {
                         data: Array.from(inputData),
+                        sample_rate: Math.round(captureContext?.sampleRate ?? 0),
                         playback_reference:
                             playbackActive && playbackReferenceData
                                 ? Array.from(playbackReferenceData)

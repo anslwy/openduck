@@ -28,7 +28,9 @@ const KOKORO_DEFAULT_VOICE_FILE: &str = "voices/af_heart.pt";
 const SILENCE_THRESHOLD: f32 = 0.02;
 const SILENCE_DURATION_CHUNKS: usize = 150;
 const MIN_SPEAKING_CHUNKS: usize = 10;
-const SAMPLE_RATE: u32 = 44_100;
+const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+const MIN_CAPTURE_SAMPLE_RATE: u32 = 8_000;
+const MAX_CAPTURE_SAMPLE_RATE: u32 = 192_000;
 const CSM_MAX_AUDIO_LENGTH_MS: u32 = 10_000;
 const CSM_TEMPERATURE: f32 = 0.3;
 const CSM_TOP_K: u32 = 20;
@@ -189,6 +191,8 @@ impl CsmModelVariant {
 #[derive(Clone, Deserialize)]
 struct AudioPayload {
     data: Vec<f32>,
+    #[serde(default)]
+    sample_rate: Option<u32>,
     #[serde(default)]
     playback_reference: Option<Vec<f32>>,
     #[serde(default)]
@@ -909,6 +913,7 @@ fn receive_audio_chunk(
         return;
     }
 
+    let capture_sample_rate = resolve_capture_sample_rate(payload.sample_rate);
     let prepared_chunk = suppress_playback_echo(payload);
     if prepared_chunk.samples.is_empty() {
         return;
@@ -947,7 +952,7 @@ fn receive_audio_chunk(
                 *port_guard
             };
             if let Some(port) = server_port {
-                process_audio_with_server(&buffer, port, app_handle);
+                process_audio_with_server(&buffer, capture_sample_rate, port, app_handle);
             } else {
                 error!("MLX Server is not running, skipping audio request");
             }
@@ -959,7 +964,12 @@ fn receive_audio_chunk(
     }
 }
 
-fn process_audio_with_server(samples: &[f32], server_port: u16, app_handle: tauri::AppHandle) {
+fn process_audio_with_server(
+    samples: &[f32],
+    capture_sample_rate: u32,
+    server_port: u16,
+    app_handle: tauri::AppHandle,
+) {
     let audio_path = create_temp_wav_path();
     let generation_id;
     let conversation_session_id;
@@ -975,7 +985,7 @@ fn process_audio_with_server(samples: &[f32], server_port: u16, app_handle: taur
     }
     let spec = hound::WavSpec {
         channels: 1,
-        sample_rate: SAMPLE_RATE,
+        sample_rate: capture_sample_rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
@@ -1409,7 +1419,9 @@ async fn send_csm_synthesis_request(
         );
         start_csm_server_inner(app_handle, state.inner())
             .await
-            .map_err(|err| format!("The speech worker stopped and could not be restarted: {err}"))?;
+            .map_err(|err| {
+                format!("The speech worker stopped and could not be restarted: {err}")
+            })?;
     }
 
     if !csm_process_is_ready(state.inner()).await {
@@ -1823,8 +1835,8 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        prepare_spoken_response_segments_for_csm, sanitize_for_voice_output,
-        suppress_playback_echo, AudioPayload,
+        prepare_spoken_response_segments_for_csm, resolve_capture_sample_rate,
+        sanitize_for_voice_output, suppress_playback_echo, AudioPayload, DEFAULT_SAMPLE_RATE,
     };
 
     #[test]
@@ -1871,6 +1883,7 @@ mod tests {
                 .iter()
                 .map(|sample| sample * 0.8)
                 .collect(),
+            sample_rate: Some(48_000),
             playback_reference: Some(playback_reference),
             playback_active: true,
         };
@@ -1894,6 +1907,7 @@ mod tests {
                 .zip(user_voice.iter())
                 .map(|(playback_sample, user_sample)| playback_sample * 0.75 + user_sample)
                 .collect(),
+            sample_rate: Some(48_000),
             playback_reference: Some(playback_reference),
             playback_active: true,
         };
@@ -1906,6 +1920,21 @@ mod tests {
             .iter()
             .zip(user_voice.iter())
             .all(|(sample, expected)| (sample - expected).abs() < 0.02));
+    }
+
+    #[test]
+    fn capture_sample_rate_uses_valid_payload_rate() {
+        assert_eq!(resolve_capture_sample_rate(Some(48_000)), 48_000);
+    }
+
+    #[test]
+    fn capture_sample_rate_falls_back_when_missing_or_invalid() {
+        assert_eq!(resolve_capture_sample_rate(None), DEFAULT_SAMPLE_RATE);
+        assert_eq!(resolve_capture_sample_rate(Some(0)), DEFAULT_SAMPLE_RATE);
+        assert_eq!(
+            resolve_capture_sample_rate(Some(500_000)),
+            DEFAULT_SAMPLE_RATE
+        );
     }
 }
 
@@ -2089,7 +2118,10 @@ async fn csm_stderr_task(app_handle: tauri::AppHandle, stderr: ChildStderr) {
     while let Ok(Some(line)) = lines.next_line().await {
         let preview = if line.chars().count() > 512 {
             let truncated = line.chars().take(512).collect::<String>();
-            format!("{truncated}...[truncated {} chars]", line.chars().count() - 512)
+            format!(
+                "{truncated}...[truncated {} chars]",
+                line.chars().count() - 512
+            )
         } else {
             line.clone()
         };
@@ -2393,6 +2425,13 @@ fn create_temp_wav_path() -> PathBuf {
 
     path.push(format!("openduck-audio-{}.wav", timestamp_ms));
     path
+}
+
+fn resolve_capture_sample_rate(sample_rate: Option<u32>) -> u32 {
+    match sample_rate {
+        Some(rate) if (MIN_CAPTURE_SAMPLE_RATE..=MAX_CAPTURE_SAMPLE_RATE).contains(&rate) => rate,
+        _ => DEFAULT_SAMPLE_RATE,
+    }
 }
 
 fn reserve_free_port() -> Result<u16, String> {
