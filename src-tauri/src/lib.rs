@@ -5,8 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use tauri::{Emitter, Manager, State};
+use std::time::{Duration, Instant};
+#[cfg(target_os = "macos")]
+use tauri::{menu::MenuBuilder, tray::TrayIconBuilder};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -47,6 +49,14 @@ const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 const CSM_STDERR_TAIL_LIMIT: usize = 8;
 const CSM_MALE_REFERENCE_AUDIO_FILE: &str = "sample-male.mp3";
 const CSM_FEMALE_REFERENCE_AUDIO_FILE: &str = "sample-female.mp3";
+const MAIN_WINDOW_LABEL: &str = "main";
+const TRAY_ICON_ID: &str = "openduck-tray";
+const TRAY_SHOW_MENU_ID: &str = "tray-show-openduck";
+const TRAY_END_CALL_MENU_ID: &str = "tray-end-call";
+const TRAY_TOGGLE_MUTE_MENU_ID: &str = "tray-toggle-mute";
+const TRAY_QUIT_MENU_ID: &str = "tray-quit-openduck";
+const TRAY_END_CALL_EVENT: &str = "tray-end-call";
+const TRAY_TOGGLE_MUTE_EVENT: &str = "tray-toggle-mute";
 const MAX_CONVERSATION_TURNS: usize = 24;
 const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 1;
 const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
@@ -311,6 +321,11 @@ struct AppState {
     active_generation: Mutex<Option<ActiveGeneration>>,
     conversation_turns: Mutex<VecDeque<ConversationTurn>>,
     conversation_session_id: AtomicU64,
+    call_started_at: Mutex<Option<Instant>>,
+    tray_timer_generation: AtomicU64,
+    call_in_progress: Mutex<bool>,
+    call_muted: Mutex<bool>,
+    is_quitting: Mutex<bool>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -804,6 +819,10 @@ async fn start_csm_server_inner(
 
 #[tauri::command]
 async fn stop_server(state: State<'_, AppState>) -> Result<(), String> {
+    stop_server_inner(state.inner())
+}
+
+fn stop_server_inner(state: &AppState) -> Result<(), String> {
     let mut process_guard = state.server_process.lock().unwrap();
     let mut port_guard = state.server_port.lock().unwrap();
     if let Some(child) = process_guard.take() {
@@ -818,6 +837,43 @@ async fn stop_server(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 async fn stop_csm_server(state: State<'_, AppState>) -> Result<(), String> {
     stop_csm_server_inner(state.inner()).await
+}
+
+#[tauri::command]
+fn start_call_timer(app_handle: AppHandle, state: State<'_, AppState>, muted: bool) {
+    {
+        let mut call_in_progress_guard = state.call_in_progress.lock().unwrap();
+        *call_in_progress_guard = true;
+    }
+    {
+        let mut call_muted_guard = state.call_muted.lock().unwrap();
+        *call_muted_guard = muted;
+    }
+    refresh_tray_menu(&app_handle);
+    start_call_timer_inner(&app_handle, state.inner());
+}
+
+#[tauri::command]
+fn stop_call_timer(app_handle: AppHandle, state: State<'_, AppState>) {
+    {
+        let mut call_in_progress_guard = state.call_in_progress.lock().unwrap();
+        *call_in_progress_guard = false;
+    }
+    {
+        let mut call_muted_guard = state.call_muted.lock().unwrap();
+        *call_muted_guard = false;
+    }
+    refresh_tray_menu(&app_handle);
+    stop_call_timer_inner(&app_handle, state.inner());
+}
+
+#[tauri::command]
+fn set_call_muted(app_handle: AppHandle, state: State<'_, AppState>, muted: bool) {
+    {
+        let mut call_muted_guard = state.call_muted.lock().unwrap();
+        *call_muted_guard = muted;
+    }
+    refresh_tray_menu(&app_handle);
 }
 
 struct PreparedAudioChunk {
@@ -1976,19 +2032,8 @@ async fn csm_process_is_ready(state: &AppState) -> bool {
 }
 
 async fn stop_csm_server_inner(state: &AppState) -> Result<(), String> {
-    let process = {
-        let mut csm_process_guard = state.csm_process.lock().unwrap();
-        csm_process_guard.take()
-    };
-    {
-        let mut loaded_csm_model_guard = state.loaded_csm_model.lock().unwrap();
-        *loaded_csm_model_guard = None;
-    }
-    {
-        let mut csm_ready_guard = state.csm_ready.lock().unwrap();
-        *csm_ready_guard = false;
-    }
-    reset_csm_startup_state(state);
+    let process = take_csm_process(state);
+    reset_csm_runtime_state(state);
 
     let Some(process) = process else {
         return Ok(());
@@ -2006,6 +2051,147 @@ async fn stop_csm_server_inner(state: &AppState) -> Result<(), String> {
         warn!("Failed to kill CSM worker cleanly: {}", err);
     }
 
+    Ok(())
+}
+
+fn take_csm_process(state: &AppState) -> Option<CsmProcess> {
+    let mut csm_process_guard = state.csm_process.lock().unwrap();
+    csm_process_guard.take()
+}
+
+fn reset_csm_runtime_state(state: &AppState) {
+    {
+        let mut loaded_csm_model_guard = state.loaded_csm_model.lock().unwrap();
+        *loaded_csm_model_guard = None;
+    }
+    {
+        let mut csm_ready_guard = state.csm_ready.lock().unwrap();
+        *csm_ready_guard = false;
+    }
+    reset_csm_startup_state(state);
+}
+
+fn stop_csm_server_for_exit(state: &AppState) {
+    let process = take_csm_process(state);
+    reset_csm_runtime_state(state);
+
+    let Some(process) = process else {
+        return;
+    };
+
+    let mut child = process.child.blocking_lock();
+    if let Err(err) = child.start_kill() {
+        warn!("Failed to stop CSM worker during app exit: {}", err);
+    }
+}
+
+fn cleanup_before_app_exit(app_handle: &AppHandle) {
+    let state = app_handle.state::<AppState>();
+    *state.call_in_progress.lock().unwrap() = false;
+    *state.call_muted.lock().unwrap() = false;
+    clear_call_timer_state(state.inner());
+    stop_server_inner(state.inner()).unwrap_or_else(|err| {
+        warn!("Failed to stop MLX server during app exit: {}", err);
+    });
+    stop_csm_server_for_exit(state.inner());
+}
+
+fn request_app_quit(app_handle: &AppHandle) {
+    {
+        let state = app_handle.state::<AppState>();
+        let mut quitting_guard = state.is_quitting.lock().unwrap();
+        *quitting_guard = true;
+    }
+
+    cleanup_before_app_exit(app_handle);
+    app_handle.exit(0);
+}
+
+#[cfg(target_os = "macos")]
+fn refresh_tray_menu(app_handle: &AppHandle) {
+    let state = app_handle.state::<AppState>();
+    let call_in_progress = *state.call_in_progress.lock().unwrap();
+    let call_muted = *state.call_muted.lock().unwrap();
+
+    let mut builder = MenuBuilder::new(app_handle).text(TRAY_SHOW_MENU_ID, "Show OpenDuck");
+
+    if call_in_progress {
+        let mute_label = if call_muted { "Unmute" } else { "Mute" };
+        builder = builder
+            .separator()
+            .text(TRAY_END_CALL_MENU_ID, "End Call")
+            .text(TRAY_TOGGLE_MUTE_MENU_ID, mute_label);
+    }
+
+    let menu = match builder
+        .separator()
+        .text(TRAY_QUIT_MENU_ID, "Quit OpenDuck")
+        .build()
+    {
+        Ok(menu) => menu,
+        Err(err) => {
+            error!("Failed to build tray menu: {}", err);
+            return;
+        }
+    };
+
+    let Some(tray) = app_handle.tray_by_id(TRAY_ICON_ID) else {
+        return;
+    };
+
+    if let Err(err) = tray.set_menu(Some(menu)) {
+        error!("Failed to update tray menu: {}", err);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn refresh_tray_menu(_app_handle: &AppHandle) {}
+
+#[cfg(target_os = "macos")]
+fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+
+    let menu = MenuBuilder::new(app_handle)
+        .text(TRAY_SHOW_MENU_ID, "Show OpenDuck")
+        .text(TRAY_QUIT_MENU_ID, "Quit OpenDuck")
+        .build()?;
+
+    TrayIconBuilder::with_id(TRAY_ICON_ID)
+        .menu(&menu)
+        .icon(icon)
+        .icon_as_template(true)
+        .show_menu_on_left_click(true)
+        .tooltip("OpenDuck")
+        .on_menu_event(|app_handle, event| match event.id().as_ref() {
+            TRAY_SHOW_MENU_ID => {
+                if let Err(err) = show_main_window(app_handle) {
+                    error!("Failed to show OpenDuck from tray: {}", err);
+                }
+            }
+            TRAY_END_CALL_MENU_ID => {
+                if let Err(err) = app_handle.emit(TRAY_END_CALL_EVENT, ()) {
+                    error!("Failed to emit tray end call event: {}", err);
+                }
+            }
+            TRAY_TOGGLE_MUTE_MENU_ID => {
+                if let Err(err) = app_handle.emit(TRAY_TOGGLE_MUTE_EVENT, ()) {
+                    error!("Failed to emit tray mute toggle event: {}", err);
+                }
+            }
+            TRAY_QUIT_MENU_ID => {
+                request_app_quit(app_handle);
+            }
+            _ => {}
+        })
+        .build(app_handle)?;
+
+    update_tray_timer_title(app_handle, None);
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn create_tray(_app_handle: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
@@ -2349,6 +2535,85 @@ fn reset_call_session_state(state: &AppState) {
     state
         .conversation_session_id
         .fetch_add(1, Ordering::Relaxed);
+}
+
+fn format_call_duration(elapsed: Duration) -> String {
+    let total_seconds = elapsed.as_secs();
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{minutes:02}:{seconds:02}")
+}
+
+fn format_tray_timer_title(elapsed: Duration) -> String {
+    format!(" {}", format_call_duration(elapsed))
+}
+
+fn clear_call_timer_state(state: &AppState) {
+    state.tray_timer_generation.fetch_add(1, Ordering::Relaxed);
+    let mut started_at_guard = state.call_started_at.lock().unwrap();
+    *started_at_guard = None;
+}
+
+#[cfg(target_os = "macos")]
+fn update_tray_timer_title(app_handle: &AppHandle, title: Option<&str>) {
+    let Some(tray) = app_handle.tray_by_id(TRAY_ICON_ID) else {
+        return;
+    };
+
+    if let Err(err) = tray.set_title(Some(title.unwrap_or(""))) {
+        error!("Failed to update tray title: {}", err);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn update_tray_timer_title(_app_handle: &AppHandle, _title: Option<&str>) {}
+
+fn start_call_timer_inner(app_handle: &AppHandle, state: &AppState) {
+    let started_at = Instant::now();
+    let generation = state.tray_timer_generation.fetch_add(1, Ordering::Relaxed) + 1;
+
+    {
+        let mut started_at_guard = state.call_started_at.lock().unwrap();
+        *started_at_guard = Some(started_at);
+    }
+
+    let initial_title = format_tray_timer_title(Duration::from_secs(0));
+    update_tray_timer_title(app_handle, Some(initial_title.as_str()));
+
+    let app_handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+
+            let state = app_handle.state::<AppState>();
+            if state.tray_timer_generation.load(Ordering::Relaxed) != generation {
+                break;
+            }
+
+            let Some(call_started_at) = *state.call_started_at.lock().unwrap() else {
+                break;
+            };
+
+            let title = format_tray_timer_title(call_started_at.elapsed());
+            update_tray_timer_title(&app_handle, Some(title.as_str()));
+        }
+    });
+}
+
+fn stop_call_timer_inner(app_handle: &AppHandle, state: &AppState) {
+    clear_call_timer_state(state);
+    update_tray_timer_title(app_handle, None);
+}
+
+fn show_main_window(app_handle: &AppHandle) -> Result<(), String> {
+    let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return Err("Failed to find the main OpenDuck window".to_string());
+    };
+
+    let _ = window.unminimize();
+    window.show().map_err(|err| err.to_string())?;
+    window.set_focus().map_err(|err| err.to_string())?;
+    Ok(())
 }
 
 fn reset_csm_startup_state(state: &AppState) {
@@ -3271,6 +3536,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             reap_stale_model_processes(app.handle());
+            create_tray(app.handle())?;
             Ok(())
         })
         .manage(AppState {
@@ -3301,12 +3567,20 @@ pub fn run() {
             active_generation: Mutex::new(None),
             conversation_turns: Mutex::new(VecDeque::new()),
             conversation_session_id: AtomicU64::new(1),
+            call_started_at: Mutex::new(None),
+            tray_timer_generation: AtomicU64::new(0),
+            call_in_progress: Mutex::new(false),
+            call_muted: Mutex::new(false),
+            is_quitting: Mutex::new(false),
         })
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             receive_audio_chunk,
             ping,
             reset_call_session,
+            start_call_timer,
+            stop_call_timer,
+            set_call_muted,
             get_gemma_variant,
             set_gemma_variant,
             check_model_status,
@@ -3329,23 +3603,27 @@ pub fn run() {
             stop_csm_server
         ])
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
-                let mut process_guard = state.server_process.lock().unwrap();
-                let mut port_guard = state.server_port.lock().unwrap();
-                if let Some(child) = process_guard.take() {
-                    info!("Killing MLX Server on app exit...");
-                    let _: Result<(), _> = child.kill();
+                if *state.is_quitting.lock().unwrap() {
+                    return;
                 }
-                *port_guard = None;
 
-                let app_handle = window.app_handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let state = app_handle.state::<AppState>();
-                    let _ = stop_csm_server_inner(state.inner()).await;
-                });
+                api.prevent_close();
+                if let Err(err) = window.hide() {
+                    error!("Failed to hide window to tray: {}", err);
+                }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let state = app_handle.state::<AppState>();
+                let mut quitting_guard = state.is_quitting.lock().unwrap();
+                *quitting_guard = true;
+                cleanup_before_app_exit(app_handle);
+            }
+        });
 }

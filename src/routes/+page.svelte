@@ -38,6 +38,9 @@
         text: string;
     };
 
+    type TrayEndCallEvent = Record<string, never>;
+    type TrayToggleMuteEvent = Record<string, never>;
+
     type ModelDownloadProgressEvent = {
         model: "gemma" | "csm";
         phase: "progress" | "completed" | "error" | "cancelled";
@@ -60,6 +63,7 @@
     let calling = $state(false);
     let micMuted = $state(false);
     let time = $state(0);
+    let callStartedAtMs = $state<number | null>(null);
     let isGemmaDownloaded = $state(false);
     let isGemmaLoaded = $state(false);
     let isCsmDownloaded = $state(false);
@@ -184,6 +188,15 @@
         callStageMessage = message;
     }
 
+    function syncCallElapsedTime() {
+        if (callStartedAtMs == null) {
+            time = 0;
+            return;
+        }
+
+        time = Math.max(0, Math.floor((Date.now() - callStartedAtMs) / 1000));
+    }
+
     function scrollConversationLogToBottom() {
         window.requestAnimationFrame(() => {
             if (conversationLogViewport) {
@@ -234,6 +247,26 @@
         if (event.key === "Escape" && showConversationPopup) {
             closeConversationPopup();
         }
+    }
+
+    function handleWindowFocus() {
+        if (calling) {
+            syncCallElapsedTime();
+        }
+    }
+
+    function stopCallTimerTracking() {
+        callStartedAtMs = null;
+        time = 0;
+
+        if (callTimerInterval) {
+            clearInterval(callTimerInterval);
+            callTimerInterval = null;
+        }
+
+        void invoke("stop_call_timer").catch((err) =>
+            console.error("Failed to stop tray call timer", err),
+        );
     }
 
     function resetDownloadState(model: "gemma" | "csm") {
@@ -566,6 +599,7 @@
         } catch (err) {
             console.error("Failed to start audio capture:", err);
             calling = false;
+            stopCallTimerTracking();
         }
     }
 
@@ -724,10 +758,14 @@
         closeConversationPopup();
         resetConversationLog();
         calling = true;
-        time = 0;
+        callStartedAtMs = Date.now();
+        syncCallElapsedTime();
         activeTtsRequestId = null;
         setCallStage("listening", "Listening");
 
+        void invoke("start_call_timer", { muted: micMuted }).catch((err) =>
+            console.error("Failed to start tray call timer", err),
+        );
         void startAudioCapture();
         void invoke("ping").catch((err) =>
             console.error("Backend ping failed", err),
@@ -738,14 +776,14 @@
         }
 
         callTimerInterval = window.setInterval(() => {
-            if (!calling) {
+            if (!calling || callStartedAtMs == null) {
                 if (callTimerInterval) {
                     clearInterval(callTimerInterval);
                     callTimerInterval = null;
                 }
                 return;
             }
-            time += 1;
+            syncCallElapsedTime();
         }, 1000);
     }
 
@@ -756,11 +794,7 @@
         closeConversationPopup();
         resetConversationLog();
         setCallStage("idle", "");
-
-        if (callTimerInterval) {
-            clearInterval(callTimerInterval);
-            callTimerInterval = null;
-        }
+        stopCallTimerTracking();
 
         try {
             await invoke("reset_call_session");
@@ -771,6 +805,9 @@
 
     function toggleMic() {
         micMuted = !micMuted;
+        void invoke("set_call_muted", { muted: micMuted }).catch((err) =>
+            console.error("Failed to sync tray mute state", err),
+        );
     }
 
     async function handleDownloadGemma() {
@@ -1059,6 +1096,16 @@
                             applyDownloadEvent(payload);
                         },
                     ),
+                    listen<TrayEndCallEvent>("tray-end-call", () => {
+                        if (calling) {
+                            void handleEndCall();
+                        }
+                    }),
+                    listen<TrayToggleMuteEvent>("tray-toggle-mute", () => {
+                        if (calling) {
+                            toggleMic();
+                        }
+                    }),
                 ]);
             } catch (err) {
                 console.error("Failed to register Tauri event listeners:", err);
@@ -1071,9 +1118,7 @@
             clearInterval(healthCheckInterval);
         }
         stopDownloadStatusPolling();
-        if (callTimerInterval) {
-            clearInterval(callTimerInterval);
-        }
+        stopCallTimerTracking();
         if (playbackIdleTimeout) {
             clearTimeout(playbackIdleTimeout);
         }
@@ -1088,7 +1133,7 @@
     });
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} />
+<svelte:window onkeydown={handleWindowKeydown} onfocus={handleWindowFocus} />
 
 <div class="app-container">
     <div class="background"></div>
