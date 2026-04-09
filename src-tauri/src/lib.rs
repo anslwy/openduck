@@ -61,6 +61,7 @@ const TRAY_END_CALL_EVENT: &str = "tray-end-call";
 const TRAY_TOGGLE_MUTE_EVENT: &str = "tray-toggle-mute";
 const MAX_CONVERSATION_TURNS: usize = 24;
 const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 1;
+const MAX_SPOKEN_WORDS_PER_SEGMENT: usize = 16;
 const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
 const DEFAULT_VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
@@ -2145,8 +2146,7 @@ fn is_tight_trailing_punctuation(ch: char) -> bool {
 fn prepare_spoken_response_segments_for_csm(text: &str) -> Vec<String> {
     split_spoken_response_into_segments(text, MAX_SPOKEN_SENTENCES_PER_SEGMENT)
         .into_iter()
-        .map(|segment| segment.replace(",", ""))
-        .filter(|segment| !segment.trim().is_empty())
+        .flat_map(|segment| split_long_spoken_segment_for_csm(&segment))
         .collect()
 }
 
@@ -2156,8 +2156,7 @@ fn prepare_completed_spoken_response_segments_for_csm(text: &str) -> (Vec<String
     (
         segments
             .into_iter()
-            .map(|segment| segment.replace(",", ""))
-            .filter(|segment| !segment.trim().is_empty())
+            .flat_map(|segment| split_long_spoken_segment_for_csm(&segment))
             .collect(),
         consumed_len,
     )
@@ -2187,7 +2186,7 @@ fn collect_spoken_response_segments(
             if sentence_count >= max_sentences {
                 let end = expand_speech_boundary(normalized, idx + ch.len_utf8());
                 let segment = normalized[segment_start..end].trim();
-                if !segment.is_empty() {
+                if contains_spoken_content(segment) {
                     segments.push(segment.to_string());
                 }
                 segment_start = end;
@@ -2209,13 +2208,105 @@ fn collect_spoken_response_segments(
 
     if include_trailing_incomplete {
         let trailing_segment = normalized[segment_start..].trim();
-        if !trailing_segment.is_empty() {
+        if contains_spoken_content(trailing_segment) {
             segments.push(trailing_segment.to_string());
             consumed_len = normalized.len();
         }
     }
 
     (segments, consumed_len)
+}
+
+fn split_long_spoken_segment_for_csm(segment: &str) -> Vec<String> {
+    let normalized = collapse_whitespace(segment);
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let words = trimmed.split_whitespace().collect::<Vec<_>>();
+    if words.len() <= MAX_SPOKEN_WORDS_PER_SEGMENT {
+        return normalize_spoken_chunks_for_csm(vec![(trimmed.to_string(), true)]);
+    }
+
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+    while start < words.len() {
+        let limit = (start + MAX_SPOKEN_WORDS_PER_SEGMENT).min(words.len());
+        let mut end = limit;
+
+        if let Some(preferred_end) = find_preferred_spoken_chunk_end(&words, start, limit) {
+            let chunk_word_count = preferred_end.saturating_sub(start);
+            if chunk_word_count >= 4 || preferred_end == words.len() {
+                end = preferred_end;
+            }
+        }
+
+        let is_last = end == words.len();
+        chunks.push((words[start..end].join(" "), is_last));
+        start = end;
+    }
+
+    normalize_spoken_chunks_for_csm(chunks)
+}
+
+fn find_preferred_spoken_chunk_end(
+    words: &[&str],
+    start: usize,
+    limit: usize,
+) -> Option<usize> {
+    for candidate in (start + 1..=limit).rev() {
+        let trailing_word = words[candidate - 1]
+            .trim_end_matches(|ch: char| matches!(ch, '"' | '\'' | ')' | ']' | '}'));
+        let Some(last_char) = trailing_word.chars().last() else {
+            continue;
+        };
+
+        if matches!(last_char, ',' | ';' | ':' | '.' | '!' | '?') {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn normalize_spoken_chunks_for_csm(chunks: Vec<(String, bool)>) -> Vec<String> {
+    chunks
+        .into_iter()
+        .filter_map(|(chunk, is_last)| normalize_spoken_chunk_for_csm(&chunk, is_last))
+        .collect()
+}
+
+fn normalize_spoken_chunk_for_csm(chunk: &str, is_last: bool) -> Option<String> {
+    let mut cleaned = collapse_whitespace(chunk).replace(",", "");
+    cleaned = cleaned.trim().to_string();
+    if !contains_spoken_content(&cleaned) {
+        return None;
+    }
+
+    while matches!(
+        cleaned.chars().last(),
+        Some(',' | ';' | ':' | '-' | '—')
+    ) {
+        cleaned.pop();
+        cleaned = cleaned.trim_end().to_string();
+    }
+
+    if !contains_spoken_content(&cleaned) {
+        return None;
+    }
+
+    let has_terminal_punctuation =
+        matches!(cleaned.chars().last(), Some('.' | '!' | '?'));
+    if !has_terminal_punctuation && !is_last {
+        cleaned.push('.');
+    }
+
+    Some(cleaned)
+}
+
+fn contains_spoken_content(text: &str) -> bool {
+    text.chars().any(|ch| ch.is_alphanumeric())
 }
 
 fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
@@ -2241,7 +2332,7 @@ mod tests {
         parse_gemma_stream_event, prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, resolve_capture_sample_rate,
         sanitize_for_voice_output, suppress_playback_echo, AudioPayload, ParsedGemmaStreamEvent,
-        DEFAULT_SAMPLE_RATE,
+        DEFAULT_SAMPLE_RATE, MAX_SPOKEN_WORDS_PER_SEGMENT,
     };
 
     #[test]
@@ -2288,6 +2379,40 @@ mod tests {
 
         assert_eq!(segments, vec!["Hello there.".to_string()]);
         assert_eq!(&response_text[consumed_len..], "How are");
+    }
+
+    #[test]
+    fn long_single_sentence_is_split_into_shorter_spoken_segments() {
+        let response_text = "Alright, alright, settle down folks! You're looking at the one and only Monkey D. Luffy and I'm not your average primate because I'm a pirate with a dream bigger than the whole sea.";
+        let segments = prepare_spoken_response_segments_for_csm(response_text);
+
+        assert!(segments.len() > 1);
+        assert!(segments.iter().all(|segment| {
+            segment.split_whitespace().count() <= MAX_SPOKEN_WORDS_PER_SEGMENT
+        }));
+    }
+
+    #[test]
+    fn completed_spoken_segments_split_long_finished_sentence_without_losing_tail() {
+        let response_text = "This is an extremely long finished sentence that should be broken into smaller chunks for speech synthesis because otherwise the speech worker can cut it off midway through playback. Next bit";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert!(segments.len() > 1);
+        assert_eq!(&response_text[consumed_len..], "Next bit");
+    }
+
+    #[test]
+    fn completed_spoken_segments_drop_punctuation_only_ellipsis_tail() {
+        let response_text = "Letting everyone peek under the hood, tinker, improve... Next bit";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(
+            segments,
+            vec!["Letting everyone peek under the hood tinker improve.".to_string()]
+        );
+        assert_eq!(&response_text[consumed_len..], "Next bit");
     }
 
     #[test]
