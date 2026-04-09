@@ -2,6 +2,7 @@
     import { onDestroy, onMount } from "svelte";
     import { invoke } from "@tauri-apps/api/core";
     import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+    import { save } from "@tauri-apps/plugin-dialog";
 
     type CsmAudioStartEvent = {
         request_id: number;
@@ -68,6 +69,285 @@
         text: string;
     };
 
+    type StoredContactProfile = {
+        id: string;
+        name: string;
+        prompt: string;
+        hasCustomIcon: boolean;
+    };
+
+    type ContactProfile = StoredContactProfile & {
+        iconDataUrl: string | null;
+    };
+
+    type StoredContactsPayload = {
+        version: 1;
+        selectedContactId: string;
+        contacts: StoredContactProfile[];
+    };
+
+    type ContactExportResult = {
+        savedPath: string;
+    };
+
+    const DEFAULT_VOICE_SYSTEM_PROMPT =
+        "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
+    const CONTACTS_STORAGE_KEY = "openduck.contacts.v1";
+    const CONTACT_ICONS_DB_NAME = "openduck.contacts";
+    const CONTACT_ICONS_STORE_NAME = "contact-icons";
+    const DEFAULT_CONTACT_ID = "contact-openduck";
+
+    let contactIconsDbPromise: Promise<IDBDatabase> | null = null;
+
+    function createDefaultContact(): ContactProfile {
+        return {
+            id: DEFAULT_CONTACT_ID,
+            name: "OpenDuck",
+            prompt: DEFAULT_VOICE_SYSTEM_PROMPT,
+            hasCustomIcon: false,
+            iconDataUrl: null,
+        };
+    }
+
+    function getContactDisplayName(
+        contact: Pick<ContactProfile, "name"> | null | undefined,
+    ) {
+        const name = contact?.name.trim();
+        return name ? name : "Untitled contact";
+    }
+
+    function createContactId() {
+        if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+            return crypto.randomUUID();
+        }
+
+        return `contact-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function createStoredContactsPayload(
+        contactList: ContactProfile[],
+        activeContactId: string,
+    ): StoredContactsPayload {
+        return {
+            version: 1,
+            selectedContactId: activeContactId,
+            contacts: contactList.map((contact) => ({
+                id: contact.id,
+                name: contact.name,
+                prompt: contact.prompt,
+                hasCustomIcon: contact.hasCustomIcon,
+            })),
+        };
+    }
+
+    function normalizeStoredContactProfile(
+        value: unknown,
+    ): StoredContactProfile | null {
+        if (!value || typeof value !== "object") {
+            return null;
+        }
+
+        const record = value as Record<string, unknown>;
+        const id =
+            typeof record.id === "string" && record.id.trim()
+                ? record.id.trim()
+                : null;
+        if (!id) {
+            return null;
+        }
+
+        return {
+            id,
+            name: typeof record.name === "string" ? record.name : "",
+            prompt:
+                typeof record.prompt === "string" &&
+                record.prompt.trim().length > 0
+                    ? record.prompt
+                    : DEFAULT_VOICE_SYSTEM_PROMPT,
+            hasCustomIcon: Boolean(record.hasCustomIcon),
+        };
+    }
+
+    function slugifyContactName(name: string) {
+        const slug = name
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "");
+        return slug || "contact";
+    }
+
+    function readFileAsDataUrl(file: File) {
+        return new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                if (typeof reader.result === "string") {
+                    resolve(reader.result);
+                    return;
+                }
+
+                reject(new Error("Failed to read file as a data URL."));
+            };
+            reader.onerror = () =>
+                reject(reader.error ?? new Error("Failed to read file."));
+            reader.readAsDataURL(file);
+        });
+    }
+
+    function openContactIconsDatabase() {
+        if (contactIconsDbPromise) {
+            return contactIconsDbPromise;
+        }
+
+        contactIconsDbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+            const request = window.indexedDB.open(CONTACT_ICONS_DB_NAME, 1);
+
+            request.onupgradeneeded = () => {
+                const database = request.result;
+                if (!database.objectStoreNames.contains(CONTACT_ICONS_STORE_NAME)) {
+                    database.createObjectStore(CONTACT_ICONS_STORE_NAME);
+                }
+            };
+
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () =>
+                reject(
+                    request.error ??
+                        new Error("Failed to open the contacts icon database."),
+                );
+        });
+
+        return contactIconsDbPromise;
+    }
+
+    async function runContactIconStoreRequest(
+        mode: IDBTransactionMode,
+        requestFactory: (store: IDBObjectStore) => IDBRequest,
+    ) {
+        const database = await openContactIconsDatabase();
+
+        return new Promise<unknown>((resolve, reject) => {
+            const transaction = database.transaction(CONTACT_ICONS_STORE_NAME, mode);
+            const store = transaction.objectStore(CONTACT_ICONS_STORE_NAME);
+            const request = requestFactory(store);
+
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () =>
+                reject(
+                    request.error ??
+                        new Error("A contacts icon storage request failed."),
+                );
+            transaction.onerror = () =>
+                reject(
+                    transaction.error ??
+                        new Error("A contacts icon transaction failed."),
+                );
+        });
+    }
+
+    async function loadStoredContactIcon(contactId: string) {
+        if (typeof window === "undefined" || !("indexedDB" in window)) {
+            return null;
+        }
+
+        const result = await runContactIconStoreRequest("readonly", (store) =>
+            store.get(contactId),
+        );
+
+        return typeof result === "string" ? result : null;
+    }
+
+    async function saveStoredContactIcon(contactId: string, dataUrl: string) {
+        if (typeof window === "undefined" || !("indexedDB" in window)) {
+            return;
+        }
+
+        await runContactIconStoreRequest("readwrite", (store) =>
+            store.put(dataUrl, contactId),
+        );
+    }
+
+    async function deleteStoredContactIcon(contactId: string) {
+        if (typeof window === "undefined" || !("indexedDB" in window)) {
+            return;
+        }
+
+        await runContactIconStoreRequest("readwrite", (store) =>
+            store.delete(contactId),
+        );
+    }
+
+    async function loadContactsFromStorage() {
+        if (typeof window === "undefined") {
+            return {
+                contacts: [createDefaultContact()],
+                selectedContactId: DEFAULT_CONTACT_ID,
+            };
+        }
+
+        const rawPayload = window.localStorage.getItem(CONTACTS_STORAGE_KEY);
+        if (!rawPayload) {
+            return {
+                contacts: [createDefaultContact()],
+                selectedContactId: DEFAULT_CONTACT_ID,
+            };
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                contacts?: unknown;
+                selectedContactId?: unknown;
+            };
+            const storedContacts = Array.isArray(parsed.contacts)
+                ? parsed.contacts
+                      .map((contact) => normalizeStoredContactProfile(contact))
+                      .filter(
+                          (contact): contact is StoredContactProfile =>
+                              contact !== null,
+                      )
+                : [];
+
+            if (storedContacts.length === 0) {
+                return {
+                    contacts: [createDefaultContact()],
+                    selectedContactId: DEFAULT_CONTACT_ID,
+                };
+            }
+
+            const contactsWithIcons = await Promise.all(
+                storedContacts.map(async (contact) => {
+                    const iconDataUrl = contact.hasCustomIcon
+                        ? await loadStoredContactIcon(contact.id)
+                        : null;
+
+                    return {
+                        ...contact,
+                        hasCustomIcon: Boolean(iconDataUrl),
+                        iconDataUrl,
+                    };
+                }),
+            );
+            const activeContactId =
+                typeof parsed.selectedContactId === "string" &&
+                contactsWithIcons.some(
+                    (contact) => contact.id === parsed.selectedContactId,
+                )
+                    ? parsed.selectedContactId
+                    : contactsWithIcons[0].id;
+
+            return {
+                contacts: contactsWithIcons,
+                selectedContactId: activeContactId,
+            };
+        } catch (err) {
+            console.error("Failed to load stored contacts:", err);
+            return {
+                contacts: [createDefaultContact()],
+                selectedContactId: DEFAULT_CONTACT_ID,
+            };
+        }
+    }
+
     let calling = $state(false);
     let micMuted = $state(false);
     let time = $state(0);
@@ -116,6 +396,9 @@
     let activeTtsRequestId: number | null = null;
     let pendingTtsSegments = $state(0);
     let queuedPlaybackChunkCount = $state(0);
+    let contacts = $state<ContactProfile[]>([createDefaultContact()]);
+    let selectedContactId = $state(DEFAULT_CONTACT_ID);
+    let showContactsPopup = $state(false);
     let showConversationPopup = $state(false);
     let conversationLogEntries = $state<ConversationLogEntry[]>([]);
     let nextConversationEntryId = 1;
@@ -130,6 +413,11 @@
         | "speaking"
     >("idle");
     let callStageMessage = $state("");
+    let contactsImportInput: HTMLInputElement | null = null;
+    let contactIconInput: HTMLInputElement | null = null;
+    let selectedContactPromptSyncTimeout:
+        | ReturnType<typeof window.setTimeout>
+        | null = null;
 
     const formattedTime = $derived(
         `${Math.floor(time / 60)
@@ -182,6 +470,21 @@
             : "Kokoro-82M is a lighter English TTS backend. Quantization is not used for this model.",
     );
     const csmQuantizeAvailable = $derived(selectedCsmModel === "expressiva_1b");
+    const selectedContact = $derived(
+        contacts.find((contact) => contact.id === selectedContactId) ??
+            contacts[0] ??
+            null,
+    );
+    const selectedContactName = $derived(getContactDisplayName(selectedContact));
+    const selectedContactPrompt = $derived(
+        selectedContact?.prompt.trim() || DEFAULT_VOICE_SYSTEM_PROMPT,
+    );
+    const selectedContactIconUrl = $derived(
+        selectedContact?.iconDataUrl ?? "/icon.png",
+    );
+    const selectedContactImageStyle = $derived(
+        `background-image: url('${selectedContactIconUrl}')`,
+    );
     const PLAYBACK_PREBUFFER_SAMPLES = 2048;
 
     function setCallStage(
@@ -275,19 +578,304 @@
         activeAssistantConversationEntryId = null;
     }
 
+    function persistContactsMetadata() {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload = createStoredContactsPayload(contacts, selectedContactId);
+        window.localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(payload));
+    }
+
+    async function syncSelectedContactPrompt() {
+        try {
+            await invoke("set_voice_system_prompt", {
+                prompt: selectedContactPrompt,
+            });
+        } catch (err) {
+            console.error("Failed to sync the selected contact prompt:", err);
+        }
+    }
+
+    function queueSelectedContactPromptSync() {
+        if (selectedContactPromptSyncTimeout) {
+            clearTimeout(selectedContactPromptSyncTimeout);
+        }
+
+        selectedContactPromptSyncTimeout = window.setTimeout(() => {
+            selectedContactPromptSyncTimeout = null;
+            void syncSelectedContactPrompt();
+        }, 160);
+    }
+
+    function updateContactById(
+        contactId: string,
+        updater: (contact: ContactProfile) => ContactProfile,
+    ) {
+        let didUpdate = false;
+        contacts = contacts.map((contact) => {
+            if (contact.id !== contactId) {
+                return contact;
+            }
+
+            didUpdate = true;
+            return updater(contact);
+        });
+
+        if (didUpdate) {
+            persistContactsMetadata();
+        }
+    }
+
+    function closeContactsPopup() {
+        showContactsPopup = false;
+    }
+
     function closeConversationPopup() {
         showConversationPopup = false;
+    }
+
+    function toggleContactsPopup() {
+        showContactsPopup = !showContactsPopup;
+        if (showContactsPopup) {
+            closeConversationPopup();
+        }
     }
 
     function toggleConversationPopup() {
         showConversationPopup = !showConversationPopup;
         if (showConversationPopup) {
+            closeContactsPopup();
             scrollConversationLogToBottom();
         }
     }
 
+    function selectContact(contactId: string) {
+        if (!contacts.some((contact) => contact.id === contactId)) {
+            return;
+        }
+
+        selectedContactId = contactId;
+        persistContactsMetadata();
+        queueSelectedContactPromptSync();
+    }
+
+    function createNewContact() {
+        const nextContact: ContactProfile = {
+            id: createContactId(),
+            name: `Contact ${contacts.length + 1}`,
+            prompt: selectedContact?.prompt ?? DEFAULT_VOICE_SYSTEM_PROMPT,
+            hasCustomIcon: false,
+            iconDataUrl: null,
+        };
+
+        contacts = [...contacts, nextContact];
+        selectedContactId = nextContact.id;
+        persistContactsMetadata();
+        showContactsPopup = true;
+        queueSelectedContactPromptSync();
+    }
+
+    async function handleDeleteSelectedContact() {
+        if (!selectedContact || contacts.length <= 1) {
+            return;
+        }
+
+        const contactId = selectedContact.id;
+        try {
+            await deleteStoredContactIcon(contactId);
+        } catch (err) {
+            console.error("Failed to remove the contact icon:", err);
+        }
+
+        const remainingContacts = contacts.filter(
+            (contact) => contact.id !== contactId,
+        );
+        contacts = remainingContacts;
+        selectedContactId = remainingContacts[0]?.id ?? DEFAULT_CONTACT_ID;
+        persistContactsMetadata();
+        queueSelectedContactPromptSync();
+    }
+
+    function handleSelectedContactNameInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextName = (event.currentTarget as HTMLInputElement).value;
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            name: nextName,
+        }));
+    }
+
+    function handleSelectedContactPromptInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextPrompt = (event.currentTarget as HTMLTextAreaElement).value;
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            prompt: nextPrompt,
+        }));
+        queueSelectedContactPromptSync();
+    }
+
+    function triggerContactImport() {
+        contactsImportInput?.click();
+    }
+
+    function triggerContactIconUpload() {
+        contactIconInput?.click();
+    }
+
+    async function handleContactImportChange(event: Event) {
+        const input = event.currentTarget as HTMLInputElement;
+        const file = input.files?.[0];
+        input.value = "";
+
+        if (!file) {
+            return;
+        }
+
+        try {
+            const rawText = await file.text();
+            const parsed = JSON.parse(rawText) as Record<string, unknown>;
+            const nextName = typeof parsed.name === "string" ? parsed.name : "";
+            const nextPrompt =
+                typeof parsed.prompt === "string" ? parsed.prompt : "";
+            const iconDataUrl =
+                typeof parsed.iconDataUrl === "string" &&
+                parsed.iconDataUrl.startsWith("data:image/")
+                    ? parsed.iconDataUrl
+                    : null;
+
+            if (!nextName.trim()) {
+                throw new Error("The imported contact is missing a name.");
+            }
+
+            if (!nextPrompt.trim()) {
+                throw new Error("The imported contact is missing a prompt.");
+            }
+
+            const nextContact: ContactProfile = {
+                id: createContactId(),
+                name: nextName,
+                prompt: nextPrompt,
+                hasCustomIcon: Boolean(iconDataUrl),
+                iconDataUrl,
+            };
+
+            if (iconDataUrl) {
+                await saveStoredContactIcon(nextContact.id, iconDataUrl);
+            }
+
+            contacts = [...contacts, nextContact];
+            selectedContactId = nextContact.id;
+            persistContactsMetadata();
+            showContactsPopup = true;
+            queueSelectedContactPromptSync();
+        } catch (err) {
+            console.error("Failed to import contact:", err);
+            alert(`Failed to import contact.\n${normalizeErrorMessage(err)}`);
+        }
+    }
+
+    async function handleContactIconChange(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const input = event.currentTarget as HTMLInputElement;
+        const file = input.files?.[0];
+        input.value = "";
+
+        if (!file) {
+            return;
+        }
+
+        try {
+            const iconDataUrl = await readFileAsDataUrl(file);
+            await saveStoredContactIcon(selectedContact.id, iconDataUrl);
+            updateContactById(selectedContact.id, (contact) => ({
+                ...contact,
+                hasCustomIcon: true,
+                iconDataUrl,
+            }));
+        } catch (err) {
+            console.error("Failed to save the selected contact icon:", err);
+            alert(`Failed to save contact icon.\n${normalizeErrorMessage(err)}`);
+        }
+    }
+
+    async function handleResetSelectedContactIcon() {
+        if (!selectedContact?.hasCustomIcon) {
+            return;
+        }
+
+        try {
+            await deleteStoredContactIcon(selectedContact.id);
+            updateContactById(selectedContact.id, (contact) => ({
+                ...contact,
+                hasCustomIcon: false,
+                iconDataUrl: null,
+            }));
+        } catch (err) {
+            console.error("Failed to clear the contact icon:", err);
+            alert(`Failed to clear contact icon.\n${normalizeErrorMessage(err)}`);
+        }
+    }
+
+    async function handleExportSelectedContact() {
+        if (!selectedContact) {
+            return;
+        }
+
+        try {
+            const outputPath = await save({
+                title: "Export Contact",
+                defaultPath: `${slugifyContactName(selectedContact.name)}.openduck-contact.json`,
+                filters: [
+                    {
+                        name: "OpenDuck Contact",
+                        extensions: ["json"],
+                    },
+                ],
+            });
+            if (!outputPath) {
+                return;
+            }
+
+            const result = await invoke<ContactExportResult>(
+                "export_contact_profile",
+                {
+                    payload: {
+                        name: getContactDisplayName(selectedContact),
+                        prompt: selectedContact.prompt,
+                        iconDataUrl: selectedContact.iconDataUrl,
+                        outputPath,
+                    },
+                },
+            );
+            alert(`Exported contact to:\n${result.savedPath}`);
+        } catch (err) {
+            console.error("Failed to export contact:", err);
+            alert(`Failed to export contact.\n${normalizeErrorMessage(err)}`);
+        }
+    }
+
     function handleWindowKeydown(event: KeyboardEvent) {
-        if (event.key === "Escape" && showConversationPopup) {
+        if (event.key !== "Escape") {
+            return;
+        }
+
+        if (showContactsPopup) {
+            closeContactsPopup();
+            return;
+        }
+
+        if (showConversationPopup) {
             closeConversationPopup();
         }
     }
@@ -792,12 +1380,15 @@
             return;
         }
 
+        await syncSelectedContactPrompt();
+
         try {
             await invoke("reset_call_session");
         } catch (err) {
             console.error("Failed to reset call session:", err);
         }
 
+        closeContactsPopup();
         closeConversationPopup();
         resetConversationLog();
         calling = true;
@@ -834,6 +1425,7 @@
         calling = false;
         stopPlayback();
         stopAudioCapture();
+        closeContactsPopup();
         closeConversationPopup();
         resetConversationLog();
         setCallStage("idle", "");
@@ -1039,6 +1631,13 @@
     }
 
     onMount(() => {
+        void (async () => {
+            const restoredContacts = await loadContactsFromStorage();
+            contacts = restoredContacts.contacts;
+            selectedContactId = restoredContacts.selectedContactId;
+            persistContactsMetadata();
+            await syncSelectedContactPrompt();
+        })();
         void syncModelStatus();
 
         healthCheckInterval = window.setInterval(() => {
@@ -1181,6 +1780,9 @@
             clearInterval(healthCheckInterval);
         }
         stopDownloadStatusPolling();
+        if (selectedContactPromptSyncTimeout) {
+            clearTimeout(selectedContactPromptSyncTimeout);
+        }
         stopCallTimerTracking();
         if (playbackIdleTimeout) {
             clearTimeout(playbackIdleTimeout);
@@ -1198,11 +1800,11 @@
 
 <svelte:window onkeydown={handleWindowKeydown} onfocus={handleWindowFocus} />
 
-<div class="app-container">
-    <div class="background"></div>
+<div class="app-container" class:contacts-open={showContactsPopup}>
+    <div class="background" style={selectedContactImageStyle}></div>
 
     {#if !calling}
-        <div class="model-tags">
+        <div class="model-tags" class:dimmed={showContactsPopup}>
             <div
                 class="download-banner"
                 class:ready={isGemmaDownloaded && isGemmaLoaded}
@@ -1709,11 +2311,174 @@
             </div>
         {/if}
         <div class="avatar-container">
-            <div class="avatar" class:calling></div>
+            <div
+                class="avatar"
+                class:calling
+                style={selectedContactImageStyle}
+            ></div>
         </div>
     </main>
 
     <div class="control-bar-wrapper">
+        {#if showContactsPopup}
+            <button
+                type="button"
+                class="contacts-modal-backdrop"
+                aria-label="Close contacts"
+                onclick={closeContactsPopup}
+            ></button>
+            <div
+                id="contacts-popup"
+                class="contacts-popup"
+                role="dialog"
+                aria-label="Contacts"
+                aria-modal="true"
+            >
+                <div class="contacts-popup-header">
+                    <div class="contacts-popup-copy">
+                        <span class="contacts-popup-title">Contacts</span>
+                        <span class="contacts-popup-subtitle"
+                            >Switch the active voice persona</span
+                        >
+                    </div>
+                    <button
+                        type="button"
+                        class="conversation-close-btn"
+                        onclick={closeContactsPopup}
+                        aria-label="Close contacts"
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="18"
+                            height="18"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            ><line x1="18" y1="6" x2="6" y2="18" /><line
+                                x1="6"
+                                y1="6"
+                                x2="18"
+                                y2="18"
+                            /></svg
+                        >
+                    </button>
+                </div>
+
+                <div class="contacts-popup-body">
+                    <div class="contacts-sidebar">
+                        <div class="contacts-list">
+                            {#each contacts as contact (contact.id)}
+                                <button
+                                    type="button"
+                                    class="contact-list-item"
+                                    class:active={contact.id === selectedContact?.id}
+                                    onclick={() => selectContact(contact.id)}
+                                >
+                                    <span class="contact-list-name"
+                                        >{getContactDisplayName(contact)}</span
+                                    >
+                                </button>
+                            {/each}
+                        </div>
+
+                        <div class="contacts-sidebar-actions">
+                            <button
+                                type="button"
+                                class="utility-btn"
+                                onclick={triggerContactImport}
+                            >
+                                Import
+                            </button>
+                            <button
+                                type="button"
+                                class="utility-btn"
+                                onclick={createNewContact}
+                            >
+                                Add
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="contacts-editor">
+                        <div class="contacts-editor-scroll">
+                            <div class="contacts-editor-top">
+                                <button
+                                    type="button"
+                                    class="contact-icon-picker"
+                                    onclick={triggerContactIconUpload}
+                                    aria-label="Upload contact icon"
+                                >
+                                    <img src={selectedContactIconUrl} alt="" />
+                                </button>
+
+                                <div class="contacts-editor-copy">
+                                    <span class="contacts-editor-name"
+                                        >{selectedContactName}</span
+                                    >
+                                    <span class="contacts-editor-hint"
+                                        >Click the icon to upload a contact photo.
+                                        The duck icon stays as fallback.</span
+                                    >
+                                    {#if selectedContact?.hasCustomIcon}
+                                        <button
+                                            type="button"
+                                            class="utility-btn subtitle-action-btn contact-inline-btn"
+                                            onclick={handleResetSelectedContactIcon}
+                                        >
+                                            Reset Icon
+                                        </button>
+                                    {/if}
+                                </div>
+                            </div>
+
+                            <label class="contact-field">
+                                <span class="contact-field-label">Name</span>
+                                <input
+                                    class="contact-text-input"
+                                    type="text"
+                                    value={selectedContact?.name ?? ""}
+                                    placeholder="Contact name"
+                                    oninput={handleSelectedContactNameInput}
+                                />
+                            </label>
+
+                            <label class="contact-field contact-field-grow">
+                                <span class="contact-field-label">Prompt</span>
+                                <textarea
+                                    class="contact-textarea"
+                                    rows="6"
+                                    placeholder="Describe how this contact should respond."
+                                    value={selectedContact?.prompt ?? ""}
+                                    oninput={handleSelectedContactPromptInput}
+                                ></textarea>
+                            </label>
+                        </div>
+
+                        <div class="contacts-editor-actions">
+                            <button
+                                type="button"
+                                class="utility-btn"
+                                disabled={contacts.length === 1}
+                                onclick={handleDeleteSelectedContact}
+                            >
+                                Delete
+                            </button>
+                            <button
+                                type="button"
+                                class="download-btn"
+                                onclick={handleExportSelectedContact}
+                            >
+                                Export
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        {/if}
+
         {#if calling && showConversationPopup}
             <div
                 id="conversation-log-popup"
@@ -1786,11 +2551,39 @@
 
         <div class="control-bar">
             <div class="info">
-                <div class="username">openduck</div>
+                <div class="username">{selectedContactName}</div>
                 <div class="timer">{calling ? formattedTime : "Ready"}</div>
             </div>
 
             <div class="actions">
+                {#if !calling}
+                    <button
+                        type="button"
+                        class="icon-btn"
+                        class:active={showContactsPopup}
+                        onclick={toggleContactsPopup}
+                        aria-label="Toggle contacts"
+                        aria-controls="contacts-popup"
+                        aria-expanded={showContactsPopup}
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="22"
+                            height="22"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            ><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" /><circle
+                                cx="9.5"
+                                cy="7"
+                                r="4"
+                            /><path d="M20 8v6" /><path d="M23 11h-6" /></svg
+                        >
+                    </button>
+                {/if}
                 {#if calling}
                     <button
                         type="button"
@@ -1882,6 +2675,21 @@
             {/if}
         </div>
     </div>
+
+    <input
+        class="hidden-file-input"
+        type="file"
+        accept="application/json,.json"
+        bind:this={contactsImportInput}
+        onchange={handleContactImportChange}
+    />
+    <input
+        class="hidden-file-input"
+        type="file"
+        accept="image/*"
+        bind:this={contactIconInput}
+        onchange={handleContactIconChange}
+    />
 </div>
 
 <style>
@@ -2004,8 +2812,19 @@
         flex-direction: column;
         align-items: center;
         width: min(calc(100vw - 48px), 560px);
-        z-index: 10;
+        z-index: 8;
         isolation: isolate;
+        transition:
+            opacity 0.22s ease,
+            filter 0.22s ease,
+            transform 0.22s ease;
+    }
+
+    .model-tags.dimmed {
+        opacity: 0.22;
+        filter: blur(6px);
+        transform: translateY(-6px) scale(0.985);
+        pointer-events: none;
     }
 
     .control-bar-wrapper {
@@ -2016,6 +2835,7 @@
         justify-content: center;
         align-items: center;
         padding: 0 20px;
+        z-index: 20;
     }
 
     .control-bar {
@@ -2027,7 +2847,8 @@
         gap: 36px;
         box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
         width: auto;
-        min-width: 440px;
+        min-width: min(440px, calc(100vw - 40px));
+        max-width: calc(100vw - 40px);
         border: 1px solid rgba(255, 255, 255, 0.05);
         position: relative;
         z-index: 2;
@@ -2057,6 +2878,7 @@
         gap: 14px;
         flex: 1;
         justify-content: center;
+        flex-wrap: wrap;
     }
 
     .conversation-popup {
@@ -2082,7 +2904,308 @@
             0 0 0 1px rgba(255, 255, 255, 0.03) inset;
         backdrop-filter: blur(22px);
         box-sizing: border-box;
-        z-index: 1;
+        z-index: 21;
+    }
+
+    .contacts-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        border: none;
+        background: rgba(7, 7, 9, 0.48);
+        backdrop-filter: blur(18px);
+        cursor: pointer;
+        z-index: 22;
+    }
+
+    .contacts-popup {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: min(1080px, calc(100vw - 56px));
+        height: min(780px, calc(100vh - 56px));
+        max-height: calc(100vh - 56px);
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+        padding: 24px;
+        border-radius: 30px;
+        background: linear-gradient(
+            180deg,
+            rgba(38, 34, 20, 0.96) 0%,
+            rgba(17, 17, 19, 0.97) 100%
+        );
+        border: 1px solid rgba(255, 220, 102, 0.15);
+        box-shadow:
+            0 34px 80px rgba(0, 0, 0, 0.5),
+            0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+        backdrop-filter: blur(22px);
+        box-sizing: border-box;
+        overflow: hidden;
+        z-index: 24;
+    }
+
+    .contacts-popup-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+    }
+
+    .contacts-popup-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+    }
+
+    .contacts-popup-title {
+        color: rgba(255, 246, 214, 0.96);
+        font-size: 1rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+    }
+
+    .contacts-popup-subtitle {
+        color: rgba(255, 255, 255, 0.56);
+        font-size: 0.85rem;
+        letter-spacing: -0.01em;
+    }
+
+    .contacts-popup-body {
+        display: grid;
+        grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+        gap: 18px;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    .contacts-sidebar {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        min-height: 0;
+        padding: 16px;
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.035);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .contacts-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding-right: 6px;
+    }
+
+    .contact-list-item {
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.035);
+        color: rgba(255, 255, 255, 0.86);
+        padding: 14px 16px;
+        text-align: left;
+        font-size: 0.96rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+        cursor: pointer;
+        transition:
+            background-color 0.2s ease,
+            border-color 0.2s ease,
+            color 0.2s ease,
+            transform 0.1s ease;
+    }
+
+    .contact-list-item:hover {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.12);
+    }
+
+    .contact-list-item:active {
+        transform: scale(0.98);
+    }
+
+    .contact-list-item.active {
+        background: linear-gradient(135deg, #ffdf63 0%, #ffcd40 100%);
+        border-color: rgba(255, 220, 102, 0.5);
+        color: #2f2500;
+        box-shadow: 0 10px 24px rgba(255, 205, 64, 0.18);
+    }
+
+    .contact-list-name {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .contacts-sidebar-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: auto;
+    }
+
+    .contacts-sidebar-actions .utility-btn {
+        flex: 1;
+    }
+
+    .contacts-editor {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        min-width: 0;
+        min-height: 0;
+        padding: 18px 20px 18px;
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        overflow: hidden;
+    }
+
+    .contacts-editor-scroll {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 16px;
+        min-height: 0;
+        overflow-y: auto;
+        padding-right: 6px;
+    }
+
+    .contacts-editor-top {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+    }
+
+    .contact-icon-picker {
+        width: 112px;
+        height: 112px;
+        border: 2px solid rgba(255, 255, 255, 0.1);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.04);
+        overflow: hidden;
+        padding: 0;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition:
+            transform 0.1s ease,
+            border-color 0.2s ease,
+            box-shadow 0.2s ease;
+    }
+
+    .contact-icon-picker:hover {
+        border-color: rgba(255, 220, 102, 0.26);
+        box-shadow: 0 0 0 6px rgba(255, 220, 102, 0.08);
+    }
+
+    .contact-icon-picker:active {
+        transform: scale(0.97);
+    }
+
+    .contact-icon-picker img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+    }
+
+    .contacts-editor-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 0;
+    }
+
+    .contacts-editor-name {
+        color: rgba(255, 246, 214, 0.96);
+        font-size: 1.18rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+    }
+
+    .contacts-editor-hint {
+        color: rgba(255, 255, 255, 0.58);
+        font-size: 0.92rem;
+        line-height: 1.35;
+        letter-spacing: -0.01em;
+        max-width: 44ch;
+    }
+
+    .contact-field {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        min-width: 0;
+    }
+
+    .contact-field-grow {
+        flex: 1;
+        min-height: 0;
+    }
+
+    .contact-field-label {
+        color: rgba(255, 246, 214, 0.92);
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+    }
+
+    .contact-text-input,
+    .contact-textarea {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.92);
+        padding: 14px 16px;
+        font: inherit;
+        letter-spacing: -0.01em;
+        transition:
+            border-color 0.2s ease,
+            box-shadow 0.2s ease,
+            background-color 0.2s ease;
+    }
+
+    .contact-text-input::placeholder,
+    .contact-textarea::placeholder {
+        color: rgba(255, 255, 255, 0.34);
+    }
+
+    .contact-text-input:focus-visible,
+    .contact-textarea:focus-visible {
+        outline: none;
+        border-color: rgba(255, 220, 102, 0.4);
+        box-shadow: 0 0 0 4px rgba(255, 220, 102, 0.12);
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .contact-textarea {
+        min-height: 320px;
+        height: 100%;
+        max-height: none;
+        resize: none;
+        line-height: 1.45;
+        overflow-y: auto;
+    }
+
+    .contacts-editor-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-shrink: 0;
+        padding-top: 16px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .contact-inline-btn {
+        align-self: flex-start;
     }
 
     .conversation-popup-header {
@@ -2461,6 +3584,10 @@
         font-size: 0.8rem;
     }
 
+    .hidden-file-input {
+        display: none;
+    }
+
     .tooltip-shell {
         position: relative;
         display: inline-flex;
@@ -2660,6 +3787,46 @@
         100% {
             transform: scale(1);
             box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+        }
+    }
+
+    @media (max-width: 720px) {
+        .contacts-popup {
+            width: calc(100vw - 28px);
+            height: calc(100vh - 28px);
+            max-height: calc(100vh - 28px);
+            padding: 16px;
+            border-radius: 24px;
+        }
+
+        .contacts-popup-body {
+            grid-template-columns: 1fr;
+        }
+
+        .contacts-list {
+            max-height: 220px;
+        }
+
+        .contacts-sidebar-actions {
+            flex-wrap: wrap;
+        }
+
+        .contacts-editor-top {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+
+        .contact-icon-picker {
+            width: 96px;
+            height: 96px;
+        }
+
+        .contact-textarea {
+            min-height: 220px;
+        }
+
+        .contacts-editor-actions {
+            flex-wrap: wrap;
         }
     }
 </style>

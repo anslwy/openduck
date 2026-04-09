@@ -63,7 +63,7 @@ const MAX_CONVERSATION_TURNS: usize = 24;
 const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 1;
 const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
-const VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
+const DEFAULT_VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
 const TRANSCRIPTION_PROMPT: &str =
     "You are a voice-based AI. Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
 
@@ -342,6 +342,7 @@ struct AppState {
     next_generation_id: AtomicU64,
     active_generation: Mutex<Option<ActiveGeneration>>,
     conversation_turns: Mutex<VecDeque<ConversationTurn>>,
+    voice_system_prompt: Mutex<String>,
     conversation_session_id: AtomicU64,
     call_started_at: Mutex<Option<Instant>>,
     tray_timer_generation: AtomicU64,
@@ -483,9 +484,71 @@ struct DownloadProgressWorkerEvent {
     indeterminate: bool,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContactExportPayload {
+    name: String,
+    prompt: String,
+    icon_data_url: Option<String>,
+    output_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContactExportResult {
+    saved_path: String,
+}
+
 #[tauri::command]
 fn ping() {
     info!("Backend: ping command received");
+}
+
+#[tauri::command]
+fn set_voice_system_prompt(state: State<'_, AppState>, prompt: String) {
+    let trimmed_prompt = prompt.trim();
+    let next_prompt = if trimmed_prompt.is_empty() {
+        DEFAULT_VOICE_SYSTEM_PROMPT.to_string()
+    } else {
+        trimmed_prompt.to_string()
+    };
+
+    *state.voice_system_prompt.lock().unwrap() = next_prompt;
+}
+
+#[tauri::command]
+fn export_contact_profile(
+    payload: ContactExportPayload,
+) -> Result<ContactExportResult, String> {
+    let export_path = normalize_contact_export_path(&payload.output_path)?;
+    let export_json = serde_json::json!({
+        "version": 1,
+        "name": payload.name.trim(),
+        "prompt": payload.prompt,
+        "iconDataUrl": payload.icon_data_url,
+    });
+    let encoded =
+        serde_json::to_vec_pretty(&export_json).map_err(|err| err.to_string())?;
+
+    if let Some(parent) = export_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "Failed to create export directory at {}: {err}",
+                parent.display()
+            )
+        })?;
+    }
+
+    std::fs::write(&export_path, encoded).map_err(|err| {
+        format!(
+            "Failed to export contact to {}: {err}",
+            export_path.display()
+        )
+    })?;
+
+    Ok(ContactExportResult {
+        saved_path: export_path.display().to_string(),
+    })
 }
 
 #[tauri::command]
@@ -1358,7 +1421,12 @@ async fn stream_gemma_response_to_csm(
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
         content: vec![ChatContent::Text {
-            text: VOICE_SYSTEM_PROMPT.to_string(),
+            text: app_handle
+                .state::<AppState>()
+                .voice_system_prompt
+                .lock()
+                .unwrap()
+                .clone(),
         }],
     }];
 
@@ -3039,6 +3107,21 @@ fn server_base_url(port: u16) -> String {
     format!("http://127.0.0.1:{}", port)
 }
 
+fn normalize_contact_export_path(output_path: &str) -> Result<PathBuf, String> {
+    let trimmed_path = output_path.trim();
+    if trimmed_path.is_empty() {
+        return Err("No export path was provided.".to_string());
+    }
+
+    let mut path = PathBuf::from(trimmed_path);
+
+    if path.extension().is_none() {
+        path.set_extension("openduck-contact.json");
+    }
+
+    Ok(path)
+}
+
 fn huggingface_cache_root(model_dir_name: &str) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
     std::path::Path::new(&home)
@@ -3894,6 +3977,7 @@ pub fn run() {
             next_generation_id: AtomicU64::new(1),
             active_generation: Mutex::new(None),
             conversation_turns: Mutex::new(VecDeque::new()),
+            voice_system_prompt: Mutex::new(DEFAULT_VOICE_SYSTEM_PROMPT.to_string()),
             conversation_session_id: AtomicU64::new(1),
             call_started_at: Mutex::new(None),
             tray_timer_generation: AtomicU64::new(0),
@@ -3901,10 +3985,13 @@ pub fn run() {
             call_muted: Mutex::new(false),
             is_quitting: Mutex::new(false),
         })
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             receive_audio_chunk,
             ping,
+            set_voice_system_prompt,
+            export_contact_profile,
             reset_call_session,
             start_call_timer,
             stop_call_timer,
