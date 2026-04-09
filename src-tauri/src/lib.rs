@@ -65,6 +65,7 @@ const MAX_SPOKEN_WORDS_PER_SEGMENT: usize = 16;
 const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
 const DEFAULT_VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
+const AUDIO_CONTEXT_SYSTEM_PROMPT: &str = "When the latest user turn includes attached audio, use it only as supplemental context for tone, emotion, pacing, hesitation, confidence, or background conditions. Prefer the transcript text for the exact words. Do not explicitly mention hidden audio analysis unless it materially improves the reply.";
 const TRANSCRIPTION_PROMPT: &str =
     "You are a voice-based AI. Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
 
@@ -274,6 +275,26 @@ struct TrackedDownloadState {
 struct ConversationTurn {
     user_text: String,
     assistant_text: String,
+}
+
+struct TempAudioFile {
+    path: PathBuf,
+}
+
+impl TempAudioFile {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempAudioFile {
+    fn drop(&mut self) {
+        remove_temp_audio_file(&self.path);
+    }
 }
 
 struct ActiveGeneration {
@@ -518,9 +539,7 @@ fn set_voice_system_prompt(state: State<'_, AppState>, prompt: String) {
 }
 
 #[tauri::command]
-fn export_contact_profile(
-    payload: ContactExportPayload,
-) -> Result<ContactExportResult, String> {
+fn export_contact_profile(payload: ContactExportPayload) -> Result<ContactExportResult, String> {
     let export_path = normalize_contact_export_path(&payload.output_path)?;
     let export_json = serde_json::json!({
         "version": 1,
@@ -528,8 +547,7 @@ fn export_contact_profile(
         "prompt": payload.prompt,
         "iconDataUrl": payload.icon_data_url,
     });
-    let encoded =
-        serde_json::to_vec_pretty(&export_json).map_err(|err| err.to_string())?;
+    let encoded = serde_json::to_vec_pretty(&export_json).map_err(|err| err.to_string())?;
 
     if let Some(parent) = export_path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| {
@@ -1178,10 +1196,9 @@ fn process_audio_with_server(
 
         match transcribe_audio_with_gemma(server_port, &gemma_model, &audio_path).await {
             Ok(user_text) => {
-                let _ = std::fs::remove_file(&audio_path);
-
                 if user_text.is_empty() {
                     warn!("Gemma transcription was empty, skipping response generation");
+                    remove_temp_audio_file(&audio_path);
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
                 }
@@ -1191,6 +1208,7 @@ fn process_audio_with_server(
                         "Ignoring non-meaningful transcript for interruption: {:?}",
                         user_text
                     );
+                    remove_temp_audio_file(&audio_path);
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
                 }
@@ -1198,6 +1216,7 @@ fn process_audio_with_server(
                 if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
                     != conversation_session_id
                 {
+                    remove_temp_audio_file(&audio_path);
                     return;
                 }
 
@@ -1209,6 +1228,7 @@ fn process_audio_with_server(
                         "Skipping stale transcript for generation {} because a newer reply is active",
                         generation_id
                     );
+                    remove_temp_audio_file(&audio_path);
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
                 }
@@ -1225,6 +1245,7 @@ fn process_audio_with_server(
                 if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
                     != conversation_session_id
                 {
+                    remove_temp_audio_file(&audio_path);
                     return;
                 }
 
@@ -1236,6 +1257,7 @@ fn process_audio_with_server(
                     conversation_session_id,
                     gemma_model,
                     user_text,
+                    audio_path,
                 );
             }
             Err(err) => {
@@ -1247,7 +1269,7 @@ fn process_audio_with_server(
                     },
                 );
                 error!("Failed to transcribe audio with Gemma: {}", err);
-                let _ = std::fs::remove_file(&audio_path);
+                remove_temp_audio_file(&audio_path);
                 emit_call_stage(&app_handle_for_task, "listening", "Listening");
             }
         }
@@ -1261,14 +1283,17 @@ fn start_response_generation(
     conversation_session_id: u64,
     gemma_model: String,
     user_text: String,
+    latest_audio_path: PathBuf,
 ) {
     let app_handle_for_task = app_handle.clone();
     let handle = tauri::async_runtime::spawn(async move {
+        let latest_audio_file = TempAudioFile::new(latest_audio_path);
         match stream_gemma_response_to_csm(
             &app_handle_for_task,
             server_port,
             &gemma_model,
             &user_text,
+            Some(latest_audio_file.path()),
         )
         .await
         {
@@ -1330,12 +1355,7 @@ async fn transcribe_audio_with_gemma(
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
-                ChatContent::InputAudio {
-                    input_audio: InputAudio {
-                        data: audio_path.to_string_lossy().into_owned(),
-                        format: "wav".to_string(),
-                    },
-                },
+                build_input_audio_content(audio_path),
                 ChatContent::Text {
                     text: TRANSCRIPTION_PROMPT.to_string(),
                 },
@@ -1402,6 +1422,7 @@ async fn stream_gemma_response_to_csm(
     server_port: u16,
     gemma_model: &str,
     user_text: &str,
+    latest_audio_path: Option<&Path>,
 ) -> Result<String, String> {
     start_csm_server_inner(app_handle, app_handle.state::<AppState>().inner()).await?;
 
@@ -1419,15 +1440,19 @@ async fn stream_gemma_response_to_csm(
             .collect::<Vec<_>>();
         (session_id, turns)
     };
+    let has_latest_audio = latest_audio_path.is_some();
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
         content: vec![ChatContent::Text {
-            text: app_handle
-                .state::<AppState>()
-                .voice_system_prompt
-                .lock()
-                .unwrap()
-                .clone(),
+            text: build_llm_system_prompt(
+                &app_handle
+                    .state::<AppState>()
+                    .voice_system_prompt
+                    .lock()
+                    .unwrap()
+                    .clone(),
+                has_latest_audio,
+            ),
         }],
     }];
 
@@ -1446,12 +1471,7 @@ async fn stream_gemma_response_to_csm(
         });
     }
 
-    messages.push(ChatMessage {
-        role: "user".to_string(),
-        content: vec![ChatContent::Text {
-            text: user_text.to_string(),
-        }],
-    });
+    messages.push(build_latest_user_turn_message(user_text, latest_audio_path));
 
     let request = ChatRequest {
         model: gemma_model.to_string(),
@@ -1897,6 +1917,46 @@ fn extract_chat_content_text(content: serde_json::Value) -> String {
     }
 }
 
+fn build_input_audio_content(audio_path: &Path) -> ChatContent {
+    ChatContent::InputAudio {
+        input_audio: InputAudio {
+            data: audio_path.to_string_lossy().into_owned(),
+            format: "wav".to_string(),
+        },
+    }
+}
+
+fn build_llm_system_prompt(base_prompt: &str, include_audio_context: bool) -> String {
+    if !include_audio_context {
+        return base_prompt.to_string();
+    }
+
+    format!("{base_prompt}\n\n{AUDIO_CONTEXT_SYSTEM_PROMPT}")
+}
+
+fn build_latest_user_turn_message(
+    user_text: &str,
+    latest_audio_path: Option<&Path>,
+) -> ChatMessage {
+    let content = if let Some(audio_path) = latest_audio_path {
+        vec![
+            build_input_audio_content(audio_path),
+            ChatContent::Text {
+                text: user_text.to_string(),
+            },
+        ]
+    } else {
+        vec![ChatContent::Text {
+            text: user_text.to_string(),
+        }]
+    };
+
+    ChatMessage {
+        role: "user".to_string(),
+        content,
+    }
+}
+
 enum ParsedGemmaStreamEvent {
     Delta(String),
     Done,
@@ -1968,6 +2028,18 @@ fn log_chat_request_debug(conversation_session_id: u64, request: &ChatRequest) {
         Err(err) => warn!(
             "Failed to serialize conversation log for session {}: {}",
             conversation_session_id, err
+        ),
+    }
+}
+
+fn remove_temp_audio_file(audio_path: &Path) {
+    match std::fs::remove_file(audio_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => warn!(
+            "Failed to remove temp audio file {}: {}",
+            audio_path.display(),
+            err
         ),
     }
 }
@@ -2250,11 +2322,7 @@ fn split_long_spoken_segment_for_csm(segment: &str) -> Vec<String> {
     normalize_spoken_chunks_for_csm(chunks)
 }
 
-fn find_preferred_spoken_chunk_end(
-    words: &[&str],
-    start: usize,
-    limit: usize,
-) -> Option<usize> {
+fn find_preferred_spoken_chunk_end(words: &[&str], start: usize, limit: usize) -> Option<usize> {
     for candidate in (start + 1..=limit).rev() {
         let trailing_word = words[candidate - 1]
             .trim_end_matches(|ch: char| matches!(ch, '"' | '\'' | ')' | ']' | '}'));
@@ -2284,10 +2352,7 @@ fn normalize_spoken_chunk_for_csm(chunk: &str, is_last: bool) -> Option<String> 
         return None;
     }
 
-    while matches!(
-        cleaned.chars().last(),
-        Some(',' | ';' | ':' | '-' | '—')
-    ) {
+    while matches!(cleaned.chars().last(), Some(',' | ';' | ':' | '-' | '—')) {
         cleaned.pop();
         cleaned = cleaned.trim_end().to_string();
     }
@@ -2296,8 +2361,7 @@ fn normalize_spoken_chunk_for_csm(chunk: &str, is_last: bool) -> Option<String> 
         return None;
     }
 
-    let has_terminal_punctuation =
-        matches!(cleaned.chars().last(), Some('.' | '!' | '?'));
+    let has_terminal_punctuation = matches!(cleaned.chars().last(), Some('.' | '!' | '?'));
     if !has_terminal_punctuation && !is_last {
         cleaned.push('.');
     }
@@ -2329,11 +2393,13 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_gemma_stream_event, prepare_completed_spoken_response_segments_for_csm,
+        build_latest_user_turn_message, build_llm_system_prompt, parse_gemma_stream_event,
+        prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, resolve_capture_sample_rate,
         sanitize_for_voice_output, suppress_playback_echo, AudioPayload, ParsedGemmaStreamEvent,
-        DEFAULT_SAMPLE_RATE, MAX_SPOKEN_WORDS_PER_SEGMENT,
+        AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE, MAX_SPOKEN_WORDS_PER_SEGMENT,
     };
+    use std::path::Path;
 
     #[test]
     fn sanitize_for_voice_output_removes_plain_emoji() {
@@ -2387,9 +2453,9 @@ mod tests {
         let segments = prepare_spoken_response_segments_for_csm(response_text);
 
         assert!(segments.len() > 1);
-        assert!(segments.iter().all(|segment| {
-            segment.split_whitespace().count() <= MAX_SPOKEN_WORDS_PER_SEGMENT
-        }));
+        assert!(segments
+            .iter()
+            .all(|segment| { segment.split_whitespace().count() <= MAX_SPOKEN_WORDS_PER_SEGMENT }));
     }
 
     #[test]
@@ -2432,6 +2498,48 @@ mod tests {
         let event = parse_gemma_stream_event("data: [DONE]").unwrap();
 
         assert!(matches!(event, ParsedGemmaStreamEvent::Done));
+    }
+
+    #[test]
+    fn latest_user_turn_message_stays_text_only_without_audio() {
+        let message = build_latest_user_turn_message("hello there", None);
+        let serialized = serde_json::to_value(&message).unwrap();
+
+        assert_eq!(serialized["role"], "user");
+        assert_eq!(serialized["content"].as_array().unwrap().len(), 1);
+        assert_eq!(serialized["content"][0]["type"], "text");
+        assert_eq!(serialized["content"][0]["text"], "hello there");
+    }
+
+    #[test]
+    fn latest_user_turn_message_includes_audio_when_available() {
+        let message = build_latest_user_turn_message(
+            "hello there",
+            Some(Path::new("/tmp/openduck-audio-test.wav")),
+        );
+        let serialized = serde_json::to_value(&message).unwrap();
+
+        assert_eq!(serialized["role"], "user");
+        assert_eq!(serialized["content"].as_array().unwrap().len(), 2);
+        assert_eq!(serialized["content"][0]["type"], "input_audio");
+        assert_eq!(
+            serialized["content"][0]["input_audio"]["data"],
+            "/tmp/openduck-audio-test.wav"
+        );
+        assert_eq!(serialized["content"][0]["input_audio"]["format"], "wav");
+        assert_eq!(serialized["content"][1]["type"], "text");
+        assert_eq!(serialized["content"][1]["text"], "hello there");
+    }
+
+    #[test]
+    fn llm_system_prompt_appends_audio_context_only_when_needed() {
+        let base_prompt = "Base prompt";
+
+        assert_eq!(build_llm_system_prompt(base_prompt, false), "Base prompt");
+        assert_eq!(
+            build_llm_system_prompt(base_prompt, true),
+            format!("Base prompt\n\n{AUDIO_CONTEXT_SYSTEM_PROMPT}")
+        );
     }
 
     #[test]
