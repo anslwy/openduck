@@ -1,8 +1,10 @@
 import argparse
 import base64
+import contextlib
 import gc
-import io
+import importlib.util
 import inspect
+import io
 import json
 import os
 import sys
@@ -15,23 +17,44 @@ import numpy as np
 from huggingface_hub import hf_hub_download
 from tqdm.auto import tqdm
 
-MODEL_REPO = "senstella/csm-expressiva-1b"
-MODEL_FILE = "mlx-ckpt.safetensors"
-MODEL_SPEAKER = 4
+CSM_MODEL_REPO = "senstella/csm-expressiva-1b"
+CSM_MODEL_FILE = "mlx-ckpt.safetensors"
+CSM_MODEL_SPEAKER = 4
+KOKORO_MODEL_REPO = "mlx-community/Kokoro-82M-bf16"
+KOKORO_MODEL_FILE = "kokoro-v1_0.safetensors"
+KOKORO_CONFIG_FILE = "config.json"
+KOKORO_LANG_CODE = "a"
+KOKORO_DEFAULT_VOICE = "af_heart"
+KOKORO_DEFAULT_VOICE_FILE = f"voices/{KOKORO_DEFAULT_VOICE}.pt"
 SAMPLE_RATE = 24_000
 DEVNULL = open(os.devnull, "w")
 
+# Keep PyTorch MPS fallback enabled for any speech dependency that may import torch.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 
 def emit(payload: dict) -> None:
-    sys.stdout.write(json.dumps(payload) + "\n")
-    sys.stdout.flush()
+    output = getattr(sys, "__stdout__", None) or sys.stdout
+    output.write(json.dumps(payload) + "\n")
+    output.flush()
 
 
 def emit_status(message: str) -> None:
     emit({"type": "status", "message": message})
 
 
+@contextlib.contextmanager
+def redirect_library_stdout():
+    # Third-party TTS libraries sometimes print warnings/progress to stdout.
+    # The Rust side treats stdout as a JSON event stream, so route that noise
+    # to stderr to keep the worker protocol intact.
+    with contextlib.redirect_stdout(sys.stderr):
+        yield
+
+
 class CheckpointProgressTqdm(tqdm):
+    progress_label = "checkpoint"
+
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("file", DEVNULL)
         kwargs.setdefault("leave", False)
@@ -51,33 +74,52 @@ class CheckpointProgressTqdm(tqdm):
     def _emit_progress(self, force: bool = False) -> None:
         if self.total:
             progress = max(0.0, min(100.0, float(self.n) / float(self.total) * 100.0))
-            emit_status(f"Downloading CSM checkpoint... {progress:.0f}%")
+            emit_status(
+                f"Downloading {self.progress_label}... {progress:.0f}%"
+            )
         elif force:
-            emit_status("Download complete. Initializing CSM model...")
+            emit_status(f"Download complete. Initializing {self.progress_label}...")
         else:
-            emit_status("Downloading CSM checkpoint...")
+            emit_status(f"Downloading {self.progress_label}...")
 
 
-def download_weights() -> str:
-    emit_status("Resolving CSM checkpoint...")
+def download_hf_file(repo_id: str, filename: str, label: str) -> str:
+    emit_status(f"Resolving {label}...")
     try:
         return hf_hub_download(
-            repo_id=MODEL_REPO,
-            filename=MODEL_FILE,
+            repo_id=repo_id,
+            filename=filename,
             local_files_only=True,
         )
     except Exception:
-        emit_status("Downloading CSM checkpoint... This can take a while on first load.")
+        emit_status(f"Downloading {label}... This can take a while on first load.")
 
     supports_hf_tqdm = "tqdm_class" in inspect.signature(hf_hub_download).parameters
     if supports_hf_tqdm:
+        CheckpointProgressTqdm.progress_label = label
         return hf_hub_download(
-            repo_id=MODEL_REPO,
-            filename=MODEL_FILE,
+            repo_id=repo_id,
+            filename=filename,
             tqdm_class=CheckpointProgressTqdm,
         )
 
-    return hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILE)
+    return hf_hub_download(repo_id=repo_id, filename=filename)
+
+
+def download_csm_weights() -> str:
+    return download_hf_file(CSM_MODEL_REPO, CSM_MODEL_FILE, "CSM checkpoint")
+
+
+def download_kokoro_assets() -> list[str]:
+    return [
+        download_hf_file(KOKORO_MODEL_REPO, KOKORO_CONFIG_FILE, "Kokoro config"),
+        download_hf_file(KOKORO_MODEL_REPO, KOKORO_MODEL_FILE, "Kokoro checkpoint"),
+        download_hf_file(
+            KOKORO_MODEL_REPO,
+            KOKORO_DEFAULT_VOICE_FILE,
+            f"Kokoro voice {KOKORO_DEFAULT_VOICE}",
+        ),
+    ]
 
 
 def encode_wav_base64(audio: np.ndarray, sample_rate: int) -> str:
@@ -98,12 +140,23 @@ def encode_wav_base64(audio: np.ndarray, sample_rate: int) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def build_model(quantize: bool):
+def normalize_audio_array(audio) -> np.ndarray:
+    if hasattr(audio, "detach"):
+        audio = audio.detach()
+    if hasattr(audio, "cpu"):
+        audio = audio.cpu()
+    if hasattr(audio, "numpy"):
+        audio = audio.numpy()
+
+    return np.asarray(audio, dtype=np.float32).reshape(-1)
+
+
+def build_csm_model(quantize: bool):
     emit_status("Importing MLX and CSM runtime...")
     from mlx import nn
     from csm_mlx import CSM, csm_1b
 
-    weights_path = download_weights()
+    weights_path = download_csm_weights()
     emit_status("Initializing CSM model graph...")
     model = CSM(csm_1b())
     emit_status("Loading CSM weights into memory...")
@@ -114,6 +167,30 @@ def build_model(quantize: bool):
         nn.quantize(model)
 
     return model
+
+
+def build_kokoro_model():
+    emit_status("Importing MLX-Audio runtime...")
+    from mlx_audio.tts.utils import load_model
+
+    if importlib.util.find_spec("en_core_web_sm") is None:
+        raise RuntimeError(
+            "Kokoro via mlx-audio requires the spaCy English model 'en_core_web_sm'. "
+            "Re-run scripts/setup_python_env.sh to install the Kokoro dependencies."
+        )
+
+    emit_status("Resolving Kokoro MLX assets...")
+    download_kokoro_assets()
+    emit_status("Initializing Kokoro model...")
+    with redirect_library_stdout():
+        return load_model(KOKORO_MODEL_REPO)
+
+
+def resolve_kokoro_sample_rate(model) -> int:
+    try:
+        return int(getattr(model, "sample_rate", SAMPLE_RATE))
+    except (TypeError, ValueError):
+        return SAMPLE_RATE
 
 
 def load_reference_audio(context_audio: Path | None, read_audio) -> np.ndarray | None:
@@ -143,7 +220,7 @@ def append_context_segment(
     )
 
 
-def run_server(
+def run_csm_server(
     quantize: bool, context_audio: Path | None = None, context_text: str = ""
 ) -> int:
     try:
@@ -159,7 +236,7 @@ def run_server(
 
     try:
         emit_status("Building CSM worker...")
-        model = build_model(quantize)
+        model = build_csm_model(quantize)
     except Exception as exc:
         emit({"type": "error", "message": f"Failed to load CSM model: {exc}"})
         traceback.print_exc(file=sys.stderr)
@@ -237,7 +314,7 @@ def run_server(
             continue
 
         request_id = int(request.get("request_id"))
-        speaker = MODEL_SPEAKER
+        speaker = int(request.get("speaker", CSM_MODEL_SPEAKER))
         text = str(request.get("text", "")).strip()
         if not text:
             emit(
@@ -326,10 +403,127 @@ def run_server(
     return 0
 
 
+def run_kokoro_server(_quantize: bool) -> int:
+    try:
+        emit_status("Building Kokoro worker...")
+        model = build_kokoro_model()
+    except Exception as exc:
+        emit({"type": "error", "message": f"Failed to load Kokoro: {exc}"})
+        traceback.print_exc(file=sys.stderr)
+        return 1
+
+    sample_rate = resolve_kokoro_sample_rate(model)
+    emit_status("Kokoro worker ready.")
+    emit({"type": "ready", "sample_rate": sample_rate})
+
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError as exc:
+            emit({"type": "error", "message": f"Invalid JSON request: {exc}"})
+            continue
+
+        request_type = request.get("type")
+        if request_type == "shutdown":
+            break
+        if request_type in {"set_context", "reset_context", "finalize_response"}:
+            continue
+        if request_type != "synthesize":
+            emit({"type": "error", "message": f"Unsupported request type: {request_type}"})
+            continue
+
+        request_id = int(request.get("request_id"))
+        text = str(request.get("text", "")).strip()
+        if not text:
+            emit(
+                {
+                    "type": "error",
+                    "request_id": request_id,
+                    "message": "Cannot synthesize an empty response.",
+                }
+            )
+            continue
+
+        try:
+            synthesis_started_at = time.perf_counter()
+            emitted_audio = False
+            with redirect_library_stdout():
+                generator = model.generate(
+                    text=text,
+                    voice=str(request.get("voice", KOKORO_DEFAULT_VOICE)),
+                    speed=float(request.get("speed", 1.0)),
+                    lang_code=KOKORO_LANG_CODE,
+                )
+                for result in generator:
+                    audio_wav_base64 = encode_wav_base64(
+                        normalize_audio_array(result.audio),
+                        sample_rate,
+                    )
+                    if not audio_wav_base64:
+                        continue
+
+                    emit(
+                        {
+                            "type": "chunk",
+                            "request_id": request_id,
+                            "audio_wav_base64": audio_wav_base64,
+                        }
+                    )
+                    emitted_audio = True
+
+            if not emitted_audio:
+                raise RuntimeError("Kokoro generated an empty audio response.")
+
+            emit(
+                {
+                    "type": "timing",
+                    "request_id": request_id,
+                    "text": text,
+                    "elapsed_ms": round(
+                        (time.perf_counter() - synthesis_started_at) * 1000.0, 2
+                    ),
+                }
+            )
+            emit({"type": "done", "request_id": request_id})
+        except Exception as exc:
+            emit(
+                {
+                    "type": "error",
+                    "request_id": request_id,
+                    "message": f"Kokoro synthesis failed: {exc}",
+                }
+            )
+            traceback.print_exc(file=sys.stderr)
+        finally:
+            gc.collect()
+
+    return 0
+
+
+def run_server(
+    model_name: str,
+    quantize: bool,
+    context_audio: Path | None = None,
+    context_text: str = "",
+) -> int:
+    if model_name == "csm":
+        return run_csm_server(quantize, context_audio, context_text)
+    if model_name == "kokoro":
+        return run_kokoro_server(quantize)
+
+    emit({"type": "error", "message": f"Unsupported speech model: {model_name}"})
+    return 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--download", action="store_true")
     parser.add_argument("--server", action="store_true")
+    parser.add_argument("--model", default="csm")
     parser.add_argument("--quantize", action="store_true")
     parser.add_argument("--context-audio", type=Path)
     parser.add_argument("--context-text", default="")
@@ -337,16 +531,30 @@ def main() -> int:
 
     if args.download:
         try:
-            path = download_weights()
-            emit({"type": "downloaded", "path": path})
+            if args.model == "kokoro":
+                paths = download_kokoro_assets()
+                emit({"type": "downloaded", "paths": paths})
+            else:
+                path = download_csm_weights()
+                emit({"type": "downloaded", "path": path})
             return 0
         except Exception as exc:
-            emit({"type": "error", "message": f"Failed to download CSM weights: {exc}"})
+            emit(
+                {
+                    "type": "error",
+                    "message": f"Failed to download {args.model} assets: {exc}",
+                }
+            )
             traceback.print_exc(file=sys.stderr)
             return 1
 
     if args.server:
-        return run_server(args.quantize, args.context_audio, args.context_text)
+        return run_server(
+            args.model,
+            args.quantize,
+            args.context_audio,
+            args.context_text,
+        )
 
     parser.error("Expected either --download or --server")
     return 2

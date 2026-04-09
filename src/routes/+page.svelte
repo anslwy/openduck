@@ -49,6 +49,7 @@
     };
 
     type GemmaVariant = "e4b" | "e2b";
+    type CsmModelVariant = "expressiva_1b" | "kokoro_82m";
 
     type ConversationLogEntry = {
         id: number;
@@ -78,6 +79,7 @@
     let gemmaDownloadIndeterminate = $state(true);
     let gemmaDownloadError = $state<string | null>(null);
     let selectedGemmaVariant = $state<GemmaVariant>("e4b");
+    let selectedCsmModel = $state<CsmModelVariant>("expressiva_1b");
     let csmDownloadMessage = $state("Preparing download...");
     let csmDownloadProgress = $state<number | null>(null);
     let csmDownloadIndeterminate = $state(true);
@@ -129,6 +131,13 @@
             isLoadingGemma ||
             isUnloadingGemma,
     );
+    const csmVariantDisabled = $derived(
+        isCsmLoaded ||
+            isDownloadingCsm ||
+            isClearingCsmCache ||
+            isLoadingCsm ||
+            isUnloadingCsm,
+    );
     let conversationLogViewport = $state<HTMLDivElement | null>(null);
     const gemmaVariantOptions: Array<{
         value: GemmaVariant;
@@ -137,11 +146,28 @@
         { value: "e4b", label: "E4B" },
         { value: "e2b", label: "E2B" },
     ];
+    const csmModelOptions: Array<{
+        value: CsmModelVariant;
+        label: string;
+    }> = [
+        { value: "expressiva_1b", label: "CSM Expressiva 1B" },
+        { value: "kokoro_82m", label: "Kokoro-82M" },
+    ];
     const gemmaVariantTooltip = $derived(
         selectedGemmaVariant === "e4b"
             ? "E4B uses more RAM but is generally more capable. Recommended for Macs with 24 GB+ of unified memory."
             : "E2B uses less RAM but is generally less capable. Recommended for Macs with 16 GB+ of unified memory.",
     );
+    const selectedCsmModelLabel = $derived(
+        csmModelOptions.find((option) => option.value === selectedCsmModel)
+            ?.label ?? "CSM Expressiva 1B",
+    );
+    const csmModelTooltip = $derived(
+        selectedCsmModel === "expressiva_1b"
+            ? "CSM Expressiva 1B supports voice conditioning and optional quantization."
+            : "Kokoro-82M is a lighter English TTS backend. Quantization is not used for this model.",
+    );
+    const csmQuantizeAvailable = $derived(selectedCsmModel === "expressiva_1b");
     const PLAYBACK_PREBUFFER_SAMPLES = 2048;
 
     function setCallStage(
@@ -394,10 +420,30 @@
         }
     }
 
+    async function handleCsmModelChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        const nextVariant = target.value as CsmModelVariant;
+        const previousVariant = selectedCsmModel;
+
+        selectedCsmModel = nextVariant;
+
+        try {
+            await invoke("set_csm_model_variant", { variant: nextVariant });
+            resetDownloadState("csm");
+            csmLoadMessage = "Starting worker...";
+            await syncModelStatus();
+        } catch (err) {
+            selectedCsmModel = previousVariant;
+            console.error("Failed to update speech model:", err);
+            alert(`Failed to update the speech model.\n${String(err)}`);
+        }
+    }
+
     async function syncModelStatus() {
         try {
             const [
                 gemmaVariant,
+                csmModelVariant,
                 gemmaDownloaded,
                 gemmaLoaded,
                 csmDownloaded,
@@ -405,6 +451,7 @@
                 csmQuantized,
             ] = await Promise.all([
                 invoke<GemmaVariant>("get_gemma_variant"),
+                invoke<CsmModelVariant>("get_csm_model_variant"),
                 invoke<boolean>("check_model_status"),
                 invoke<boolean>("is_server_running"),
                 invoke<boolean>("check_csm_status"),
@@ -413,6 +460,7 @@
             ]);
 
             selectedGemmaVariant = gemmaVariant;
+            selectedCsmModel = csmModelVariant;
             isGemmaDownloaded = gemmaDownloaded;
             isGemmaLoaded = gemmaLoaded;
             isCsmDownloaded = csmDownloaded;
@@ -822,7 +870,7 @@
             await invoke("download_csm_model");
             await syncModelStatus();
         } catch (err) {
-            console.error("Download CSM failed:", err);
+            console.error("Download speech model failed:", err);
             const message = normalizeDownloadErrorMessage(err);
             csmDownloadError = message;
             csmDownloadMessage = message;
@@ -850,9 +898,11 @@
             await invoke("clear_model_cache", { model: "csm" });
         } catch (err) {
             const message = normalizeErrorMessage(err);
-            console.error("Failed to clear CSM cache:", err);
+            console.error("Failed to clear speech model cache:", err);
             csmDownloadError = message;
-            alert(`Failed to clear CSM cache.\n${message}`);
+            alert(
+                `Failed to clear ${selectedCsmModelLabel} cache.\n${message}`,
+            );
             return;
         }
         finally {
@@ -865,12 +915,14 @@
         isLoadingCsm = true;
         csmLoadMessage = "Starting worker...";
         try {
-            await applyCsmQuantizeSelection();
+            if (selectedCsmModel === "expressiva_1b") {
+                await applyCsmQuantizeSelection();
+            }
             await invoke("start_csm_server");
             isCsmLoaded = true;
         } catch (err) {
-            console.error("Load CSM failed:", err);
-            alert(`Failed to load CSM.\n${String(err)}`);
+            console.error("Load speech model failed:", err);
+            alert(`Failed to load ${selectedCsmModelLabel}.\n${String(err)}`);
         } finally {
             isLoadingCsm = false;
             await syncModelStatus();
@@ -897,8 +949,8 @@
             await invoke("stop_csm_server");
             isCsmLoaded = false;
         } catch (err) {
-            console.error("Unload CSM failed:", err);
-            alert(`Failed to unload CSM.\n${String(err)}`);
+            console.error("Unload speech model failed:", err);
+            alert(`Failed to unload ${selectedCsmModelLabel}.\n${String(err)}`);
         } finally {
             isUnloadingCsm = false;
             await syncModelStatus();
@@ -961,6 +1013,7 @@
                     }),
                     listen<CsmErrorEvent>("csm-error", ({ payload }) => {
                         console.error("CSM error:", payload.message);
+                        void syncModelStatus();
                         if (
                             payload.request_id == null ||
                             payload.request_id === activeTtsRequestId
@@ -1278,11 +1331,32 @@
             >
                 {#if isDownloadingCsm}
                     <div class="download-content">
+                        <div class="banner-heading-row">
+                            <span class="banner-title">Speech</span>
+                            <div class="tooltip-shell variant-select-shell">
+                                <select
+                                    class="variant-select"
+                                    value={selectedCsmModel}
+                                    aria-label="Speech model"
+                                    disabled={csmVariantDisabled}
+                                    onchange={handleCsmModelChange}
+                                >
+                                    {#each csmModelOptions as option}
+                                        <option value={option.value}
+                                            >{option.label}</option
+                                        >
+                                    {/each}
+                                </select>
+                                <div class="tooltip-bubble variant-tooltip">
+                                    {csmModelTooltip}
+                                </div>
+                            </div>
+                        </div>
                         <div class="download-row">
                             <span
                                 class="download-status-text"
                                 class:failed={!!csmDownloadError}
-                                >CSM Expressiva 1B: {csmDownloadMessage}</span
+                                >{selectedCsmModelLabel}: {csmDownloadMessage}</span
                             >
                             {#if csmDownloadProgress !== null}
                                 <span class="download-percent"
@@ -1308,9 +1382,31 @@
                         {#if isCsmLoaded}
                             <div class="banner-status">
                                 <div class="banner-copy">
-                                    <span class="banner-title"
-                                        >CSM Expressiva 1B</span
-                                    >
+                                    <div class="banner-heading-row">
+                                        <span class="banner-title">Speech</span>
+                                        <div
+                                            class="tooltip-shell variant-select-shell"
+                                        >
+                                            <select
+                                                class="variant-select"
+                                                value={selectedCsmModel}
+                                                aria-label="Speech model"
+                                                disabled={csmVariantDisabled}
+                                                onchange={handleCsmModelChange}
+                                            >
+                                                {#each csmModelOptions as option}
+                                                    <option value={option.value}
+                                                        >{option.label}</option
+                                                    >
+                                                {/each}
+                                            </select>
+                                            <div
+                                                class="tooltip-bubble variant-tooltip"
+                                            >
+                                                {csmModelTooltip}
+                                            </div>
+                                        </div>
+                                    </div>
                                     <span class="banner-subtitle">Loaded</span>
                                 </div>
                                 <div class="loaded-actions">
@@ -1344,28 +1440,48 @@
                         {:else}
                             <div class="banner-copy">
                                 <div class="banner-heading-row">
-                                    <span class="banner-title"
-                                        >CSM Expressiva 1B</span
-                                    >
-                                    <div class="tooltip-shell">
-                                        <button
-                                            type="button"
-                                            class="quantize-toggle"
-                                            class:active={isCsmQuantized}
-                                            disabled={isLoadingCsm ||
-                                                isDownloadingCsm ||
-                                                isClearingCsmCache ||
-                                                isUpdatingCsmQuantize}
-                                            onclick={handleCsmQuantizeToggle}
+                                    <span class="banner-title">Speech</span>
+                                    <div class="tooltip-shell variant-select-shell">
+                                        <select
+                                            class="variant-select"
+                                            value={selectedCsmModel}
+                                            aria-label="Speech model"
+                                            disabled={csmVariantDisabled}
+                                            onchange={handleCsmModelChange}
                                         >
-                                            <span class="quantize-dot"></span>
-                                            <span>Quantize</span>
-                                        </button>
-                                        <div class="tooltip-bubble">
-                                            This can speed up the audio
-                                            generation but lose the quality.
+                                            {#each csmModelOptions as option}
+                                                <option value={option.value}
+                                                    >{option.label}</option
+                                                >
+                                            {/each}
+                                        </select>
+                                        <div class="tooltip-bubble variant-tooltip">
+                                            {csmModelTooltip}
                                         </div>
                                     </div>
+                                    {#if csmQuantizeAvailable}
+                                        <div class="tooltip-shell">
+                                            <button
+                                                type="button"
+                                                class="quantize-toggle"
+                                                class:active={isCsmQuantized}
+                                                disabled={isLoadingCsm ||
+                                                    isDownloadingCsm ||
+                                                    isClearingCsmCache ||
+                                                    isUpdatingCsmQuantize}
+                                                onclick={handleCsmQuantizeToggle}
+                                            >
+                                                <span
+                                                    class="quantize-dot"
+                                                ></span>
+                                                <span>Quantize</span>
+                                            </button>
+                                            <div class="tooltip-bubble">
+                                                This can speed up the audio
+                                                generation but lose the quality.
+                                            </div>
+                                        </div>
+                                    {/if}
                                 </div>
                                 {#if isLoadingCsm}
                                     <span class="banner-subtitle"
@@ -1406,27 +1522,45 @@
                     <div class="banner-row">
                         <div class="banner-copy">
                             <div class="banner-heading-row">
-                                <span class="banner-title"
-                                    >CSM Expressiva 1B</span
-                                >
-                                <div class="tooltip-shell">
-                                    <button
-                                        type="button"
-                                        class="quantize-toggle"
-                                        class:active={isCsmQuantized}
-                                        disabled={isDownloadingCsm ||
-                                            isClearingCsmCache ||
-                                            isUpdatingCsmQuantize}
-                                        onclick={handleCsmQuantizeToggle}
+                                <span class="banner-title">Speech</span>
+                                <div class="tooltip-shell variant-select-shell">
+                                    <select
+                                        class="variant-select"
+                                        value={selectedCsmModel}
+                                        aria-label="Speech model"
+                                        disabled={csmVariantDisabled}
+                                        onchange={handleCsmModelChange}
                                     >
-                                        <span class="quantize-dot"></span>
-                                        <span>Quantize</span>
-                                    </button>
-                                    <div class="tooltip-bubble">
-                                        This can speed up the audio generation
-                                        but lose the quality.
+                                        {#each csmModelOptions as option}
+                                            <option value={option.value}
+                                                >{option.label}</option
+                                            >
+                                        {/each}
+                                    </select>
+                                    <div class="tooltip-bubble variant-tooltip">
+                                        {csmModelTooltip}
                                     </div>
                                 </div>
+                                {#if csmQuantizeAvailable}
+                                    <div class="tooltip-shell">
+                                        <button
+                                            type="button"
+                                            class="quantize-toggle"
+                                            class:active={isCsmQuantized}
+                                            disabled={isDownloadingCsm ||
+                                                isClearingCsmCache ||
+                                                isUpdatingCsmQuantize}
+                                            onclick={handleCsmQuantizeToggle}
+                                        >
+                                            <span class="quantize-dot"></span>
+                                            <span>Quantize</span>
+                                        </button>
+                                        <div class="tooltip-bubble">
+                                            This can speed up the audio
+                                            generation but lose the quality.
+                                        </div>
+                                    </div>
+                                {/if}
                             </div>
                             {#if csmDownloadError}
                                 <span class="banner-subtitle error"

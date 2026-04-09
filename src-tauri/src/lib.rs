@@ -15,10 +15,16 @@ use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, error, info, warn};
 
-const CSM_MODEL_REPO: &str = "senstella/csm-expressiva-1b";
-const CSM_CACHE_DIR: &str = "models--senstella--csm-expressiva-1b";
-const CSM_MODEL_FILE: &str = "mlx-ckpt.safetensors";
-const CSM_SPEAKER_ID: u32 = 4;
+const CSM_EXPRESSIVA_MODEL_REPO: &str = "senstella/csm-expressiva-1b";
+const CSM_EXPRESSIVA_CACHE_DIR: &str = "models--senstella--csm-expressiva-1b";
+const CSM_EXPRESSIVA_MODEL_FILE: &str = "mlx-ckpt.safetensors";
+const CSM_EXPRESSIVA_SPEAKER_ID: u32 = 4;
+const KOKORO_MODEL_REPO: &str = "mlx-community/Kokoro-82M-bf16";
+const KOKORO_CACHE_DIR: &str = "models--mlx-community--Kokoro-82M-bf16";
+const KOKORO_MODEL_FILE: &str = "kokoro-v1_0.safetensors";
+const KOKORO_CONFIG_FILE: &str = "config.json";
+const KOKORO_DEFAULT_VOICE: &str = "af_heart";
+const KOKORO_DEFAULT_VOICE_FILE: &str = "voices/af_heart.pt";
 const SILENCE_THRESHOLD: f32 = 0.02;
 const SILENCE_DURATION_CHUNKS: usize = 150;
 const MIN_SPEAKING_CHUNKS: usize = 10;
@@ -111,6 +117,72 @@ impl CsmVoice {
             Self::Male => CSM_MALE_REFERENCE_AUDIO_FILE,
             Self::Female => CSM_FEMALE_REFERENCE_AUDIO_FILE,
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CsmModelVariant {
+    Expressiva1b,
+    Kokoro82m,
+}
+
+impl CsmModelVariant {
+    fn from_key(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "expressiva_1b" | "expressiva-1b" | "csm" => Ok(Self::Expressiva1b),
+            "kokoro_82m" | "kokoro-82m" | "kokoro" => Ok(Self::Kokoro82m),
+            other => Err(format!("Unsupported speech model: {other}")),
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Expressiva1b => "expressiva_1b",
+            Self::Kokoro82m => "kokoro_82m",
+        }
+    }
+
+    fn worker_key(self) -> &'static str {
+        match self {
+            Self::Expressiva1b => "csm",
+            Self::Kokoro82m => "kokoro",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Expressiva1b => "CSM Expressiva 1B",
+            Self::Kokoro82m => "Kokoro-82M",
+        }
+    }
+
+    fn repo_id(self) -> &'static str {
+        match self {
+            Self::Expressiva1b => CSM_EXPRESSIVA_MODEL_REPO,
+            Self::Kokoro82m => KOKORO_MODEL_REPO,
+        }
+    }
+
+    fn cache_dir(self) -> &'static str {
+        match self {
+            Self::Expressiva1b => CSM_EXPRESSIVA_CACHE_DIR,
+            Self::Kokoro82m => KOKORO_CACHE_DIR,
+        }
+    }
+
+    fn required_files(self) -> &'static [&'static str] {
+        match self {
+            Self::Expressiva1b => &[CSM_EXPRESSIVA_MODEL_FILE],
+            Self::Kokoro82m => &[
+                KOKORO_CONFIG_FILE,
+                KOKORO_MODEL_FILE,
+                KOKORO_DEFAULT_VOICE_FILE,
+            ],
+        }
+    }
+
+    fn supports_quantization(self) -> bool {
+        matches!(self, Self::Expressiva1b)
     }
 }
 
@@ -226,6 +298,8 @@ struct AppState {
     csm_ready: Mutex<bool>,
     csm_startup_message: Mutex<Option<String>>,
     csm_stderr_tail: Mutex<VecDeque<String>>,
+    selected_csm_model: Mutex<CsmModelVariant>,
+    loaded_csm_model: Mutex<Option<CsmModelVariant>>,
     selected_csm_voice: Mutex<CsmVoice>,
     selected_csm_quantized: Mutex<bool>,
     next_csm_request_id: AtomicU64,
@@ -405,6 +479,14 @@ fn loaded_gemma_variant(state: &AppState) -> Option<GemmaVariant> {
     *state.loaded_gemma_variant.lock().unwrap()
 }
 
+fn selected_csm_model(state: &AppState) -> CsmModelVariant {
+    *state.selected_csm_model.lock().unwrap()
+}
+
+fn loaded_csm_model(state: &AppState) -> Option<CsmModelVariant> {
+    *state.loaded_csm_model.lock().unwrap()
+}
+
 #[tauri::command]
 fn get_gemma_variant(state: State<'_, AppState>) -> String {
     selected_gemma_variant(state.inner()).key().to_string()
@@ -521,6 +603,34 @@ fn get_csm_quantize(state: State<'_, AppState>) -> bool {
 }
 
 #[tauri::command]
+fn get_csm_model_variant(state: State<'_, AppState>) -> String {
+    selected_csm_model(state.inner()).key().to_string()
+}
+
+#[tauri::command]
+fn set_csm_model_variant(state: State<'_, AppState>, variant: String) -> Result<(), String> {
+    let selected_variant = CsmModelVariant::from_key(&variant)?;
+
+    if active_download_process(state.inner(), DownloadModel::Csm).is_some() {
+        return Err("A speech model download is already in progress.".to_string());
+    }
+
+    if let Some(loaded_variant) = loaded_csm_model(state.inner()) {
+        if loaded_variant != selected_variant {
+            return Err(format!(
+                "{} is already loaded. Unload it before switching to {}.",
+                loaded_variant.label(),
+                selected_variant.label()
+            ));
+        }
+    }
+
+    let mut variant_guard = state.selected_csm_model.lock().unwrap();
+    *variant_guard = selected_variant;
+    Ok(())
+}
+
+#[tauri::command]
 fn set_csm_quantize(state: State<'_, AppState>, enabled: bool) {
     let mut quantized_guard = state.selected_csm_quantized.lock().unwrap();
     *quantized_guard = enabled;
@@ -547,13 +657,28 @@ async fn start_csm_server_inner(
     app_handle: &tauri::AppHandle,
     state: &AppState,
 ) -> Result<(), String> {
+    let selected_variant = selected_csm_model(state);
     if csm_process_is_ready(state).await {
-        return Ok(());
+        if loaded_csm_model(state) == Some(selected_variant) {
+            return Ok(());
+        }
+
+        if let Some(loaded_variant) = loaded_csm_model(state) {
+            return Err(format!(
+                "{} is already loaded. Unload it before switching to {}.",
+                loaded_variant.label(),
+                selected_variant.label()
+            ));
+        }
     }
 
     stop_csm_server_inner(state).await?;
     reset_csm_startup_state(state);
-    update_csm_startup_message(app_handle, Some("Starting CSM worker...".to_string()), true);
+    update_csm_startup_message(
+        app_handle,
+        Some(format!("Starting {} worker...", selected_variant.label())),
+        true,
+    );
 
     let python_executable = resolve_gemma_python_executable(app_handle)?;
     let python_home = python_executable
@@ -561,7 +686,7 @@ async fn start_csm_server_inner(
         .and_then(|path| path.parent())
         .map(PathBuf::from)
         .ok_or_else(|| "Failed to resolve Gemma Python home".to_string())?;
-    let csm_site_packages = resolve_csm_site_packages(app_handle)?;
+    let speech_site_packages = resolve_speech_site_packages(app_handle, selected_variant)?;
     let csm_script = resolve_resource_file(app_handle, "csm_stream.py")?;
 
     info!("Starting CSM worker with {}", python_executable.display());
@@ -570,17 +695,26 @@ async fn start_csm_server_inner(
     command
         .arg(&csm_script)
         .arg("--server")
+        .arg("--model")
+        .arg(selected_variant.worker_key())
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONHOME", &python_home)
-        .env("PYTHONPATH", &csm_site_packages)
+        .env("PYTHONPATH", &speech_site_packages)
+        .env("HF_HUB_DISABLE_XET", "1")
+        .env("PYTORCH_ENABLE_MPS_FALLBACK", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     let should_quantize_csm = *state.selected_csm_quantized.lock().unwrap();
-    if should_quantize_csm {
+    if should_quantize_csm && selected_variant.supports_quantization() {
         info!("Starting CSM worker with quantization enabled");
         command.arg("--quantize");
+    } else if should_quantize_csm {
+        info!(
+            "Skipping quantization because {} does not support it",
+            selected_variant.label()
+        );
     } else {
         info!("Starting CSM worker without quantization");
     }
@@ -614,6 +748,10 @@ async fn start_csm_server_inner(
     {
         let mut csm_ready_guard = state.csm_ready.lock().unwrap();
         *csm_ready_guard = false;
+    }
+    {
+        let mut loaded_variant_guard = state.loaded_csm_model.lock().unwrap();
+        *loaded_variant_guard = Some(selected_variant);
     }
 
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -1265,7 +1403,17 @@ async fn send_csm_synthesis_request(
 ) -> Result<(), String> {
     let state = app_handle.state::<AppState>();
     if !csm_process_is_ready(state.inner()).await {
-        return Err("CSM is not loaded. Load the CSM model before starting a call.".to_string());
+        info!(
+            "Speech worker was unavailable for synthesis request {}. Attempting restart.",
+            request_id
+        );
+        start_csm_server_inner(app_handle, state.inner())
+            .await
+            .map_err(|err| format!("The speech worker stopped and could not be restarted: {err}"))?;
+    }
+
+    if !csm_process_is_ready(state.inner()).await {
+        return Err("The selected speech model is not ready. Try loading it again.".to_string());
     }
 
     let process = {
@@ -1279,7 +1427,8 @@ async fn send_csm_synthesis_request(
         "type": "synthesize",
         "request_id": request_id,
         "text": text,
-        "speaker": CSM_SPEAKER_ID,
+        "speaker": CSM_EXPRESSIVA_SPEAKER_ID,
+        "voice": KOKORO_DEFAULT_VOICE,
         "max_audio_length_ms": CSM_MAX_AUDIO_LENGTH_MS,
         "temperature": CSM_TEMPERATURE,
         "top_k": CSM_TOP_K,
@@ -1710,7 +1859,7 @@ mod tests {
             prepare_spoken_response_segments_for_csm(&sanitize_for_voice_output(
                 "Sure 😊. I can help with that 👍."
             )),
-            vec!["Sure. I can help with that.".to_string()]
+            vec!["Sure.".to_string(), "I can help with that.".to_string()]
         );
     }
 
@@ -1783,6 +1932,8 @@ async fn csm_process_is_ready(state: &AppState) -> bool {
             drop(child);
             let mut csm_process_guard = state.csm_process.lock().unwrap();
             *csm_process_guard = None;
+            let mut loaded_csm_model_guard = state.loaded_csm_model.lock().unwrap();
+            *loaded_csm_model_guard = None;
             let mut csm_ready_guard = state.csm_ready.lock().unwrap();
             *csm_ready_guard = false;
             reset_csm_startup_state(state);
@@ -1800,6 +1951,10 @@ async fn stop_csm_server_inner(state: &AppState) -> Result<(), String> {
         let mut csm_process_guard = state.csm_process.lock().unwrap();
         csm_process_guard.take()
     };
+    {
+        let mut loaded_csm_model_guard = state.loaded_csm_model.lock().unwrap();
+        *loaded_csm_model_guard = None;
+    }
     {
         let mut csm_ready_guard = state.csm_ready.lock().unwrap();
         *csm_ready_guard = false;
@@ -1901,7 +2056,7 @@ async fn csm_stdout_task(
                 send_ready_signal(&ready_tx, Err(message));
             }
             Err(err) => {
-                error!("Failed to parse CSM worker message: {} ({})", err, line);
+                warn!("Ignoring non-JSON speech worker stdout: {} ({})", err, line);
             }
         }
     }
@@ -1914,6 +2069,10 @@ async fn csm_stdout_task(
     {
         let mut csm_process_guard = state.csm_process.lock().unwrap();
         *csm_process_guard = None;
+    }
+    {
+        let mut loaded_csm_model_guard = state.loaded_csm_model.lock().unwrap();
+        *loaded_csm_model_guard = None;
     }
 
     send_ready_signal(
@@ -1928,7 +2087,13 @@ async fn csm_stdout_task(
 async fn csm_stderr_task(app_handle: tauri::AppHandle, stderr: ChildStderr) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        error!("CSM worker stderr: {}", line);
+        let preview = if line.chars().count() > 512 {
+            let truncated = line.chars().take(512).collect::<String>();
+            format!("{truncated}...[truncated {} chars]", line.chars().count() - 512)
+        } else {
+            line.clone()
+        };
+        error!("CSM worker stderr: {}", preview);
         push_csm_stderr_line(app_handle.state::<AppState>().inner(), line);
     }
 }
@@ -2260,36 +2425,16 @@ fn clear_huggingface_cache(model_dir_name: &str) -> Result<(), String> {
         .map_err(|err| format!("Failed to clear cache at {}: {err}", model_dir.display()))
 }
 
-fn huggingface_cached_file_exists(model_dir_name: &str, file_name: &str) -> bool {
-    let model_dir = huggingface_cache_root(model_dir_name);
-
-    if !model_dir.exists() {
+fn huggingface_cached_files_exist(model_dir_name: &str, required_files: &[&str]) -> bool {
+    if required_files.is_empty() {
         return false;
     }
 
-    let refs_main = model_dir.join("refs").join("main");
-    if let Ok(revision) = std::fs::read_to_string(&refs_main) {
-        let snapshot_file = model_dir
-            .join("snapshots")
-            .join(revision.trim())
-            .join(file_name);
-        if snapshot_file.exists() {
-            return true;
-        }
-    }
-
-    let snapshots_dir = model_dir.join("snapshots");
-    let Ok(entries) = std::fs::read_dir(snapshots_dir) else {
-        return false;
-    };
-
-    for entry in entries.flatten() {
-        if entry.path().join(file_name).exists() {
-            return true;
-        }
-    }
-
-    false
+    any_snapshot_matches(model_dir_name, |snapshot_dir| {
+        required_files
+            .iter()
+            .all(|required_file| snapshot_dir.join(required_file).exists())
+    })
 }
 
 fn gemma_snapshot_is_complete(snapshot_dir: &Path) -> bool {
@@ -2364,6 +2509,10 @@ fn any_snapshot_matches(model_dir_name: &str, predicate: impl Fn(&Path) -> bool)
 
 fn gemma_model_cache_exists(variant: GemmaVariant) -> bool {
     any_snapshot_matches(variant.cache_dir(), gemma_snapshot_is_complete)
+}
+
+fn csm_model_cache_exists(variant: CsmModelVariant) -> bool {
+    huggingface_cached_files_exist(variant.cache_dir(), variant.required_files())
 }
 
 fn active_download_process(state: &AppState, model: DownloadModel) -> Option<DownloadProcess> {
@@ -2559,6 +2708,24 @@ fn resolve_csm_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, S
     )
 }
 
+fn resolve_kokoro_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    resolve_existing_path_dev_first(
+        app_handle,
+        Path::new("resources/kokoro_env/venv/lib/python3.11/site-packages"),
+        "bundled Kokoro site-packages",
+    )
+}
+
+fn resolve_speech_site_packages(
+    app_handle: &tauri::AppHandle,
+    variant: CsmModelVariant,
+) -> Result<PathBuf, String> {
+    match variant {
+        CsmModelVariant::Expressiva1b => resolve_csm_site_packages(app_handle),
+        CsmModelVariant::Kokoro82m => resolve_kokoro_site_packages(app_handle),
+    }
+}
+
 fn resolve_gemma_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     resolve_existing_path_dev_first(
         app_handle,
@@ -2683,8 +2850,8 @@ fn check_model_status(state: State<'_, AppState>) -> bool {
 }
 
 #[tauri::command]
-async fn check_csm_status() -> bool {
-    huggingface_cached_file_exists(CSM_CACHE_DIR, CSM_MODEL_FILE)
+fn check_csm_status(state: State<'_, AppState>) -> bool {
+    csm_model_cache_exists(selected_csm_model(state.inner()))
 }
 
 #[tauri::command]
@@ -2707,11 +2874,15 @@ fn clear_model_cache(state: State<'_, AppState>, model: String) -> Result<(), St
             clear_huggingface_cache(selected_variant.cache_dir())?;
         }
         DownloadModel::Csm => {
-            if state.csm_process.lock().unwrap().is_some() {
-                return Err("Unload CSM before clearing its cache.".to_string());
+            let selected_variant = selected_csm_model(state.inner());
+            if loaded_csm_model(state.inner()) == Some(selected_variant) {
+                return Err(format!(
+                    "Unload {} before clearing its cache.",
+                    selected_variant.label()
+                ));
             }
 
-            clear_huggingface_cache(CSM_CACHE_DIR)?;
+            clear_huggingface_cache(selected_variant.cache_dir())?;
         }
     }
 
@@ -2737,14 +2908,18 @@ async fn download_model(
 }
 
 #[tauri::command]
-async fn download_csm_model(app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn download_csm_model(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let selected_variant = selected_csm_model(state.inner());
     let python_executable = resolve_gemma_python_executable(&app_handle)?;
     run_hf_download(
         &app_handle,
         python_executable,
         "csm",
-        CSM_MODEL_REPO,
-        &[CSM_MODEL_FILE],
+        selected_variant.repo_id(),
+        selected_variant.required_files(),
     )
     .await
 }
@@ -3078,6 +3253,8 @@ pub fn run() {
             csm_ready: Mutex::new(false),
             csm_startup_message: Mutex::new(None),
             csm_stderr_tail: Mutex::new(VecDeque::new()),
+            selected_csm_model: Mutex::new(CsmModelVariant::Expressiva1b),
+            loaded_csm_model: Mutex::new(None),
             selected_csm_voice: Mutex::new(CsmVoice::Male),
             selected_csm_quantized: Mutex::new(default_csm_quantized),
             next_csm_request_id: AtomicU64::new(1),
@@ -3104,7 +3281,9 @@ pub fn run() {
             is_csm_running,
             start_server,
             start_csm_server,
+            get_csm_model_variant,
             get_csm_quantize,
+            set_csm_model_variant,
             set_csm_quantize,
             set_csm_voice,
             stop_server,
