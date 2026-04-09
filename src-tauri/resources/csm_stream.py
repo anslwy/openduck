@@ -124,6 +124,25 @@ def load_reference_audio(context_audio: Path | None, read_audio) -> np.ndarray |
     return read_audio(context_audio, SAMPLE_RATE)
 
 
+def append_context_segment(
+    context: list,
+    speaker: int,
+    audio,
+    text: str,
+    Segment,
+) -> None:
+    if audio is None:
+        return
+
+    context.append(
+        Segment(
+            speaker=speaker,
+            text=text,
+            audio=audio,
+        )
+    )
+
+
 def run_server(
     quantize: bool, context_audio: Path | None = None, context_text: str = ""
 ) -> int:
@@ -149,6 +168,23 @@ def run_server(
     emit_status("CSM worker ready.")
     emit({"type": "ready", "sample_rate": SAMPLE_RATE})
     reference_audio = None
+    # Keep a small rolling carry-over from the last synthesized segment so
+    # adjacent requests inherit the same delivery without losing the base voice.
+    last_response_audio = None
+    last_response_text = ""
+    in_progress_request_id = None
+    in_progress_audio = None
+    in_progress_text = ""
+
+    def reset_dynamic_context() -> None:
+        nonlocal last_response_audio, last_response_text
+        nonlocal in_progress_request_id, in_progress_audio, in_progress_text
+        last_response_audio = None
+        last_response_text = ""
+        in_progress_request_id = None
+        in_progress_audio = None
+        in_progress_text = ""
+
     if context_audio is not None:
         try:
             reference_audio = load_reference_audio(context_audio, read_audio)
@@ -179,13 +215,22 @@ def run_server(
                     if context_audio_path
                     else None
                 )
+                reset_dynamic_context()
             except Exception as exc:
                 emit({"type": "error", "message": f"Failed to load context audio: {exc}"})
                 traceback.print_exc(file=sys.stderr)
             continue
         if request_type == "reset_context":
+            reset_dynamic_context()
             continue
         if request_type == "finalize_response":
+            request_id = request.get("request_id")
+            if request_id == in_progress_request_id and in_progress_audio is not None:
+                last_response_audio = in_progress_audio
+                last_response_text = in_progress_text
+            in_progress_request_id = None
+            in_progress_audio = None
+            in_progress_text = ""
             continue
         if request_type != "synthesize":
             emit({"type": "error", "message": f"Unsupported request type: {request_type}"})
@@ -211,13 +256,28 @@ def run_server(
                 top_k=int(request.get("top_k", 50)),
             )
             context = []
-            if reference_audio is not None:
-                context.append(
-                    Segment(
-                        speaker=speaker,
-                        text=context_text,
-                        audio=reference_audio,
-                    )
+            append_context_segment(
+                context,
+                speaker,
+                reference_audio,
+                context_text,
+                Segment,
+            )
+            if request_id == in_progress_request_id:
+                append_context_segment(
+                    context,
+                    speaker,
+                    in_progress_audio,
+                    in_progress_text,
+                    Segment,
+                )
+            else:
+                append_context_segment(
+                    context,
+                    speaker,
+                    last_response_audio,
+                    last_response_text,
+                    Segment,
                 )
             audio = generate(
                 model,
@@ -227,6 +287,9 @@ def run_server(
                 max_audio_length_ms=int(request.get("max_audio_length_ms", 10_000)),
                 sampler=sampler,
             )
+            in_progress_request_id = request_id
+            in_progress_audio = audio
+            in_progress_text = text
             audio_wav_base64 = encode_wav_base64(audio, SAMPLE_RATE)
             if audio_wav_base64:
                 emit(
