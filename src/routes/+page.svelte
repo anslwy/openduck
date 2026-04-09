@@ -204,7 +204,11 @@
 
             request.onupgradeneeded = () => {
                 const database = request.result;
-                if (!database.objectStoreNames.contains(CONTACT_ICONS_STORE_NAME)) {
+                if (
+                    !database.objectStoreNames.contains(
+                        CONTACT_ICONS_STORE_NAME,
+                    )
+                ) {
                     database.createObjectStore(CONTACT_ICONS_STORE_NAME);
                 }
             };
@@ -227,7 +231,10 @@
         const database = await openContactIconsDatabase();
 
         return new Promise<unknown>((resolve, reject) => {
-            const transaction = database.transaction(CONTACT_ICONS_STORE_NAME, mode);
+            const transaction = database.transaction(
+                CONTACT_ICONS_STORE_NAME,
+                mode,
+            );
             const store = transaction.objectStore(CONTACT_ICONS_STORE_NAME);
             const request = requestFactory(store);
 
@@ -387,9 +394,9 @@
     let silentCaptureSink: GainNode | null = null;
     let healthCheckInterval: ReturnType<typeof window.setInterval> | null =
         null;
-    let downloadStatusPollInterval:
-        | ReturnType<typeof window.setInterval>
-        | null = null;
+    let downloadStatusPollInterval: ReturnType<
+        typeof window.setInterval
+    > | null = null;
     let callTimerInterval: ReturnType<typeof window.setInterval> | null = null;
     let playbackIdleTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let eventUnlisteners: UnlistenFn[] = [];
@@ -415,9 +422,9 @@
     let callStageMessage = $state("");
     let contactsImportInput: HTMLInputElement | null = null;
     let contactIconInput: HTMLInputElement | null = null;
-    let selectedContactPromptSyncTimeout:
-        | ReturnType<typeof window.setTimeout>
-        | null = null;
+    let selectedContactPromptSyncTimeout: ReturnType<
+        typeof window.setTimeout
+    > | null = null;
 
     const formattedTime = $derived(
         `${Math.floor(time / 60)
@@ -475,7 +482,9 @@
             contacts[0] ??
             null,
     );
-    const selectedContactName = $derived(getContactDisplayName(selectedContact));
+    const selectedContactName = $derived(
+        getContactDisplayName(selectedContact),
+    );
     const selectedContactPrompt = $derived(
         selectedContact?.prompt.trim() || DEFAULT_VOICE_SYSTEM_PROMPT,
     );
@@ -583,8 +592,14 @@
             return;
         }
 
-        const payload = createStoredContactsPayload(contacts, selectedContactId);
-        window.localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(payload));
+        const payload = createStoredContactsPayload(
+            contacts,
+            selectedContactId,
+        );
+        window.localStorage.setItem(
+            CONTACTS_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
     }
 
     async function syncSelectedContactPrompt() {
@@ -805,7 +820,9 @@
             }));
         } catch (err) {
             console.error("Failed to save the selected contact icon:", err);
-            alert(`Failed to save contact icon.\n${normalizeErrorMessage(err)}`);
+            alert(
+                `Failed to save contact icon.\n${normalizeErrorMessage(err)}`,
+            );
         }
     }
 
@@ -823,7 +840,9 @@
             }));
         } catch (err) {
             console.error("Failed to clear the contact icon:", err);
-            alert(`Failed to clear contact icon.\n${normalizeErrorMessage(err)}`);
+            alert(
+                `Failed to clear contact icon.\n${normalizeErrorMessage(err)}`,
+            );
         }
     }
 
@@ -835,11 +854,11 @@
         try {
             const outputPath = await save({
                 title: "Export Contact",
-                defaultPath: `${slugifyContactName(selectedContact.name)}.openduck-contact.json`,
+                defaultPath: `${slugifyContactName(selectedContact.name)}.openduck`,
                 filters: [
                     {
                         name: "OpenDuck Contact",
-                        extensions: ["json"],
+                        extensions: ["openduck"],
                     },
                 ],
             });
@@ -1169,19 +1188,18 @@
                     return;
                 }
 
-                const {
-                    inputData,
-                    playbackReferenceData,
-                    playbackActive,
-                } = event.data as {
-                    inputData: Float32Array;
-                    playbackReferenceData?: Float32Array;
-                    playbackActive?: boolean;
-                };
+                const { inputData, playbackReferenceData, playbackActive } =
+                    event.data as {
+                        inputData: Float32Array;
+                        playbackReferenceData?: Float32Array;
+                        playbackActive?: boolean;
+                    };
                 void invoke("receive_audio_chunk", {
                     payload: {
                         data: Array.from(inputData),
-                        sample_rate: Math.round(captureContext?.sampleRate ?? 0),
+                        sample_rate: Math.round(
+                            captureContext?.sampleRate ?? 0,
+                        ),
                         playback_reference:
                             playbackActive && playbackReferenceData
                                 ? Array.from(playbackReferenceData)
@@ -1315,9 +1333,17 @@
         const mono = new Float32Array(audioBuffer.length);
         const mixScale = 1 / audioBuffer.numberOfChannels;
 
-        for (let channelIndex = 0; channelIndex < audioBuffer.numberOfChannels; channelIndex += 1) {
+        for (
+            let channelIndex = 0;
+            channelIndex < audioBuffer.numberOfChannels;
+            channelIndex += 1
+        ) {
             const channelData = audioBuffer.getChannelData(channelIndex);
-            for (let sampleIndex = 0; sampleIndex < channelData.length; sampleIndex += 1) {
+            for (
+                let sampleIndex = 0;
+                sampleIndex < channelData.length;
+                sampleIndex += 1
+            ) {
                 mono[sampleIndex] += channelData[sampleIndex] * mixScale;
             }
         }
@@ -1489,8 +1515,7 @@
             gemmaDownloadError = message;
             alert(`Failed to clear Gemma cache.\n${message}`);
             return;
-        }
-        finally {
+        } finally {
             isClearingGemmaCache = false;
             await syncModelStatus();
         }
@@ -1577,8 +1602,7 @@
                 `Failed to clear ${selectedCsmModelLabel} cache.\n${message}`,
             );
             return;
-        }
-        finally {
+        } finally {
             isClearingCsmCache = false;
             await syncModelStatus();
         }
@@ -1663,7 +1687,10 @@
                     listen<CsmAudioQueuedEvent>(
                         "csm-audio-queued",
                         ({ payload }) => {
-                            if (!calling || payload.request_id !== activeTtsRequestId) {
+                            if (
+                                !calling ||
+                                payload.request_id !== activeTtsRequestId
+                            ) {
                                 return;
                             }
 
@@ -2152,7 +2179,9 @@
                             <div class="banner-copy">
                                 <div class="banner-heading-row">
                                     <span class="banner-title">Speech</span>
-                                    <div class="tooltip-shell variant-select-shell">
+                                    <div
+                                        class="tooltip-shell variant-select-shell"
+                                    >
                                         <select
                                             class="variant-select"
                                             value={selectedCsmModel}
@@ -2166,7 +2195,9 @@
                                                 >
                                             {/each}
                                         </select>
-                                        <div class="tooltip-bubble variant-tooltip">
+                                        <div
+                                            class="tooltip-bubble variant-tooltip"
+                                        >
                                             {csmModelTooltip}
                                         </div>
                                     </div>
@@ -2182,8 +2213,7 @@
                                                     isUpdatingCsmQuantize}
                                                 onclick={handleCsmQuantizeToggle}
                                             >
-                                                <span
-                                                    class="quantize-dot"
+                                                <span class="quantize-dot"
                                                 ></span>
                                                 <span>Quantize</span>
                                             </button>
@@ -2374,7 +2404,8 @@
                                 <button
                                     type="button"
                                     class="contact-list-item"
-                                    class:active={contact.id === selectedContact?.id}
+                                    class:active={contact.id ===
+                                        selectedContact?.id}
                                     onclick={() => selectContact(contact.id)}
                                 >
                                     <span class="contact-list-name"
@@ -2419,8 +2450,8 @@
                                         >{selectedContactName}</span
                                     >
                                     <span class="contacts-editor-hint"
-                                        >Click the icon to upload a contact photo.
-                                        The duck icon stays as fallback.</span
+                                        >Click the icon to upload a contact
+                                        photo. The duck icon stays as fallback.</span
                                     >
                                     {#if selectedContact?.hasCustomIcon}
                                         <button
@@ -2576,11 +2607,11 @@
                             stroke-width="2.2"
                             stroke-linecap="round"
                             stroke-linejoin="round"
-                            ><path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2" /><circle
-                                cx="9.5"
-                                cy="7"
-                                r="4"
-                            /><path d="M20 8v6" /><path d="M23 11h-6" /></svg
+                            ><path
+                                d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"
+                            /><circle cx="9.5" cy="7" r="4" /><path
+                                d="M20 8v6"
+                            /><path d="M23 11h-6" /></svg
                         >
                     </button>
                 {/if}
