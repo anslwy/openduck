@@ -236,7 +236,6 @@ struct InputAudio {
 struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
-    max_tokens: u32,
     stream: bool,
 }
 
@@ -1361,7 +1360,6 @@ async fn transcribe_audio_with_gemma(
                 },
             ],
         }],
-        max_tokens: 192,
         stream: false,
     };
 
@@ -1476,7 +1474,6 @@ async fn stream_gemma_response_to_csm(
     let request = ChatRequest {
         model: gemma_model.to_string(),
         messages,
-        max_tokens: 64,
         stream: true,
     };
     log_chat_request_debug(conversation_session_id, &request);
