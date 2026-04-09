@@ -2249,6 +2249,17 @@ fn huggingface_cache_root(model_dir_name: &str) -> PathBuf {
         .join(model_dir_name)
 }
 
+fn clear_huggingface_cache(model_dir_name: &str) -> Result<(), String> {
+    let model_dir = huggingface_cache_root(model_dir_name);
+
+    if !model_dir.exists() {
+        return Ok(());
+    }
+
+    std::fs::remove_dir_all(&model_dir)
+        .map_err(|err| format!("Failed to clear cache at {}: {err}", model_dir.display()))
+}
+
 fn huggingface_cached_file_exists(model_dir_name: &str, file_name: &str) -> bool {
     let model_dir = huggingface_cache_root(model_dir_name);
 
@@ -2677,6 +2688,38 @@ async fn check_csm_status() -> bool {
 }
 
 #[tauri::command]
+fn clear_model_cache(state: State<'_, AppState>, model: String) -> Result<(), String> {
+    let download_model = DownloadModel::from_key(&model)?;
+    if active_download_process(state.inner(), download_model).is_some() {
+        return Err(format!("{model} download already in progress"));
+    }
+
+    match download_model {
+        DownloadModel::Gemma => {
+            let selected_variant = selected_gemma_variant(state.inner());
+            if loaded_gemma_variant(state.inner()) == Some(selected_variant) {
+                return Err(format!(
+                    "Unload Gemma {} before clearing its cache.",
+                    selected_variant.label()
+                ));
+            }
+
+            clear_huggingface_cache(selected_variant.cache_dir())?;
+        }
+        DownloadModel::Csm => {
+            if state.csm_process.lock().unwrap().is_some() {
+                return Err("Unload CSM before clearing its cache.".to_string());
+            }
+
+            clear_huggingface_cache(CSM_CACHE_DIR)?;
+        }
+    }
+
+    set_tracked_download_state(state.inner(), download_model, None);
+    Ok(())
+}
+
+#[tauri::command]
 async fn download_model(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -3052,6 +3095,7 @@ pub fn run() {
             set_gemma_variant,
             check_model_status,
             check_csm_status,
+            clear_model_cache,
             get_model_download_status,
             download_model,
             download_csm_model,

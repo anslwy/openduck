@@ -64,9 +64,11 @@
     let isCsmDownloaded = $state(false);
     let isCsmLoaded = $state(false);
     let isDownloadingGemma = $state(false);
+    let isClearingGemmaCache = $state(false);
     let isCancellingGemmaDownload = $state(false);
     let isLoadingGemma = $state(false);
     let isDownloadingCsm = $state(false);
+    let isClearingCsmCache = $state(false);
     let isLoadingCsm = $state(false);
     let isUnloadingGemma = $state(false);
     let isUnloadingCsm = $state(false);
@@ -122,6 +124,7 @@
     const gemmaVariantDisabled = $derived(
         isGemmaLoaded ||
             isDownloadingGemma ||
+            isClearingGemmaCache ||
             isCancellingGemmaDownload ||
             isLoadingGemma ||
             isUnloadingGemma,
@@ -748,6 +751,30 @@
         }
     }
 
+    async function handleClearGemmaCache() {
+        if (isClearingGemmaCache || isLoadingGemma || isUnloadingGemma) {
+            return;
+        }
+
+        isClearingGemmaCache = true;
+        gemmaDownloadError = null;
+        resetDownloadState("gemma");
+
+        try {
+            await invoke("clear_model_cache", { model: "gemma" });
+        } catch (err) {
+            const message = normalizeErrorMessage(err);
+            console.error("Failed to clear Gemma cache:", err);
+            gemmaDownloadError = message;
+            alert(`Failed to clear Gemma cache.\n${message}`);
+            return;
+        }
+        finally {
+            isClearingGemmaCache = false;
+            await syncModelStatus();
+        }
+    }
+
     async function handleCancelGemmaDownload() {
         if (!isDownloadingGemma) {
             return;
@@ -806,6 +833,31 @@
             if (!isDownloadingGemma) {
                 stopDownloadStatusPolling();
             }
+            await syncModelStatus();
+        }
+    }
+
+    async function handleClearCsmCache() {
+        if (isClearingCsmCache || isLoadingCsm || isUnloadingCsm) {
+            return;
+        }
+
+        isClearingCsmCache = true;
+        csmDownloadError = null;
+        resetDownloadState("csm");
+
+        try {
+            await invoke("clear_model_cache", { model: "csm" });
+        } catch (err) {
+            const message = normalizeErrorMessage(err);
+            console.error("Failed to clear CSM cache:", err);
+            csmDownloadError = message;
+            alert(`Failed to clear CSM cache.\n${message}`);
+            return;
+        }
+        finally {
+            isClearingCsmCache = false;
+            await syncModelStatus();
         }
     }
 
@@ -1139,11 +1191,29 @@
                                         </div>
                                     </div>
                                 </div>
-                                <span class="banner-subtitle">Downloaded</span>
+                                <div class="banner-subtitle-row">
+                                    <span class="banner-subtitle"
+                                        >Downloaded</span
+                                    >
+                                    <button
+                                        type="button"
+                                        class="utility-btn subtitle-action-btn"
+                                        disabled={isLoadingGemma ||
+                                            isUnloadingGemma ||
+                                            isClearingGemmaCache}
+                                        onclick={handleClearGemmaCache}
+                                    >
+                                        {isClearingGemmaCache
+                                            ? "Clearing..."
+                                            : "Clear Cache"}
+                                    </button>
+                                </div>
                             </div>
                             <button
                                 class="download-btn"
-                                disabled={isLoadingGemma || isUnloadingGemma}
+                                disabled={isLoadingGemma ||
+                                    isUnloadingGemma ||
+                                    isClearingGemmaCache}
                                 onclick={handleLoadGemma}
                             >
                                 {isLoadingGemma ? "Loading..." : "Load Model"}
@@ -1284,6 +1354,7 @@
                                             class:active={isCsmQuantized}
                                             disabled={isLoadingCsm ||
                                                 isDownloadingCsm ||
+                                                isClearingCsmCache ||
                                                 isUpdatingCsmQuantize}
                                             onclick={handleCsmQuantizeToggle}
                                         >
@@ -1296,15 +1367,35 @@
                                         </div>
                                     </div>
                                 </div>
-                                <span class="banner-subtitle"
-                                    >{isLoadingCsm
-                                        ? csmLoadMessage
-                                        : "Downloaded"}</span
-                                >
+                                {#if isLoadingCsm}
+                                    <span class="banner-subtitle"
+                                        >{csmLoadMessage}</span
+                                    >
+                                {:else}
+                                    <div class="banner-subtitle-row">
+                                        <span class="banner-subtitle"
+                                            >Downloaded</span
+                                        >
+                                        <button
+                                            type="button"
+                                            class="utility-btn subtitle-action-btn"
+                                            disabled={isLoadingCsm ||
+                                                isUnloadingCsm ||
+                                                isClearingCsmCache}
+                                            onclick={handleClearCsmCache}
+                                        >
+                                            {isClearingCsmCache
+                                                ? "Clearing..."
+                                                : "Clear Cache"}
+                                        </button>
+                                    </div>
+                                {/if}
                             </div>
                             <button
                                 class="download-btn"
-                                disabled={isLoadingCsm || isUnloadingCsm}
+                                disabled={isLoadingCsm ||
+                                    isUnloadingCsm ||
+                                    isClearingCsmCache}
                                 onclick={handleLoadCsm}
                             >
                                 {isLoadingCsm ? "Loading..." : "Load Model"}
@@ -1324,6 +1415,7 @@
                                         class="quantize-toggle"
                                         class:active={isCsmQuantized}
                                         disabled={isDownloadingCsm ||
+                                            isClearingCsmCache ||
                                             isUpdatingCsmQuantize}
                                         onclick={handleCsmQuantizeToggle}
                                     >
@@ -2011,6 +2103,13 @@
         letter-spacing: -0.01em;
     }
 
+    .banner-subtitle-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
     .banner-subtitle.error {
         color: #ffb3ad;
     }
@@ -2111,6 +2210,12 @@
     .utility-btn:hover:not(:disabled) {
         background: rgba(255, 255, 255, 0.12);
         border-color: rgba(255, 255, 255, 0.12);
+    }
+
+    .subtitle-action-btn {
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 0.8rem;
     }
 
     .tooltip-shell {
