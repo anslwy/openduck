@@ -483,9 +483,11 @@
     let isLoadingGemma = $state(false);
     let isDownloadingCsm = $state(false);
     let isClearingCsmCache = $state(false);
+    let isCancellingCsmDownload = $state(false);
     let isLoadingCsm = $state(false);
     let isDownloadingStt = $state(false);
     let isClearingSttCache = $state(false);
+    let isCancellingSttDownload = $state(false);
     let isLoadingStt = $state(false);
     let isUnloadingGemma = $state(false);
     let isUnloadingCsm = $state(false);
@@ -600,12 +602,14 @@
         isCsmLoaded ||
             isDownloadingCsm ||
             isClearingCsmCache ||
+            isCancellingCsmDownload ||
             isLoadingCsm ||
             isUnloadingCsm,
     );
     const sttVariantDisabled = $derived(
         isDownloadingStt ||
             isClearingSttCache ||
+            isCancellingSttDownload ||
             isLoadingStt ||
             isUnloadingStt ||
             (selectedSttModel === "whisper_large_v3_turbo" && isSttLoaded),
@@ -698,10 +702,12 @@
             isUnloadingGemma ||
             isDownloadingCsm ||
             isClearingCsmCache ||
+            isCancellingCsmDownload ||
             isLoadingCsm ||
             isUnloadingCsm ||
             isDownloadingStt ||
             isClearingSttCache ||
+            isCancellingSttDownload ||
             isLoadingStt ||
             isUnloadingStt,
     );
@@ -715,7 +721,7 @@
     );
     const loadAllButtonTitle = $derived(
         loadAllMissingDownloads.length > 0
-            ? `Download ${loadAllMissingDownloads.join(", ")} before loading all.`
+            ? `Download and load ${loadAllMissingDownloads.join(", ")}.`
             : loadAllNeedsAction
               ? "Load the selected models."
               : "The selected models are already loaded.",
@@ -1425,6 +1431,9 @@
             ) {
                 sttDownloadError = null;
             }
+            if (payload.phase === "cancelled") {
+                isCancellingSttDownload = false;
+            }
             return;
         }
 
@@ -1439,6 +1448,25 @@
         ) {
             csmDownloadError = null;
         }
+        if (payload.phase === "cancelled") {
+            isCancellingCsmDownload = false;
+        }
+    }
+
+    function shouldApplyDownloadEvent(payload: ModelDownloadProgressEvent) {
+        if (payload.phase !== "progress") {
+            return true;
+        }
+
+        if (payload.model === "gemma") {
+            return !isCancellingGemmaDownload;
+        }
+
+        if (payload.model === "csm") {
+            return !isCancellingCsmDownload;
+        }
+
+        return !isCancellingSttDownload;
     }
 
     function stopDownloadStatusPolling() {
@@ -1476,16 +1504,13 @@
                     : Promise.resolve(null),
             ]);
 
-            if (
-                gemmaStatus &&
-                (!isCancellingGemmaDownload || gemmaStatus.phase !== "progress")
-            ) {
+            if (gemmaStatus && shouldApplyDownloadEvent(gemmaStatus)) {
                 applyDownloadEvent(gemmaStatus);
             }
-            if (csmStatus) {
+            if (csmStatus && shouldApplyDownloadEvent(csmStatus)) {
                 applyDownloadEvent(csmStatus);
             }
-            if (sttStatus) {
+            if (sttStatus && shouldApplyDownloadEvent(sttStatus)) {
                 applyDownloadEvent(sttStatus);
             }
         } catch (err) {
@@ -2123,9 +2148,10 @@
         isCancellingGemmaDownload = false;
         resetDownloadState("gemma");
         ensureDownloadStatusPolling();
+        let shouldAutoLoad = false;
         try {
             await invoke("download_model");
-            await syncModelStatus();
+            shouldAutoLoad = true;
         } catch (err) {
             console.error("Download model failed:", err);
             if (!String(err).toLowerCase().includes("cancelled")) {
@@ -2142,6 +2168,10 @@
                 stopDownloadStatusPolling();
             }
             await syncModelStatus();
+        }
+
+        if (shouldAutoLoad && !isGemmaLoaded) {
+            await handleLoadGemma();
         }
     }
 
@@ -2209,47 +2239,103 @@
 
     async function handleDownloadCsm() {
         isDownloadingCsm = true;
+        isCancellingCsmDownload = false;
         resetDownloadState("csm");
         ensureDownloadStatusPolling();
+        let shouldAutoLoad = false;
         try {
             await invoke("download_csm_model");
-            await syncModelStatus();
+            shouldAutoLoad = true;
         } catch (err) {
             console.error("Download speech model failed:", err);
-            const message = normalizeDownloadErrorMessage(err);
-            csmDownloadError = message;
-            csmDownloadMessage = message;
-            csmDownloadProgress = null;
-            csmDownloadIndeterminate = true;
+            if (!String(err).toLowerCase().includes("cancelled")) {
+                const message = normalizeDownloadErrorMessage(err);
+                csmDownloadError = message;
+                csmDownloadMessage = message;
+                csmDownloadProgress = null;
+                csmDownloadIndeterminate = true;
+            }
         } finally {
             isDownloadingCsm = false;
+            isCancellingCsmDownload = false;
             if (!isDownloadingGemma && !isDownloadingStt) {
                 stopDownloadStatusPolling();
             }
             await syncModelStatus();
         }
+
+        if (shouldAutoLoad && !isCsmLoaded) {
+            await handleLoadCsm();
+        }
     }
 
     async function handleDownloadStt() {
         isDownloadingStt = true;
+        isCancellingSttDownload = false;
         resetDownloadState("stt");
         ensureDownloadStatusPolling();
+        let shouldAutoLoad = false;
         try {
             await invoke("download_stt_model");
-            await syncModelStatus();
+            shouldAutoLoad = true;
         } catch (err) {
             console.error("Download STT model failed:", err);
-            const message = normalizeDownloadErrorMessage(err);
-            sttDownloadError = message;
-            sttDownloadMessage = message;
-            sttDownloadProgress = null;
-            sttDownloadIndeterminate = true;
+            if (!String(err).toLowerCase().includes("cancelled")) {
+                const message = normalizeDownloadErrorMessage(err);
+                sttDownloadError = message;
+                sttDownloadMessage = message;
+                sttDownloadProgress = null;
+                sttDownloadIndeterminate = true;
+            }
         } finally {
             isDownloadingStt = false;
+            isCancellingSttDownload = false;
             if (!isDownloadingGemma && !isDownloadingCsm) {
                 stopDownloadStatusPolling();
             }
             await syncModelStatus();
+        }
+
+        if (shouldAutoLoad && !isSttLoaded) {
+            await handleLoadStt();
+        }
+    }
+
+    async function handleCancelCsmDownload() {
+        if (!isDownloadingCsm) {
+            return;
+        }
+
+        isCancellingCsmDownload = true;
+        csmDownloadMessage = "Cancelling download...";
+        csmDownloadProgress = null;
+        csmDownloadIndeterminate = true;
+
+        try {
+            await invoke("cancel_model_download", { model: "csm" });
+        } catch (err) {
+            isCancellingCsmDownload = false;
+            console.error("Failed to cancel speech model download:", err);
+            alert(`Failed to cancel ${selectedCsmModelLabel} download.\n${String(err)}`);
+        }
+    }
+
+    async function handleCancelSttDownload() {
+        if (!isDownloadingStt) {
+            return;
+        }
+
+        isCancellingSttDownload = true;
+        sttDownloadMessage = "Cancelling download...";
+        sttDownloadProgress = null;
+        sttDownloadIndeterminate = true;
+
+        try {
+            await invoke("cancel_model_download", { model: "stt" });
+        } catch (err) {
+            isCancellingSttDownload = false;
+            console.error("Failed to cancel STT model download:", err);
+            alert(`Failed to cancel ${selectedSttModelLabel} download.\n${String(err)}`);
         }
     }
 
@@ -2341,33 +2427,47 @@
             return;
         }
 
-        if (loadAllMissingDownloads.length > 0) {
-            const missingModels = loadAllMissingDownloads.join(", ");
-            alert(`Download ${missingModels} before loading all.`);
-            return;
-        }
-
         isLoadingAll = true;
 
         try {
             await syncModelStatus();
 
-            if (!isGemmaLoaded) {
+            if (!isGemmaDownloaded) {
+                await handleDownloadGemma();
+                if (!isGemmaDownloaded || !isGemmaLoaded) {
+                    return;
+                }
+            } else if (!isGemmaLoaded) {
                 await handleLoadGemma();
                 if (!isGemmaLoaded) {
                     return;
                 }
             }
 
-            if (selectedSttModel === "whisper_large_v3_turbo" && !isSttLoaded) {
-                await handleLoadStt();
-                if (!isSttLoaded) {
-                    return;
+            if (selectedSttModel === "whisper_large_v3_turbo") {
+                if (!isSttDownloaded) {
+                    await handleDownloadStt();
+                    if (!isSttDownloaded || !isSttLoaded) {
+                        return;
+                    }
+                } else if (!isSttLoaded) {
+                    await handleLoadStt();
+                    if (!isSttLoaded) {
+                        return;
+                    }
                 }
             }
 
-            if (!isCsmLoaded) {
+            if (!isCsmDownloaded) {
+                await handleDownloadCsm();
+                if (!isCsmDownloaded || !isCsmLoaded) {
+                    return;
+                }
+            } else if (!isCsmLoaded) {
                 await handleLoadCsm();
+                if (!isCsmLoaded) {
+                    return;
+                }
             }
         } finally {
             isLoadingAll = false;
@@ -2560,7 +2660,9 @@
                     listen<ModelDownloadProgressEvent>(
                         "model-download-progress",
                         ({ payload }) => {
-                            applyDownloadEvent(payload);
+                            if (shouldApplyDownloadEvent(payload)) {
+                                applyDownloadEvent(payload);
+                            }
                         },
                     ),
                     listen<ScreenCaptureEvent>("screen-capture", ({ payload }) => {
@@ -2631,37 +2733,26 @@
             >
                 {#if isDownloadingGemma}
                     <div class="download-content">
-                        <div class="banner-row">
-                            <div class="banner-heading-row">
-                                <span class="banner-title">Gemma</span>
-                                <div class="tooltip-shell variant-select-shell">
-                                    <select
-                                        class="variant-select"
-                                        value={selectedGemmaVariant}
-                                        aria-label="Gemma variant"
-                                        disabled={gemmaVariantDisabled}
-                                        onchange={handleGemmaVariantChange}
-                                    >
-                                        {#each gemmaVariantOptions as option}
-                                            <option value={option.value}
-                                                >{option.label}</option
-                                            >
-                                        {/each}
-                                    </select>
-                                    <div class="tooltip-bubble variant-tooltip">
-                                        {gemmaVariantTooltip}
-                                    </div>
+                        <div class="banner-heading-row">
+                            <span class="banner-title">Gemma</span>
+                            <div class="tooltip-shell variant-select-shell">
+                                <select
+                                    class="variant-select"
+                                    value={selectedGemmaVariant}
+                                    aria-label="Gemma variant"
+                                    disabled={gemmaVariantDisabled}
+                                    onchange={handleGemmaVariantChange}
+                                >
+                                    {#each gemmaVariantOptions as option}
+                                        <option value={option.value}
+                                            >{option.label}</option
+                                        >
+                                    {/each}
+                                </select>
+                                <div class="tooltip-bubble variant-tooltip">
+                                    {gemmaVariantTooltip}
                                 </div>
                             </div>
-                            <button
-                                class="utility-btn"
-                                disabled={isCancellingGemmaDownload}
-                                onclick={handleCancelGemmaDownload}
-                            >
-                                {isCancellingGemmaDownload
-                                    ? "Cancelling..."
-                                    : "Cancel"}
-                            </button>
                         </div>
                         <div class="download-row">
                             <span
@@ -2677,15 +2768,45 @@
                                 >
                             {/if}
                         </div>
-                        <div class="progress-track">
-                            <div
-                                class="progress-fill"
-                                class:indeterminate={gemmaDownloadIndeterminate}
-                                class:failed={!!gemmaDownloadError}
-                                style:width={gemmaDownloadIndeterminate
-                                    ? "38%"
-                                    : `${gemmaDownloadProgress ?? 0}%`}
-                            ></div>
+                        <div class="progress-row">
+                            <button
+                                type="button"
+                                class="progress-cancel-btn"
+                                disabled={isCancellingGemmaDownload}
+                                aria-label="Cancel Gemma download"
+                                title={isCancellingGemmaDownload
+                                    ? "Cancelling download..."
+                                    : "Cancel download"}
+                                onclick={handleCancelGemmaDownload}
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><line x1="18" y1="6" x2="6" y2="18" /><line
+                                        x1="6"
+                                        y1="6"
+                                        x2="18"
+                                        y2="18"
+                                    /></svg
+                                >
+                            </button>
+                            <div class="progress-track">
+                                <div
+                                    class="progress-fill"
+                                    class:indeterminate={gemmaDownloadIndeterminate}
+                                    class:failed={!!gemmaDownloadError}
+                                    style:width={gemmaDownloadIndeterminate
+                                        ? "38%"
+                                        : `${gemmaDownloadProgress ?? 0}%`}
+                                ></div>
+                            </div>
                         </div>
                     </div>
                 {:else if isGemmaDownloaded}
@@ -2930,15 +3051,45 @@
                                 >
                             {/if}
                         </div>
-                        <div class="progress-track">
-                            <div
-                                class="progress-fill"
-                                class:indeterminate={sttDownloadIndeterminate}
-                                class:failed={!!sttDownloadError}
-                                style:width={sttDownloadIndeterminate
-                                    ? "38%"
-                                    : `${sttDownloadProgress ?? 0}%`}
-                            ></div>
+                        <div class="progress-row">
+                            <button
+                                type="button"
+                                class="progress-cancel-btn"
+                                disabled={isCancellingSttDownload}
+                                aria-label="Cancel STT download"
+                                title={isCancellingSttDownload
+                                    ? "Cancelling download..."
+                                    : "Cancel download"}
+                                onclick={handleCancelSttDownload}
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><line x1="18" y1="6" x2="6" y2="18" /><line
+                                        x1="6"
+                                        y1="6"
+                                        x2="18"
+                                        y2="18"
+                                    /></svg
+                                >
+                            </button>
+                            <div class="progress-track">
+                                <div
+                                    class="progress-fill"
+                                    class:indeterminate={sttDownloadIndeterminate}
+                                    class:failed={!!sttDownloadError}
+                                    style:width={sttDownloadIndeterminate
+                                        ? "38%"
+                                        : `${sttDownloadProgress ?? 0}%`}
+                                ></div>
+                            </div>
                         </div>
                     </div>
                 {:else if isSttDownloaded}
@@ -3156,15 +3307,45 @@
                                 >
                             {/if}
                         </div>
-                        <div class="progress-track">
-                            <div
-                                class="progress-fill"
-                                class:indeterminate={csmDownloadIndeterminate}
-                                class:failed={!!csmDownloadError}
-                                style:width={csmDownloadIndeterminate
-                                    ? "38%"
-                                    : `${csmDownloadProgress ?? 0}%`}
-                            ></div>
+                        <div class="progress-row">
+                            <button
+                                type="button"
+                                class="progress-cancel-btn"
+                                disabled={isCancellingCsmDownload}
+                                aria-label="Cancel speech model download"
+                                title={isCancellingCsmDownload
+                                    ? "Cancelling download..."
+                                    : "Cancel download"}
+                                onclick={handleCancelCsmDownload}
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><line x1="18" y1="6" x2="6" y2="18" /><line
+                                        x1="6"
+                                        y1="6"
+                                        x2="18"
+                                        y2="18"
+                                    /></svg
+                                >
+                            </button>
+                            <div class="progress-track">
+                                <div
+                                    class="progress-fill"
+                                    class:indeterminate={csmDownloadIndeterminate}
+                                    class:failed={!!csmDownloadError}
+                                    style:width={csmDownloadIndeterminate
+                                        ? "38%"
+                                        : `${csmDownloadProgress ?? 0}%`}
+                                ></div>
+                            </div>
                         </div>
                     </div>
                 {:else if isCsmDownloaded}
@@ -4671,6 +4852,13 @@
         gap: 16px;
     }
 
+    .progress-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+    }
+
     .banner-row {
         display: flex;
         align-items: center;
@@ -4754,11 +4942,38 @@
 
     .progress-track {
         position: relative;
+        flex: 1;
+        min-width: 0;
         width: 100%;
         height: 8px;
         border-radius: 999px;
         background: rgba(255, 255, 255, 0.1);
         overflow: hidden;
+    }
+
+    .progress-cancel-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        flex-shrink: 0;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.82);
+        cursor: pointer;
+        transition:
+            background-color 0.2s ease,
+            border-color 0.2s ease,
+            color 0.2s ease;
+    }
+
+    .progress-cancel-btn:hover:not(:disabled) {
+        background: rgba(255, 95, 87, 0.16);
+        border-color: rgba(255, 95, 87, 0.32);
+        color: #ffd2ce;
     }
 
     .progress-fill {
@@ -4790,6 +5005,7 @@
 
     .download-btn:disabled,
     .utility-btn:disabled,
+    .progress-cancel-btn:disabled,
     .quantize-toggle:disabled,
     .variant-select:disabled {
         opacity: 0.5;
