@@ -95,12 +95,23 @@
         savedPath: string;
     };
 
+    type StoredModelPreferences = {
+        version: 1;
+        gemmaVariant: GemmaVariant;
+        csmModel: CsmModelVariant;
+        sttModel: SttModelVariant;
+    };
+
     const DEFAULT_VOICE_SYSTEM_PROMPT =
         "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
     const CONTACTS_STORAGE_KEY = "openduck.contacts.v1";
     const CONTACT_ICONS_DB_NAME = "openduck.contacts";
     const CONTACT_ICONS_STORE_NAME = "contact-icons";
     const DEFAULT_CONTACT_ID = "contact-openduck";
+    const MODEL_PREFERENCES_STORAGE_KEY = "openduck.model-preferences.v1";
+    const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
+    const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
+    const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
 
     let contactIconsDbPromise: Promise<IDBDatabase> | null = null;
 
@@ -143,6 +154,75 @@
                 hasCustomIcon: contact.hasCustomIcon,
             })),
         };
+    }
+
+    function createDefaultModelPreferences(): StoredModelPreferences {
+        return {
+            version: 1,
+            gemmaVariant: DEFAULT_GEMMA_VARIANT,
+            csmModel: DEFAULT_CSM_MODEL,
+            sttModel: DEFAULT_STT_MODEL,
+        };
+    }
+
+    function isGemmaVariant(value: unknown): value is GemmaVariant {
+        return value === "e4b" || value === "e2b";
+    }
+
+    function isCsmModelVariant(value: unknown): value is CsmModelVariant {
+        return (
+            value === "expressiva_1b" ||
+            value === "kokoro_82m" ||
+            value === "cosyvoice2_0_5b"
+        );
+    }
+
+    function isSttModelVariant(value: unknown): value is SttModelVariant {
+        return value === "gemma" || value === "whisper_large_v3_turbo";
+    }
+
+    function loadModelPreferencesFromStorage(): StoredModelPreferences {
+        const fallback = createDefaultModelPreferences();
+
+        if (typeof window === "undefined") {
+            return fallback;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            MODEL_PREFERENCES_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return fallback;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                gemmaVariant?: unknown;
+                csmModel?: unknown;
+                sttModel?: unknown;
+            };
+
+            if (parsed.version !== 1) {
+                return fallback;
+            }
+
+            return {
+                version: 1,
+                gemmaVariant: isGemmaVariant(parsed.gemmaVariant)
+                    ? parsed.gemmaVariant
+                    : DEFAULT_GEMMA_VARIANT,
+                csmModel: isCsmModelVariant(parsed.csmModel)
+                    ? parsed.csmModel
+                    : DEFAULT_CSM_MODEL,
+                sttModel: isSttModelVariant(parsed.sttModel)
+                    ? parsed.sttModel
+                    : DEFAULT_STT_MODEL,
+            };
+        } catch (err) {
+            console.error("Failed to restore model preferences:", err);
+            return fallback;
+        }
     }
 
     function normalizeStoredContactProfile(
@@ -383,14 +463,15 @@
     let isUnloadingGemma = $state(false);
     let isUnloadingCsm = $state(false);
     let isUnloadingStt = $state(false);
+    let isLoadingAll = $state(false);
     let isUpdatingCsmQuantize = $state(false);
     let gemmaDownloadMessage = $state("Preparing download...");
     let gemmaDownloadProgress = $state<number | null>(null);
     let gemmaDownloadIndeterminate = $state(true);
     let gemmaDownloadError = $state<string | null>(null);
-    let selectedGemmaVariant = $state<GemmaVariant>("e4b");
-    let selectedCsmModel = $state<CsmModelVariant>("expressiva_1b");
-    let selectedSttModel = $state<SttModelVariant>("gemma");
+    let selectedGemmaVariant = $state<GemmaVariant>(DEFAULT_GEMMA_VARIANT);
+    let selectedCsmModel = $state<CsmModelVariant>(DEFAULT_CSM_MODEL);
+    let selectedSttModel = $state<SttModelVariant>(DEFAULT_STT_MODEL);
     let csmDownloadMessage = $state("Preparing download...");
     let csmDownloadProgress = $state<number | null>(null);
     let csmDownloadIndeterminate = $state(true);
@@ -516,7 +597,7 @@
     );
     const selectedCsmModelLabel = $derived(
         csmModelOptions.find((option) => option.value === selectedCsmModel)
-            ?.label ?? "CSM Expressiva 1B",
+            ?.label ?? "Kokoro-82M",
     );
     const csmModelTooltip = $derived(
         selectedCsmModel === "expressiva_1b"
@@ -527,7 +608,7 @@
     );
     const selectedSttModelLabel = $derived(
         sttModelOptions.find((option) => option.value === selectedSttModel)
-            ?.label ?? "Gemma",
+            ?.label ?? "Whisper Large V3 Turbo",
     );
     const sttModelTooltip = $derived(
         selectedSttModel === "gemma"
@@ -535,6 +616,64 @@
             : "Use mlx-audio with mlx-community/whisper-large-v3-turbo-asr-fp16 for transcription. Download and load it separately from Gemma.",
     );
     const csmQuantizeAvailable = $derived(selectedCsmModel === "expressiva_1b");
+    const loadAllMissingDownloads = $derived(
+        (() => {
+            const missingModels: string[] = [];
+
+            if (!isGemmaDownloaded) {
+                missingModels.push("Gemma");
+            }
+
+            if (!isCsmDownloaded) {
+                missingModels.push(selectedCsmModelLabel);
+            }
+
+            if (
+                selectedSttModel === "whisper_large_v3_turbo" &&
+                !isSttDownloaded
+            ) {
+                missingModels.push(selectedSttModelLabel);
+            }
+
+            return missingModels;
+        })(),
+    );
+    const loadAllNeedsAction = $derived(
+        !isGemmaLoaded ||
+            !isCsmLoaded ||
+            (selectedSttModel === "whisper_large_v3_turbo" && !isSttLoaded),
+    );
+    const loadAllBusy = $derived(
+        isLoadingAll ||
+            isDownloadingGemma ||
+            isClearingGemmaCache ||
+            isCancellingGemmaDownload ||
+            isLoadingGemma ||
+            isUnloadingGemma ||
+            isDownloadingCsm ||
+            isClearingCsmCache ||
+            isLoadingCsm ||
+            isUnloadingCsm ||
+            isDownloadingStt ||
+            isClearingSttCache ||
+            isLoadingStt ||
+            isUnloadingStt,
+    );
+    const loadAllDisabled = $derived(loadAllBusy || !loadAllNeedsAction);
+    const loadAllButtonLabel = $derived(
+        isLoadingAll
+            ? "Loading All..."
+            : loadAllNeedsAction
+              ? "Load All"
+              : "All Loaded",
+    );
+    const loadAllButtonTitle = $derived(
+        loadAllMissingDownloads.length > 0
+            ? `Download ${loadAllMissingDownloads.join(", ")} before loading all.`
+            : loadAllNeedsAction
+              ? "Load the selected models."
+              : "The selected models are already loaded.",
+    );
     const selectedContact = $derived(
         contacts.find((contact) => contact.id === selectedContactId) ??
             contacts[0] ??
@@ -660,6 +799,55 @@
             CONTACTS_STORAGE_KEY,
             JSON.stringify(payload),
         );
+    }
+
+    function persistModelPreferences() {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredModelPreferences = {
+            version: 1,
+            gemmaVariant: selectedGemmaVariant,
+            csmModel: selectedCsmModel,
+            sttModel: selectedSttModel,
+        };
+        window.localStorage.setItem(
+            MODEL_PREFERENCES_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    async function restoreModelPreferences() {
+        const restoredPreferences = loadModelPreferencesFromStorage();
+
+        selectedGemmaVariant = restoredPreferences.gemmaVariant;
+        selectedCsmModel = restoredPreferences.csmModel;
+        selectedSttModel = restoredPreferences.sttModel;
+
+        try {
+            await invoke("set_gemma_variant", {
+                variant: restoredPreferences.gemmaVariant,
+            });
+        } catch (err) {
+            console.error("Failed to restore Gemma variant:", err);
+        }
+
+        try {
+            await invoke("set_csm_model_variant", {
+                variant: restoredPreferences.csmModel,
+            });
+        } catch (err) {
+            console.error("Failed to restore speech model:", err);
+        }
+
+        try {
+            await invoke("set_stt_model_variant", {
+                variant: restoredPreferences.sttModel,
+            });
+        } catch (err) {
+            console.error("Failed to restore STT model:", err);
+        }
     }
 
     async function syncSelectedContactPrompt() {
@@ -1271,6 +1459,7 @@
             isSttDownloaded = sttDownloaded;
             isSttLoaded = sttLoaded;
             isCsmQuantized = csmQuantized;
+            persistModelPreferences();
         } catch (err) {
             console.error("Failed to sync model status:", err);
         }
@@ -1981,6 +2170,45 @@
         }
     }
 
+    async function handleLoadAll() {
+        if (isLoadingAll) {
+            return;
+        }
+
+        if (loadAllMissingDownloads.length > 0) {
+            const missingModels = loadAllMissingDownloads.join(", ");
+            alert(`Download ${missingModels} before loading all.`);
+            return;
+        }
+
+        isLoadingAll = true;
+
+        try {
+            await syncModelStatus();
+
+            if (!isGemmaLoaded) {
+                await handleLoadGemma();
+                if (!isGemmaLoaded) {
+                    return;
+                }
+            }
+
+            if (selectedSttModel === "whisper_large_v3_turbo" && !isSttLoaded) {
+                await handleLoadStt();
+                if (!isSttLoaded) {
+                    return;
+                }
+            }
+
+            if (!isCsmLoaded) {
+                await handleLoadCsm();
+            }
+        } finally {
+            isLoadingAll = false;
+            await syncModelStatus();
+        }
+    }
+
     async function handleUnloadGemma() {
         isUnloadingGemma = true;
         try {
@@ -2030,8 +2258,9 @@
             selectedContactId = restoredContacts.selectedContactId;
             persistContactsMetadata();
             await syncSelectedContactPrompt();
+            await restoreModelPreferences();
+            await syncModelStatus();
         })();
-        void syncModelStatus();
 
         healthCheckInterval = window.setInterval(() => {
             void syncModelStatus();
@@ -2215,6 +2444,17 @@
 
     {#if !calling}
         <div class="model-tags" class:dimmed={showContactsPopup}>
+            <div class="model-actions">
+                <button
+                    type="button"
+                    class="utility-btn load-all-btn"
+                    disabled={loadAllDisabled}
+                    title={loadAllButtonTitle}
+                    onclick={handleLoadAll}
+                >
+                    {loadAllButtonLabel}
+                </button>
+            </div>
             <div
                 class="download-banner"
                 class:ready={isGemmaDownloaded && isGemmaLoaded}
@@ -3338,11 +3578,22 @@
             {#if calling}
                 <button class="end-btn" onclick={handleEndCall}>End</button>
             {:else}
-                <button
-                    class="start-btn"
-                    disabled={!modelsReady}
-                    onclick={handleStartCall}>Call</button
-                >
+                <div class="tooltip-shell start-call-tooltip-shell">
+                    <button
+                        class="start-btn"
+                        disabled={!modelsReady}
+                        onclick={handleStartCall}>Call</button
+                    >
+                    {#if !modelsReady}
+                        <div
+                            id="start-call-tooltip"
+                            class="tooltip-bubble start-call-tooltip"
+                        >
+                            Gemma, STT, and Speech models must be all loaded to
+                            start the call.
+                        </div>
+                    {/if}
+                </div>
             {/if}
         </div>
     </div>
@@ -3496,6 +3747,25 @@
         filter: blur(6px);
         transform: translateY(-6px) scale(0.985);
         pointer-events: none;
+    }
+
+    .model-actions {
+        display: flex;
+        justify-content: flex-end;
+        width: 100%;
+        margin-bottom: 12px;
+    }
+
+    .load-all-btn {
+        min-width: 112px;
+        background: rgba(127, 227, 124, 0.12);
+        border-color: rgba(127, 227, 124, 0.28);
+        color: #c9f7c8;
+    }
+
+    .load-all-btn:hover:not(:disabled) {
+        background: rgba(127, 227, 124, 0.18);
+        border-color: rgba(127, 227, 124, 0.34);
     }
 
     .control-bar-wrapper {
@@ -4260,6 +4530,10 @@
         display: inline-flex;
     }
 
+    .start-call-tooltip-shell {
+        align-items: center;
+    }
+
     .variant-select-shell {
         position: relative;
         display: inline-flex;
@@ -4377,6 +4651,11 @@
         top: calc(100% + 10px);
         bottom: auto;
         transform: translateX(-65%) translateY(-6px);
+    }
+
+    .tooltip-bubble.start-call-tooltip {
+        width: 250px;
+        text-align: center;
     }
 
     .tooltip-bubble.variant-tooltip::after {
