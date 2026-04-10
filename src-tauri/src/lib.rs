@@ -87,6 +87,7 @@ const TRAY_LOOK_AT_SCREEN_MENU_ID: &str = "tray-look-at-screen";
 const TRAY_SCREEN_CAPTURE_STATUS_MENU_ID: &str = "tray-screen-capture-status";
 const TRAY_SCREEN_CAPTURE_FILE_MENU_ID: &str = "tray-screen-capture-file";
 const TRAY_CLEAR_SCREEN_CAPTURE_MENU_ID: &str = "tray-clear-screen-capture";
+const TRAY_INTERRUPT_TTS_MENU_ID: &str = "tray-interrupt-tts";
 const TRAY_END_CALL_MENU_ID: &str = "tray-end-call";
 const TRAY_TOGGLE_MUTE_MENU_ID: &str = "tray-toggle-mute";
 const TRAY_MEMORY_SUMMARY_MENU_ID: &str = "tray-memory-summary";
@@ -563,6 +564,7 @@ struct AppState {
     tray_title_override_generation: AtomicU64,
     call_in_progress: Mutex<bool>,
     call_muted: Mutex<bool>,
+    tts_playback_active: Mutex<bool>,
     is_quitting: Mutex<bool>,
 }
 
@@ -813,10 +815,23 @@ async fn reset_call_session(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     cancel_active_generation(&app_handle, false).await;
+    set_tts_playback_active_state(&app_handle, false);
     reset_call_session_state(state.inner());
     clear_pending_screen_capture_inner(&app_handle, true);
     reset_csm_reference_context(&app_handle).await?;
     Ok(())
+}
+
+#[tauri::command]
+async fn interrupt_tts(app_handle: tauri::AppHandle) -> Result<(), String> {
+    set_tts_playback_active_state(&app_handle, false);
+    interrupt_active_generation(&app_handle).await;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_tts_playback_active(app_handle: tauri::AppHandle, active: bool) {
+    set_tts_playback_active_state(&app_handle, active);
 }
 
 #[tauri::command]
@@ -3737,6 +3752,7 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     let state = app_handle.state::<AppState>();
     let call_in_progress = *state.call_in_progress.lock().unwrap();
     let call_muted = *state.call_muted.lock().unwrap();
+    let tts_playback_active = *state.tts_playback_active.lock().unwrap();
     let screen_capture_in_progress = *state.screen_capture_in_progress.lock().unwrap();
     let has_pending_screen_capture = has_pending_screen_capture(state.inner());
     let gemma_loaded = loaded_gemma_variant(state.inner()).is_some();
@@ -3871,8 +3887,11 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
 
     if call_in_progress {
         let mute_label = if call_muted { "Unmute" } else { "Mute" };
+        builder = builder.separator();
+        if tts_playback_active {
+            builder = builder.text(TRAY_INTERRUPT_TTS_MENU_ID, "Interrupt");
+        }
         builder = builder
-            .separator()
             .text(TRAY_END_CALL_MENU_ID, "End Call")
             .text(TRAY_TOGGLE_MUTE_MENU_ID, mute_label);
     } else if any_models_loaded {
@@ -3958,6 +3977,14 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
             }
             TRAY_CLEAR_SCREEN_CAPTURE_MENU_ID => {
                 clear_pending_screen_capture_inner(app_handle, true);
+            }
+            TRAY_INTERRUPT_TTS_MENU_ID => {
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = interrupt_tts(app_handle.clone()).await {
+                        error!("Failed to interrupt speech from tray: {}", err);
+                    }
+                });
             }
             TRAY_END_CALL_MENU_ID => {
                 if let Err(err) = app_handle.emit(TRAY_END_CALL_EVENT, ()) {
@@ -4492,6 +4519,7 @@ async fn cancel_active_generation(app_handle: &tauri::AppHandle, stop_csm_worker
         active_generation.handle.abort();
     }
 
+    set_tts_playback_active_state(app_handle, false);
     emit_csm_audio_stop(app_handle);
 
     if stop_csm_worker && had_active_generation {
@@ -4516,6 +4544,23 @@ fn clear_active_generation_if_matches(app_handle: &tauri::AppHandle, generation_
 
     if should_clear {
         active_generation_guard.take();
+    }
+}
+
+fn set_tts_playback_active_state(app_handle: &AppHandle, active: bool) {
+    let state = app_handle.state::<AppState>();
+    let changed = {
+        let mut tts_playback_active_guard = state.tts_playback_active.lock().unwrap();
+        if *tts_playback_active_guard == active {
+            false
+        } else {
+            *tts_playback_active_guard = active;
+            true
+        }
+    };
+
+    if changed {
+        refresh_tray_menu(app_handle);
     }
 }
 
@@ -6194,6 +6239,7 @@ pub fn run() {
             tray_title_override_generation: AtomicU64::new(0),
             call_in_progress: Mutex::new(false),
             call_muted: Mutex::new(false),
+            tts_playback_active: Mutex::new(false),
             is_quitting: Mutex::new(false),
         })
         .plugin(tauri_plugin_dialog::init())
@@ -6206,9 +6252,11 @@ pub fn run() {
             set_voice_system_prompt,
             export_contact_profile,
             reset_call_session,
+            interrupt_tts,
             start_call_timer,
             stop_call_timer,
             set_call_muted,
+            set_tts_playback_active,
             get_gemma_variant,
             set_gemma_variant,
             get_stt_model_variant,

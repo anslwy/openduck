@@ -531,6 +531,7 @@
     let playbackIdleTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let eventUnlisteners: UnlistenFn[] = [];
     let activeTtsRequestId: number | null = null;
+    let syncedTtsPlaybackActive = false;
     let pendingCompletionPongRequestId = $state<number | null>(null);
     let pendingTtsSegments = $state(0);
     let queuedPlaybackChunkCount = $state(0);
@@ -759,6 +760,9 @@
     const screenCaptureActionLabel = $derived(
         screenCaptureHasPendingAttachment ? "Clear" : "Dismiss",
     );
+    const assistantSpeaking = $derived(
+        calling && callStagePhase === "speaking",
+    );
 
     function setCallStage(
         phase:
@@ -772,6 +776,17 @@
     ) {
         callStagePhase = phase;
         callStageMessage = message;
+    }
+
+    function syncTtsPlaybackState(active: boolean) {
+        if (syncedTtsPlaybackActive === active) {
+            return;
+        }
+
+        syncedTtsPlaybackActive = active;
+        void invoke("set_tts_playback_active", { active }).catch((err) =>
+            console.error("Failed to sync TTS playback state:", err),
+        );
     }
 
     function syncCallElapsedTime() {
@@ -1801,9 +1816,12 @@
         pendingTtsSegments = 0;
         isQueueingCompletionPong = false;
         stopActivePongPlayback();
+        syncTtsPlaybackState(false);
     }
 
     function updateStageAfterPlaybackStateChange() {
+        syncTtsPlaybackState(calling && queuedPlaybackChunkCount > 0);
+
         if (!calling) {
             return;
         }
@@ -1819,6 +1837,18 @@
         }
 
         setCallStage("listening", "Listening");
+    }
+
+    async function handleInterruptTts() {
+        if (!assistantSpeaking) {
+            return;
+        }
+
+        try {
+            await invoke("interrupt_tts");
+        } catch (err) {
+            console.error("Failed to interrupt TTS:", err);
+        }
     }
 
     function decodeBase64Bytes(audioBase64: string) {
@@ -2089,6 +2119,7 @@
         callStartedAtMs = Date.now();
         syncCallElapsedTime();
         activeTtsRequestId = null;
+        syncTtsPlaybackState(false);
         setCallStage("listening", "Listening");
 
         void invoke("start_call_timer", { muted: micMuted }).catch((err) =>
@@ -3916,6 +3947,7 @@
                     <button
                         class="icon-btn"
                         class:active={!micMuted}
+                        type="button"
                         onclick={toggleMic}
                         aria-label={micMuted
                             ? "Unmute microphone"
@@ -3964,6 +3996,34 @@
                                 /><line x1="8" y1="23" x2="16" y2="23" /></svg
                             >
                         {/if}
+                    </button>
+                    <button
+                        type="button"
+                        class="icon-btn interrupt-btn"
+                        disabled={!assistantSpeaking}
+                        onclick={handleInterruptTts}
+                        aria-label="Interrupt assistant speech"
+                        title={assistantSpeaking
+                            ? "Interrupt assistant speech"
+                            : "Interrupt is available while the assistant is speaking"}
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="22"
+                            height="22"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            aria-hidden="true"
+                        >
+                            <path d="M6.5 11V6.5a1.5 1.5 0 0 1 3 0V11" />
+                            <path d="M9.5 11V5a1.5 1.5 0 0 1 3 0v6" />
+                            <path d="M12.5 11V4.5a1.5 1.5 0 0 1 3 0V11" />
+                            <path d="M15.5 11V6a1.5 1.5 0 0 1 3 0v7a6 6 0 0 1-6 6H11a5 5 0 0 1-4.64-3.14l-1.1-2.64a1.5 1.5 0 0 1 2.72-1.26L9.5 14V11" />
+                        </svg>
                     </button>
                 {/if}
             </div>
@@ -4748,20 +4808,41 @@
         cursor: pointer;
         transition:
             background-color 0.2s,
+            color 0.2s,
+            opacity 0.2s,
             transform 0.1s;
     }
 
-    .icon-btn:hover {
+    .icon-btn:hover:not(:disabled) {
         background: #545458;
     }
 
-    .icon-btn:active {
+    .icon-btn:active:not(:disabled) {
         transform: scale(0.95);
     }
 
     .icon-btn.active {
         background: #ffffff;
         color: #1c1c1e;
+    }
+
+    .icon-btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.46;
+    }
+
+    .icon-btn.interrupt-btn {
+        background: rgba(255, 159, 104, 0.2);
+        color: #ffd8c5;
+    }
+
+    .icon-btn.interrupt-btn:hover:not(:disabled) {
+        background: rgba(255, 159, 104, 0.3);
+    }
+
+    .icon-btn.interrupt-btn:disabled {
+        background: rgba(68, 68, 72, 0.72);
+        color: rgba(255, 255, 255, 0.34);
     }
 
     .end-btn,
