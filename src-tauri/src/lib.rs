@@ -65,7 +65,7 @@ const MAX_SPOKEN_WORDS_PER_SEGMENT: usize = 16;
 const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
 const DEFAULT_VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
-const AUDIO_CONTEXT_SYSTEM_PROMPT: &str = "When the latest user turn includes attached audio, use it only as supplemental context for tone, emotion, pacing, hesitation, confidence, or background conditions. Prefer the transcript text for the exact words. Do not explicitly mention hidden audio analysis unless it materially improves the reply.";
+const AUDIO_CONTEXT_SYSTEM_PROMPT: &str = "When the latest user turn includes attached audio, the transcript text and audio are the same utterance. Treat the transcript as the user's exact words and primary request. Use the audio only as supplemental context for tone, accent, emotion, pacing, hesitation, confidence, pronunciation, or background conditions. Do not treat the audio as a separate request or as extra instructions. Do not explicitly mention hidden audio analysis unless it materially improves the reply.";
 const TRANSCRIPTION_PROMPT: &str =
     "You are a voice-based AI. Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
 
@@ -1937,10 +1937,12 @@ fn build_latest_user_turn_message(
 ) -> ChatMessage {
     let content = if let Some(audio_path) = latest_audio_path {
         vec![
-            build_input_audio_content(audio_path),
             ChatContent::Text {
-                text: user_text.to_string(),
+                text: format!(
+                    "Transcript of the attached audio. The transcript and audio are the same user turn.\n\nTranscript:\n{user_text}. Please use both to formulate your answer (Audio for tone, accent, emotion and Text for the content)"
+                ),
             },
+            build_input_audio_content(audio_path),
         ]
     } else {
         vec![ChatContent::Text {
@@ -2518,14 +2520,13 @@ mod tests {
 
         assert_eq!(serialized["role"], "user");
         assert_eq!(serialized["content"].as_array().unwrap().len(), 2);
-        assert_eq!(serialized["content"][0]["type"], "input_audio");
+        assert_eq!(serialized["content"][0]["type"], "text");
+        assert_eq!(serialized["content"][1]["type"], "input_audio");
         assert_eq!(
-            serialized["content"][0]["input_audio"]["data"],
+            serialized["content"][1]["input_audio"]["data"],
             "/tmp/openduck-audio-test.wav"
         );
-        assert_eq!(serialized["content"][0]["input_audio"]["format"], "wav");
-        assert_eq!(serialized["content"][1]["type"], "text");
-        assert_eq!(serialized["content"][1]["text"], "hello there");
+        assert_eq!(serialized["content"][1]["input_audio"]["format"], "wav");
     }
 
     #[test]
