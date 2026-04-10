@@ -1667,7 +1667,7 @@ fn set_call_muted(app_handle: AppHandle, state: State<'_, AppState>, muted: bool
         let mut call_muted_guard = state.call_muted.lock().unwrap();
         *call_muted_guard = muted;
     }
-    refresh_tray_menu(&app_handle);
+    refresh_tray_presentation(&app_handle);
 }
 
 struct PreparedAudioChunk {
@@ -4605,6 +4605,17 @@ fn format_tray_timer_title(elapsed: Duration) -> String {
     format!(" {}", format_call_duration(elapsed))
 }
 
+#[cfg(target_os = "macos")]
+fn tray_icon_image(muted: bool) -> tauri::Result<tauri::image::Image<'static>> {
+    let bytes = if muted {
+        include_bytes!("../icons/tray-template-muted.png").as_slice()
+    } else {
+        include_bytes!("../icons/tray-template.png").as_slice()
+    };
+
+    tauri::image::Image::from_bytes(bytes)
+}
+
 fn clear_call_timer_state(state: &AppState) {
     state.tray_timer_generation.fetch_add(1, Ordering::Relaxed);
     state
@@ -4662,8 +4673,36 @@ fn refresh_tray_title(app_handle: &AppHandle) {
 #[cfg(not(target_os = "macos"))]
 fn refresh_tray_title(_app_handle: &AppHandle) {}
 
+#[cfg(target_os = "macos")]
+fn refresh_tray_icon(app_handle: &AppHandle) {
+    let state = app_handle.state::<AppState>();
+    let muted = *state.call_muted.lock().unwrap();
+    let Some(tray) = app_handle.tray_by_id(TRAY_ICON_ID) else {
+        return;
+    };
+
+    let icon = match tray_icon_image(muted) {
+        Ok(icon) => icon,
+        Err(err) => {
+            error!("Failed to load tray icon: {}", err);
+            return;
+        }
+    };
+
+    if let Err(err) = tray.set_icon(Some(icon)) {
+        error!("Failed to update tray icon: {}", err);
+    }
+    if let Err(err) = tray.set_icon_as_template(true) {
+        error!("Failed to mark tray icon as template: {}", err);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn refresh_tray_icon(_app_handle: &AppHandle) {}
+
 fn refresh_tray_presentation(app_handle: &AppHandle) {
     refresh_tray_menu(app_handle);
+    refresh_tray_icon(app_handle);
     refresh_tray_title(app_handle);
 }
 
