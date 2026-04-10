@@ -325,10 +325,15 @@ def gemma_snapshot_is_complete(snapshot_path: str | Path) -> bool:
 
     if not snapshot_dir.joinpath("config.json").exists():
         return False
-    if not snapshot_dir.joinpath("tokenizer.model").exists():
+    if not (
+        snapshot_dir.joinpath("tokenizer.model").exists()
+        or snapshot_dir.joinpath("tokenizer.json").exists()
+    ):
         return False
     if snapshot_dir.joinpath("model.safetensors").exists():
         return True
+    if not snapshot_dir.joinpath("model.safetensors.index.json").exists():
+        return False
 
     shard_pattern = re.compile(r"^model-(\d{5})-of-(\d{5})\.safetensors$")
     shard_numbers_by_total: dict[int, set[int]] = {}

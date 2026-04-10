@@ -144,15 +144,15 @@ impl GemmaVariant {
 
     fn repo_id(self) -> &'static str {
         match self {
-            Self::E4b => "mlx-community/gemma-3n-E4B-it-8bit",
-            Self::E2b => "mlx-community/gemma-3n-E2B-it-4bit",
+            Self::E4b => "mlx-community/gemma-4-E4B-it-8bit",
+            Self::E2b => "mlx-community/gemma-4-E2B-it-4bit",
         }
     }
 
     fn cache_dir(self) -> &'static str {
         match self {
-            Self::E4b => "models--mlx-community--gemma-3n-E4B-it-8bit",
-            Self::E2b => "models--mlx-community--gemma-3n-E2B-it-4bit",
+            Self::E4b => "models--mlx-community--gemma-4-E4B-it-8bit",
+            Self::E2b => "models--mlx-community--gemma-4-E2B-it-4bit",
         }
     }
 }
@@ -5259,13 +5259,22 @@ fn huggingface_cached_files_exist(model_dir_name: &str, required_files: &[&str])
 }
 
 fn gemma_snapshot_is_complete(snapshot_dir: &Path) -> bool {
-    if !snapshot_dir.join("config.json").exists() || !snapshot_dir.join("tokenizer.model").exists()
+    if !snapshot_dir.join("config.json").exists() {
+        return false;
+    }
+
+    if !snapshot_dir.join("tokenizer.model").exists()
+        && !snapshot_dir.join("tokenizer.json").exists()
     {
         return false;
     }
 
     if snapshot_dir.join("model.safetensors").exists() {
         return true;
+    }
+
+    if !snapshot_dir.join("model.safetensors.index.json").exists() {
+        return false;
     }
 
     let Ok(entries) = std::fs::read_dir(snapshot_dir) else {
@@ -5732,6 +5741,55 @@ fn reap_stale_model_processes(app_handle: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn start_download_sleep_assertion(model_key: &str, pid: u32) {
+    let model_key = model_key.to_string();
+    tauri::async_runtime::spawn(async move {
+        let mut command = Command::new("/usr/bin/caffeinate");
+        command
+            .arg("-i")
+            .arg("-w")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let mut caffeinate = match command.spawn() {
+            Ok(child) => child,
+            Err(err) => {
+                warn!(
+                    "Failed to start caffeinate for {} download (pid {}): {}",
+                    model_key, pid, err
+                );
+                return;
+            }
+        };
+
+        match caffeinate.wait().await {
+            Ok(status) if status.success() => {
+                debug!(
+                    "Released sleep assertion for {} download (pid {})",
+                    model_key, pid
+                );
+            }
+            Ok(status) => {
+                warn!(
+                    "caffeinate exited with status {} while keeping {} download awake (pid {})",
+                    status, model_key, pid
+                );
+            }
+            Err(err) => {
+                warn!(
+                    "Failed waiting for caffeinate during {} download (pid {}): {}",
+                    model_key, pid, err
+                );
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_download_sleep_assertion(_model_key: &str, _pid: u32) {}
+
 #[tauri::command]
 fn check_model_status(state: State<'_, AppState>) -> bool {
     gemma_model_cache_exists(selected_gemma_variant(state.inner()))
@@ -5973,6 +6031,14 @@ async fn run_hf_download(
     let mut child = command
         .spawn()
         .map_err(|e| format!("Failed to start {model_key} downloader: {e}"))?;
+    if let Some(child_pid) = child.id() {
+        start_download_sleep_assertion(model_key, child_pid);
+    } else {
+        warn!(
+            "Started {} download without a visible child pid; skipping caffeinate integration",
+            model_key
+        );
+    }
 
     let stdout = child
         .stdout
