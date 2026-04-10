@@ -27,6 +27,16 @@ const KOKORO_MODEL_FILE: &str = "kokoro-v1_0.safetensors";
 const KOKORO_CONFIG_FILE: &str = "config.json";
 const KOKORO_DEFAULT_VOICE: &str = "af_heart";
 const KOKORO_DEFAULT_VOICE_FILE: &str = "voices/af_heart.pt";
+const COSYVOICE2_MODEL_REPO: &str = "mlx-community/CosyVoice2-0.5B-fp16";
+const COSYVOICE2_CACHE_DIR: &str = "models--mlx-community--CosyVoice2-0.5B-fp16";
+const COSYVOICE2_MODEL_FILE: &str = "model.safetensors";
+const COSYVOICE2_CONFIG_FILE: &str = "config.json";
+const COSYVOICE2_TOKENIZER_FILE: &str = "tokenizer.json";
+const COSYVOICE2_TOKENIZER_CONFIG_FILE: &str = "tokenizer_config.json";
+const COSYVOICE2_S3_TOKENIZER_REPO: &str = "mlx-community/S3TokenizerV2";
+const COSYVOICE2_S3_TOKENIZER_CACHE_DIR: &str = "models--mlx-community--S3TokenizerV2";
+const COSYVOICE2_S3_TOKENIZER_CONFIG_FILE: &str = "config.json";
+const COSYVOICE2_S3_TOKENIZER_MODEL_FILE: &str = "model.safetensors";
 const SILENCE_THRESHOLD: f32 = 0.02;
 const SILENCE_DURATION_CHUNKS: usize = 150;
 const MIN_SPEAKING_CHUNKS: usize = 10;
@@ -140,6 +150,7 @@ impl CsmVoice {
 enum CsmModelVariant {
     Expressiva1b,
     Kokoro82m,
+    CosyVoice205b,
 }
 
 impl CsmModelVariant {
@@ -147,6 +158,8 @@ impl CsmModelVariant {
         match value.trim().to_ascii_lowercase().as_str() {
             "expressiva_1b" | "expressiva-1b" | "csm" => Ok(Self::Expressiva1b),
             "kokoro_82m" | "kokoro-82m" | "kokoro" => Ok(Self::Kokoro82m),
+            "cosyvoice2_0_5b" | "cosyvoice2-0-5b" | "cosyvoice2-0.5b" | "cosyvoice2"
+            | "cosyvoice" => Ok(Self::CosyVoice205b),
             other => Err(format!("Unsupported speech model: {other}")),
         }
     }
@@ -155,6 +168,7 @@ impl CsmModelVariant {
         match self {
             Self::Expressiva1b => "expressiva_1b",
             Self::Kokoro82m => "kokoro_82m",
+            Self::CosyVoice205b => "cosyvoice2_0_5b",
         }
     }
 
@@ -162,6 +176,7 @@ impl CsmModelVariant {
         match self {
             Self::Expressiva1b => "csm",
             Self::Kokoro82m => "kokoro",
+            Self::CosyVoice205b => "cosyvoice2",
         }
     }
 
@@ -169,6 +184,7 @@ impl CsmModelVariant {
         match self {
             Self::Expressiva1b => "CSM Expressiva 1B",
             Self::Kokoro82m => "Kokoro-82M",
+            Self::CosyVoice205b => "CosyVoice2-0.5B",
         }
     }
 
@@ -176,6 +192,7 @@ impl CsmModelVariant {
         match self {
             Self::Expressiva1b => CSM_EXPRESSIVA_MODEL_REPO,
             Self::Kokoro82m => KOKORO_MODEL_REPO,
+            Self::CosyVoice205b => COSYVOICE2_MODEL_REPO,
         }
     }
 
@@ -183,6 +200,7 @@ impl CsmModelVariant {
         match self {
             Self::Expressiva1b => CSM_EXPRESSIVA_CACHE_DIR,
             Self::Kokoro82m => KOKORO_CACHE_DIR,
+            Self::CosyVoice205b => COSYVOICE2_CACHE_DIR,
         }
     }
 
@@ -194,11 +212,21 @@ impl CsmModelVariant {
                 KOKORO_MODEL_FILE,
                 KOKORO_DEFAULT_VOICE_FILE,
             ],
+            Self::CosyVoice205b => &[
+                COSYVOICE2_CONFIG_FILE,
+                COSYVOICE2_MODEL_FILE,
+                COSYVOICE2_TOKENIZER_FILE,
+                COSYVOICE2_TOKENIZER_CONFIG_FILE,
+            ],
         }
     }
 
     fn supports_quantization(self) -> bool {
         matches!(self, Self::Expressiva1b)
+    }
+
+    fn uses_reference_audio(self) -> bool {
+        matches!(self, Self::CosyVoice205b)
     }
 }
 
@@ -820,6 +848,12 @@ async fn start_csm_server_inner(
         .ok_or_else(|| "Failed to resolve Gemma Python home".to_string())?;
     let speech_site_packages = resolve_speech_site_packages(app_handle, selected_variant)?;
     let csm_script = resolve_resource_file(app_handle, "csm_stream.py")?;
+    let selected_voice = *state.selected_csm_voice.lock().unwrap();
+    let startup_context_audio = if selected_variant.uses_reference_audio() {
+        Some(resolve_csm_context_audio_file(app_handle, selected_voice)?)
+    } else {
+        None
+    };
 
     info!("Starting CSM worker with {}", python_executable.display());
 
@@ -830,6 +864,9 @@ async fn start_csm_server_inner(
         .arg("--model")
         .arg(selected_variant.worker_key())
         .env("PYTHONUNBUFFERED", "1")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("PYTHONPYCACHEPREFIX", "/tmp/openduck-pycache")
+        .env("NUMBA_CACHE_DIR", "/tmp/openduck-numba-cache")
         .env("PYTHONHOME", &python_home)
         .env("PYTHONPATH", &speech_site_packages)
         .env("HF_HUB_DISABLE_XET", "1")
@@ -837,6 +874,10 @@ async fn start_csm_server_inner(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    if let Some(context_audio) = &startup_context_audio {
+        command.arg("--context-audio").arg(context_audio);
+    }
 
     let should_quantize_csm = *state.selected_csm_quantized.lock().unwrap();
     if should_quantize_csm && selected_variant.supports_quantization() {
@@ -1935,20 +1976,24 @@ fn build_latest_user_turn_message(
     user_text: &str,
     latest_audio_path: Option<&Path>,
 ) -> ChatMessage {
-    let content = if let Some(audio_path) = latest_audio_path {
-        vec![
-            ChatContent::Text {
-                text: format!(
-                    "Transcript of the attached audio. The transcript and audio are the same user turn.\n\nTranscript:\n{user_text}. Please use both to formulate your answer (Audio for tone, accent, emotion and Text for the content)"
-                ),
-            },
-            build_input_audio_content(audio_path),
-        ]
-    } else {
-        vec![ChatContent::Text {
-            text: user_text.to_string(),
-        }]
-    };
+    // Reserve this for gemma4 support
+    // let content = if let Some(audio_path) = latest_audio_path {
+    //     vec![
+    //         ChatContent::Text {
+    //             text: format!(
+    //                 "Transcript of the attached audio. The transcript and audio are the same user turn.\n\nTranscript:\n{user_text}. Please use both to formulate your answer (Audio for tone, accent, emotion and Text for the content)"
+    //             ),
+    //         },
+    //         build_input_audio_content(audio_path),
+    //     ]
+    // } else {
+    //     vec![ChatContent::Text {
+    //         text: user_text.to_string(),
+    //     }]
+    // };
+    let content = vec![ChatContent::Text {
+        text: user_text.to_string(),
+    }];
 
     ChatMessage {
         role: "user".to_string(),
@@ -3051,6 +3096,7 @@ async fn cancel_active_generation(app_handle: &tauri::AppHandle, stop_csm_worker
         let mut active_generation_guard = state.active_generation.lock().unwrap();
         active_generation_guard.take()
     };
+    let had_active_generation = active_generation.is_some();
 
     if let Some(active_generation) = active_generation {
         info!("Interrupting active generation {}", active_generation.id);
@@ -3059,7 +3105,7 @@ async fn cancel_active_generation(app_handle: &tauri::AppHandle, stop_csm_worker
 
     emit_csm_audio_stop(app_handle);
 
-    if stop_csm_worker {
+    if stop_csm_worker && had_active_generation {
         if let Err(err) = stop_csm_server_inner(state.inner()).await {
             warn!("Failed to stop CSM worker during interruption: {}", err);
         }
@@ -3371,6 +3417,16 @@ fn clear_huggingface_cache(model_dir_name: &str) -> Result<(), String> {
         .map_err(|err| format!("Failed to clear cache at {}: {err}", model_dir.display()))
 }
 
+fn clear_csm_model_cache(variant: CsmModelVariant) -> Result<(), String> {
+    clear_huggingface_cache(variant.cache_dir())?;
+
+    if variant == CsmModelVariant::CosyVoice205b {
+        clear_huggingface_cache(COSYVOICE2_S3_TOKENIZER_CACHE_DIR)?;
+    }
+
+    Ok(())
+}
+
 fn huggingface_cached_files_exist(model_dir_name: &str, required_files: &[&str]) -> bool {
     if required_files.is_empty() {
         return false;
@@ -3458,7 +3514,23 @@ fn gemma_model_cache_exists(variant: GemmaVariant) -> bool {
 }
 
 fn csm_model_cache_exists(variant: CsmModelVariant) -> bool {
-    huggingface_cached_files_exist(variant.cache_dir(), variant.required_files())
+    let main_model_cached =
+        huggingface_cached_files_exist(variant.cache_dir(), variant.required_files());
+    if !main_model_cached {
+        return false;
+    }
+
+    if variant == CsmModelVariant::CosyVoice205b {
+        return huggingface_cached_files_exist(
+            COSYVOICE2_S3_TOKENIZER_CACHE_DIR,
+            &[
+                COSYVOICE2_S3_TOKENIZER_CONFIG_FILE,
+                COSYVOICE2_S3_TOKENIZER_MODEL_FILE,
+            ],
+        );
+    }
+
+    true
 }
 
 fn active_download_process(state: &AppState, model: DownloadModel) -> Option<DownloadProcess> {
@@ -3652,6 +3724,9 @@ fn resolve_csm_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, S
         Path::new("resources/csm_env/venv/lib/python3.11/site-packages"),
         "bundled CSM site-packages",
     )
+    .map_err(|_| {
+        "CSM dependencies are not installed. Run scripts/setup_python_env.sh to create src-tauri/resources/csm_env.".to_string()
+    })
 }
 
 fn resolve_kokoro_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -3660,6 +3735,20 @@ fn resolve_kokoro_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf
         Path::new("resources/kokoro_env/venv/lib/python3.11/site-packages"),
         "bundled Kokoro site-packages",
     )
+    .map_err(|_| {
+        "Kokoro dependencies are not installed. Run scripts/setup_python_env.sh to create src-tauri/resources/kokoro_env.".to_string()
+    })
+}
+
+fn resolve_cosyvoice_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    resolve_existing_path_dev_first(
+        app_handle,
+        Path::new("resources/cosyvoice_env/venv/lib/python3.11/site-packages"),
+        "bundled CosyVoice site-packages",
+    )
+    .map_err(|_| {
+        "CosyVoice dependencies are not installed. Run scripts/setup_python_env.sh to create src-tauri/resources/cosyvoice_env.".to_string()
+    })
 }
 
 fn resolve_speech_site_packages(
@@ -3669,6 +3758,7 @@ fn resolve_speech_site_packages(
     match variant {
         CsmModelVariant::Expressiva1b => resolve_csm_site_packages(app_handle),
         CsmModelVariant::Kokoro82m => resolve_kokoro_site_packages(app_handle),
+        CsmModelVariant::CosyVoice205b => resolve_cosyvoice_site_packages(app_handle),
     }
 }
 
@@ -3828,7 +3918,7 @@ fn clear_model_cache(state: State<'_, AppState>, model: String) -> Result<(), St
                 ));
             }
 
-            clear_huggingface_cache(selected_variant.cache_dir())?;
+            clear_csm_model_cache(selected_variant)?;
         }
     }
 
@@ -3843,9 +3933,11 @@ async fn download_model(
 ) -> Result<(), String> {
     let selected_variant = selected_gemma_variant(state.inner());
     let python_executable = resolve_gemma_python_executable(&app_handle)?;
+    let gemma_site_packages = resolve_gemma_site_packages(&app_handle)?;
     run_hf_download(
         &app_handle,
         python_executable,
+        gemma_site_packages,
         "gemma",
         selected_variant.repo_id(),
         &[],
@@ -3860,14 +3952,34 @@ async fn download_csm_model(
 ) -> Result<(), String> {
     let selected_variant = selected_csm_model(state.inner());
     let python_executable = resolve_gemma_python_executable(&app_handle)?;
+    let gemma_site_packages = resolve_gemma_site_packages(&app_handle)?;
+
     run_hf_download(
         &app_handle,
-        python_executable,
+        python_executable.clone(),
+        gemma_site_packages.clone(),
         "csm",
         selected_variant.repo_id(),
         selected_variant.required_files(),
     )
-    .await
+    .await?;
+
+    if selected_variant == CsmModelVariant::CosyVoice205b {
+        run_hf_download(
+            &app_handle,
+            python_executable,
+            gemma_site_packages,
+            "csm",
+            COSYVOICE2_S3_TOKENIZER_REPO,
+            &[
+                COSYVOICE2_S3_TOKENIZER_CONFIG_FILE,
+                COSYVOICE2_S3_TOKENIZER_MODEL_FILE,
+            ],
+        )
+        .await?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -3896,6 +4008,7 @@ async fn cancel_model_download(state: State<'_, AppState>, model: String) -> Res
 async fn run_hf_download(
     app_handle: &tauri::AppHandle,
     python_executable: PathBuf,
+    python_site_packages: PathBuf,
     model_key: &str,
     repo_id: &str,
     allow_patterns: &[&str],
@@ -3943,17 +4056,10 @@ async fn run_hf_download(
         .arg(model_key)
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONHOME", python_home)
+        .env("PYTHONPATH", python_site_packages)
         .env("HF_HUB_DISABLE_XET", "1")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
-    if model_key == "csm" {
-        let csm_site_packages = resolve_csm_site_packages(app_handle)?;
-        command.env("PYTHONPATH", csm_site_packages);
-    } else {
-        let gemma_site_packages = resolve_gemma_site_packages(app_handle)?;
-        command.env("PYTHONPATH", gemma_site_packages);
-    }
 
     for pattern in allow_patterns {
         command.arg("--allow-pattern").arg(pattern);
@@ -4202,7 +4308,7 @@ pub fn run() {
             csm_stderr_tail: Mutex::new(VecDeque::new()),
             selected_csm_model: Mutex::new(CsmModelVariant::Expressiva1b),
             loaded_csm_model: Mutex::new(None),
-            selected_csm_voice: Mutex::new(CsmVoice::Male),
+            selected_csm_voice: Mutex::new(CsmVoice::Female),
             selected_csm_quantized: Mutex::new(default_csm_quantized),
             next_csm_request_id: AtomicU64::new(1),
             next_generation_id: AtomicU64::new(1),

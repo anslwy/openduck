@@ -8,11 +8,13 @@ RESOURCES_DIR="$REPO_ROOT/src-tauri/resources"
 PYTHON_ENV_DIR="$RESOURCES_DIR/python_env"
 CSM_ENV_DIR="$RESOURCES_DIR/csm_env"
 KOKORO_ENV_DIR="$RESOURCES_DIR/kokoro_env"
+COSYVOICE_ENV_DIR="$RESOURCES_DIR/cosyvoice_env"
 PORTABLE_PYTHON_TAR="$REPO_ROOT/python-standalone.tar.gz"
 MLX_VLM_REPO="https://github.com/Blaizzy/mlx-vlm.git"
 MLX_VLM_REF="${MLX_VLM_REF:-23e1dffd224488141a4f022b6d21d6a730f11507}"
 CSM_MLX_REPO="https://github.com/senstella/csm-mlx"
 MLX_AUDIO_VERSION="${MLX_AUDIO_VERSION:-0.2.5}"
+MLX_AUDIO_PLUS_VERSION="${MLX_AUDIO_PLUS_VERSION:-0.1.2}"
 PATCH_SERVER_SCRIPT="$RESOURCES_DIR/patch_mlx_vlm.py"
 
 echo "Stopping existing MLX server processes..."
@@ -44,6 +46,10 @@ if [ -d "$KOKORO_ENV_DIR" ]; then
     echo "Removing old Kokoro environment..."
     rm -rf "$KOKORO_ENV_DIR"
 fi
+if [ -d "$COSYVOICE_ENV_DIR" ]; then
+    echo "Removing old CosyVoice environment..."
+    rm -rf "$COSYVOICE_ENV_DIR"
+fi
 
 mkdir -p "$RESOURCES_DIR"
 
@@ -63,13 +69,15 @@ tar -xzf "$PORTABLE_PYTHON_TAR" -C "$PYTHON_ENV_DIR" --strip-components=1
 # Clean up tarball
 rm "$PORTABLE_PYTHON_TAR"
 
-# Create isolated virtual environments for Gemma, CSM, and Kokoro.
+# Create isolated virtual environments for Gemma and speech backends.
 echo "Creating Gemma virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$PYTHON_ENV_DIR/venv"
 echo "Creating CSM virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$CSM_ENV_DIR/venv"
 echo "Creating Kokoro virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$KOKORO_ENV_DIR/venv"
+echo "Creating CosyVoice virtual environment..."
+"$PYTHON_ENV_DIR/bin/python3" -m venv "$COSYVOICE_ENV_DIR/venv"
 
 # Install Gemma server dependencies into the Gemma venv.
 echo "Installing mlx-vlm into the Gemma environment..."
@@ -78,8 +86,8 @@ echo "Installing mlx-vlm into the Gemma environment..."
 echo "Installing mlx-vlm from $MLX_VLM_REPO @ $MLX_VLM_REF..."
 "$PYTHON_ENV_DIR/venv/bin/pip" install "git+$MLX_VLM_REPO@$MLX_VLM_REF"
 
-# Install speech backends into isolated venvs because mlx-audio and csm-mlx
-# require different MLX dependency ranges.
+# Install speech backends into isolated venvs because the TTS stacks
+# have different MLX dependency ranges and package names.
 echo "Installing csm-mlx into the CSM environment..."
 "$CSM_ENV_DIR/venv/bin/pip" install -U pip
 "$CSM_ENV_DIR/venv/bin/pip" install "git+$CSM_MLX_REPO" --upgrade
@@ -88,8 +96,12 @@ echo "Installing mlx-audio into the Kokoro environment..."
 "$KOKORO_ENV_DIR/venv/bin/pip" install "mlx-audio==$MLX_AUDIO_VERSION" soundfile
 echo "Installing Kokoro English G2P model..."
 "$KOKORO_ENV_DIR/venv/bin/python3" -m spacy download en_core_web_sm
+echo "Installing mlx-audio-plus into the CosyVoice environment..."
+"$COSYVOICE_ENV_DIR/venv/bin/pip" install -U pip
+"$COSYVOICE_ENV_DIR/venv/bin/pip" install "mlx-audio-plus==$MLX_AUDIO_PLUS_VERSION" soundfile
 
 echo "Setup complete!"
 echo "Gemma environment: $PYTHON_ENV_DIR/venv"
 echo "CSM environment: $CSM_ENV_DIR/venv"
 echo "Kokoro environment: $KOKORO_ENV_DIR/venv"
+echo "CosyVoice environment: $COSYVOICE_ENV_DIR/venv"

@@ -10,9 +10,10 @@ The speech card in the app can switch between:
 
 - `CSM Expressiva 1B`: the original MLX-based speech model, with optional quantization.
 - `Kokoro-82M`: a lighter English TTS backend that runs through `mlx-audio` with the default `af_heart` voice from `mlx-community/Kokoro-82M-bf16`.
+- `CosyVoice2-0.5B`: a reference-audio TTS backend that runs through `mlx-audio-plus` using the bundled sample voice.
 
 Use the dropdown in the speech card to choose the backend, then download and load that model before starting a call.
-If you want to use Kokoro in a fresh checkout, run `scripts/setup_python_env.sh` first so the dedicated Kokoro environment installs `mlx-audio` plus the required English spaCy model.
+If you want to use Kokoro or CosyVoice2 in a fresh checkout, run `scripts/setup_python_env.sh` first so the dedicated speech environments install `mlx-audio` / `mlx-audio-plus` and the required language dependencies.
 
 ## Conversation Flow
 
@@ -63,5 +64,5 @@ flowchart TD
 
 - `src/routes/+page.svelte`: call UI, microphone capture, Tauri event listeners, playback queue, and call-stage state.
 - `src-tauri/src/lib.rs`: voice activity detection, transcription, reply generation, conversation memory, and speech worker orchestration.
-- `src-tauri/resources/csm_stream.py`: shared speech worker entrypoint for CSM Expressiva 1B and Kokoro-82M.
-- `scripts/setup_python_env.sh`: bootstraps the Gemma environment plus separate CSM and Kokoro speech environments, including `mlx-audio` for Kokoro.
+- `src-tauri/resources/csm_stream.py`: shared speech worker entrypoint for CSM Expressiva 1B, Kokoro-82M, and CosyVoice2-0.5B.
+- `scripts/setup_python_env.sh`: bootstraps the Gemma environment plus separate CSM, Kokoro, and CosyVoice speech environments.

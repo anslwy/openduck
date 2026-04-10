@@ -61,7 +61,7 @@
     };
 
     type GemmaVariant = "e4b" | "e2b";
-    type CsmModelVariant = "expressiva_1b" | "kokoro_82m";
+    type CsmModelVariant = "expressiva_1b" | "kokoro_82m" | "cosyvoice2_0_5b";
 
     type ConversationLogEntry = {
         id: number;
@@ -461,6 +461,7 @@
     }> = [
         { value: "expressiva_1b", label: "CSM Expressiva 1B" },
         { value: "kokoro_82m", label: "Kokoro-82M" },
+        { value: "cosyvoice2_0_5b", label: "CosyVoice2-0.5B" },
     ];
     const gemmaVariantTooltip = $derived(
         selectedGemmaVariant === "e4b"
@@ -474,7 +475,9 @@
     const csmModelTooltip = $derived(
         selectedCsmModel === "expressiva_1b"
             ? "CSM Expressiva 1B supports voice conditioning and optional quantization."
-            : "Kokoro-82M is a lighter English TTS backend. Quantization is not used for this model.",
+            : selectedCsmModel === "kokoro_82m"
+              ? "Kokoro-82M is a lighter English TTS backend. Quantization is not used for this model."
+              : "CosyVoice2-0.5B produces high quality audio with higher usage of memory. Quantization is not used for this model.",
     );
     const csmQuantizeAvailable = $derived(selectedCsmModel === "expressiva_1b");
     const selectedContact = $derived(
