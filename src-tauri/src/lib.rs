@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::TcpListener;
@@ -108,7 +109,7 @@ const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
 const DEFAULT_VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
 const AUDIO_CONTEXT_SYSTEM_PROMPT: &str = "When the latest user turn includes attached audio, the transcript text and audio are the same utterance. Treat the transcript as the user's exact words and primary request. Use the audio only as supplemental context for tone, accent, emotion, pacing, hesitation, confidence, pronunciation, or background conditions. Do not treat the audio as a separate request or as extra instructions. Do not explicitly mention hidden audio analysis unless it materially improves the reply.";
-const IMAGE_CONTEXT_SYSTEM_PROMPT: &str = "When the latest user turn includes an attached image, treat it as a screenshot or cropped visual context for the user's current request. Use the visible UI, text, and layout in the image to answer the user. If the relevant detail is unreadable or missing, say so briefly.";
+const IMAGE_CONTEXT_SYSTEM_PROMPT: &str = "When a user turn includes an attached image, treat it as a screenshot or cropped visual context for that request. If later turns refer back to it, continue using the most recent attached image unless the user provides a replacement. Use the visible UI, text, and layout in the image to answer the user. If the relevant detail is unreadable or missing, say so briefly.";
 const TRANSCRIPTION_PROMPT: &str =
     "You are a voice-based AI. Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
 const STT_STATUS_EVENT: &str = "stt-status";
@@ -435,6 +436,7 @@ struct ModelMemoryUsageSnapshot {
 struct ConversationTurn {
     user_text: String,
     assistant_text: String,
+    image_path: Option<PathBuf>,
 }
 
 struct TempAudioFile {
@@ -458,22 +460,32 @@ impl Drop for TempAudioFile {
 }
 
 struct TempImageFile {
-    path: PathBuf,
+    path: Option<PathBuf>,
 }
 
 impl TempImageFile {
     fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self { path: Some(path) }
     }
 
     fn path(&self) -> &Path {
-        &self.path
+        self.path
+            .as_deref()
+            .expect("temp image file path should always be present while borrowed")
+    }
+
+    fn release(mut self) -> PathBuf {
+        self.path
+            .take()
+            .expect("temp image file path should exist when released")
     }
 }
 
 impl Drop for TempImageFile {
     fn drop(&mut self) {
-        remove_temp_image_file(&self.path);
+        if let Some(path) = self.path.take() {
+            remove_temp_image_file(&path);
+        }
     }
 }
 
@@ -554,6 +566,7 @@ struct AppState {
     next_generation_id: AtomicU64,
     active_generation: Mutex<Option<ActiveGeneration>>,
     conversation_turns: Mutex<VecDeque<ConversationTurn>>,
+    conversation_image_paths: Mutex<Vec<PathBuf>>,
     pending_screen_capture: Mutex<Option<PathBuf>>,
     screen_capture_in_progress: Mutex<bool>,
     transient_tray_title: Mutex<Option<String>>,
@@ -685,8 +698,11 @@ struct CallStageEvent {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TranscriptEvent {
     text: String,
+    image_path: Option<String>,
+    image_data_url: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -1939,12 +1955,6 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                 }
 
                 info!("{} transcription: {}", active_stt_model.label(), user_text);
-                emit_transcript_event(
-                    &app_handle_for_task,
-                    TranscriptEvent {
-                        text: user_text.clone(),
-                    },
-                );
                 interrupt_active_generation(&app_handle_for_task).await;
 
                 if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
@@ -1964,6 +1974,18 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                         "Screen region attached to this turn.",
                     );
                 }
+                emit_transcript_event(
+                    &app_handle_for_task,
+                    TranscriptEvent {
+                        text: user_text.clone(),
+                        image_path: latest_screen_capture_path
+                            .as_ref()
+                            .map(|path| path.to_string_lossy().into_owned()),
+                        image_data_url: latest_screen_capture_path
+                            .as_deref()
+                            .and_then(load_image_data_url),
+                    },
+                );
                 start_response_generation(
                     &app_handle_for_task,
                     server_port,
@@ -2008,7 +2030,7 @@ fn start_response_generation(
     let app_handle_for_task = app_handle.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let latest_audio_file = TempAudioFile::new(latest_audio_path);
-        let latest_image_file = latest_image_path.map(TempImageFile::new);
+        let mut latest_image_file = latest_image_path.map(TempImageFile::new);
         match stream_gemma_response_to_csm(
             &app_handle_for_task,
             server_port,
@@ -2031,10 +2053,12 @@ fn start_response_generation(
                     return;
                 }
 
+                let persisted_image_path = latest_image_file.take().map(TempImageFile::release);
                 append_conversation_turn(
                     app_handle_for_task.state::<AppState>().inner(),
                     user_text,
                     response_text,
+                    persisted_image_path,
                 );
             }
             Err(err) => {
@@ -2260,7 +2284,10 @@ async fn stream_gemma_response_to_csm(
         (session_id, turns)
     };
     let has_latest_audio = latest_audio_path.is_some();
-    let has_latest_image = latest_image_path.is_some();
+    let has_any_image_context = latest_image_path.is_some()
+        || conversation_turns
+            .iter()
+            .any(|turn| turn.image_path.as_ref().is_some());
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
         content: vec![ChatContent::Text {
@@ -2272,18 +2299,16 @@ async fn stream_gemma_response_to_csm(
                     .unwrap()
                     .clone(),
                 has_latest_audio,
-                has_latest_image,
+                has_any_image_context,
             ),
         }],
     }];
 
     for turn in conversation_turns {
-        messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: vec![ChatContent::Text {
-                text: turn.user_text,
-            }],
-        });
+        messages.push(build_user_turn_message(
+            &turn.user_text,
+            turn.image_path.as_deref(),
+        ));
         messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: vec![ChatContent::Text {
@@ -2756,6 +2781,21 @@ fn build_input_image_content(image_path: &Path) -> ChatContent {
     }
 }
 
+fn build_user_turn_message(user_text: &str, image_path: Option<&Path>) -> ChatMessage {
+    let mut content = Vec::new();
+    if let Some(image_path) = image_path {
+        content.push(build_input_image_content(image_path));
+    }
+    content.push(ChatContent::Text {
+        text: user_text.to_string(),
+    });
+
+    ChatMessage {
+        role: "user".to_string(),
+        content,
+    }
+}
+
 fn build_llm_system_prompt(
     base_prompt: &str,
     include_audio_context: bool,
@@ -2777,18 +2817,7 @@ fn build_latest_user_turn_message(
     _latest_audio_path: Option<&Path>,
     latest_image_path: Option<&Path>,
 ) -> ChatMessage {
-    let mut content = Vec::new();
-    if let Some(image_path) = latest_image_path {
-        content.push(build_input_image_content(image_path));
-    }
-    content.push(ChatContent::Text {
-        text: user_text.to_string(),
-    });
-
-    ChatMessage {
-        role: "user".to_string(),
-        content,
-    }
+    build_user_turn_message(user_text, latest_image_path)
 }
 
 enum ParsedGemmaStreamEvent {
@@ -2933,6 +2962,23 @@ fn remove_temp_image_file(image_path: &Path) {
             image_path.display(),
             err
         ),
+    }
+}
+
+fn load_image_data_url(image_path: &Path) -> Option<String> {
+    match std::fs::read(image_path) {
+        Ok(bytes) => Some(format!(
+            "data:image/png;base64,{}",
+            BASE64_STANDARD.encode(bytes)
+        )),
+        Err(err) => {
+            warn!(
+                "Failed to read temp image file {} for preview: {}",
+                image_path.display(),
+                err
+            );
+            None
+        }
     }
 }
 
@@ -4601,11 +4647,25 @@ fn register_active_generation_if_newer(
     true
 }
 
-fn append_conversation_turn(state: &AppState, user_text: String, assistant_text: String) {
+fn append_conversation_turn(
+    state: &AppState,
+    user_text: String,
+    assistant_text: String,
+    image_path: Option<PathBuf>,
+) {
+    if let Some(image_path) = image_path.as_ref() {
+        state
+            .conversation_image_paths
+            .lock()
+            .unwrap()
+            .push(image_path.clone());
+    }
+
     let mut turns = state.conversation_turns.lock().unwrap();
     turns.push_back(ConversationTurn {
         user_text,
         assistant_text,
+        image_path,
     });
 
     while turns.len() > MAX_CONVERSATION_TURNS {
@@ -4699,6 +4759,12 @@ fn reset_call_session_state(state: &AppState) {
     {
         let mut turns = state.conversation_turns.lock().unwrap();
         turns.clear();
+    }
+    {
+        let mut image_paths = state.conversation_image_paths.lock().unwrap();
+        for image_path in image_paths.drain(..) {
+            remove_temp_image_file(&image_path);
+        }
     }
 
     state
@@ -6295,6 +6361,7 @@ pub fn run() {
             next_generation_id: AtomicU64::new(1),
             active_generation: Mutex::new(None),
             conversation_turns: Mutex::new(VecDeque::new()),
+            conversation_image_paths: Mutex::new(Vec::new()),
             pending_screen_capture: Mutex::new(None),
             screen_capture_in_progress: Mutex::new(false),
             transient_tray_title: Mutex::new(None),

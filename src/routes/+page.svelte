@@ -43,6 +43,7 @@
 
     type TranscriptEvent = {
         text: string;
+        imageDataUrl?: string | null;
     };
 
     type AssistantResponseEvent = {
@@ -99,6 +100,7 @@
         id: number;
         role: "user" | "assistant";
         text: string;
+        imageUrl: string | null;
     };
 
     type StoredContactProfile = {
@@ -810,9 +812,11 @@
     function appendConversationLogEntry(
         role: ConversationLogEntry["role"],
         text: string,
+        imageUrl: string | null = null,
     ) {
         const normalizedText = text.trim();
-        if (!normalizedText) {
+        const normalizedImageUrl = imageUrl?.trim() || null;
+        if (!normalizedText && !normalizedImageUrl) {
             return null;
         }
 
@@ -823,6 +827,7 @@
                 id: entryId,
                 role,
                 text: normalizedText,
+                imageUrl: normalizedImageUrl,
             },
         ];
         nextConversationEntryId += 1;
@@ -2685,7 +2690,11 @@
                                 return;
                             }
 
-                            appendConversationLogEntry("user", payload.text);
+                            appendConversationLogEntry(
+                                "user",
+                                payload.text,
+                                payload.imageDataUrl ?? null,
+                            );
                         },
                     ),
                     listen<ModelDownloadProgressEvent>(
@@ -3877,7 +3886,19 @@
                                     class="conversation-bubble"
                                     data-role={entry.role}
                                 >
-                                    {entry.text}
+                                    {#if entry.imageUrl}
+                                        <img
+                                            class="conversation-attachment-image"
+                                            src={entry.imageUrl}
+                                            alt="Attached screen capture"
+                                            loading="lazy"
+                                        />
+                                    {/if}
+                                    {#if entry.text}
+                                        <div class="conversation-entry-text">
+                                            {entry.text}
+                                        </div>
+                                    {/if}
                                 </div>
                             </div>
                         {/each}
@@ -4765,6 +4786,9 @@
         max-width: 88%;
         padding: 12px 16px;
         border-radius: 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
         font-size: 0.98rem;
         line-height: 1.38;
         letter-spacing: -0.015em;
@@ -4782,6 +4806,19 @@
         background: rgba(242, 242, 247, 0.96);
         color: #232326;
         border-bottom-left-radius: 10px;
+    }
+
+    .conversation-attachment-image {
+        display: block;
+        width: min(100%, 320px);
+        max-width: 100%;
+        border-radius: 16px;
+        object-fit: cover;
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+    }
+
+    .conversation-entry-text {
+        white-space: pre-wrap;
     }
 
     .conversation-empty {
