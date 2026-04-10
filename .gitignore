@@ -14,6 +14,7 @@ src-tauri/resources/python_env/
 src-tauri/resources/csm_env/
 src-tauri/resources/kokoro_env/
 src-tauri/resources/cosyvoice_env/
+src-tauri/resources/stt_env/
 src-tauri/resources/__pycache__/
 __pycache__/
 *.pyc

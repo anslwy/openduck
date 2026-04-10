@@ -9,12 +9,14 @@ PYTHON_ENV_DIR="$RESOURCES_DIR/python_env"
 CSM_ENV_DIR="$RESOURCES_DIR/csm_env"
 KOKORO_ENV_DIR="$RESOURCES_DIR/kokoro_env"
 COSYVOICE_ENV_DIR="$RESOURCES_DIR/cosyvoice_env"
+STT_ENV_DIR="$RESOURCES_DIR/stt_env"
 PORTABLE_PYTHON_TAR="$REPO_ROOT/python-standalone.tar.gz"
 MLX_VLM_REPO="https://github.com/Blaizzy/mlx-vlm.git"
 MLX_VLM_REF="${MLX_VLM_REF:-23e1dffd224488141a4f022b6d21d6a730f11507}"
 CSM_MLX_REPO="https://github.com/senstella/csm-mlx"
 MLX_AUDIO_VERSION="${MLX_AUDIO_VERSION:-0.2.5}"
 MLX_AUDIO_PLUS_VERSION="${MLX_AUDIO_PLUS_VERSION:-0.1.2}"
+MLX_AUDIO_STT_VERSION="${MLX_AUDIO_STT_VERSION:-0.3.1}"
 PATCH_SERVER_SCRIPT="$RESOURCES_DIR/patch_mlx_vlm.py"
 
 echo "Stopping existing MLX server processes..."
@@ -50,6 +52,10 @@ if [ -d "$COSYVOICE_ENV_DIR" ]; then
     echo "Removing old CosyVoice environment..."
     rm -rf "$COSYVOICE_ENV_DIR"
 fi
+if [ -d "$STT_ENV_DIR" ]; then
+    echo "Removing old STT environment..."
+    rm -rf "$STT_ENV_DIR"
+fi
 
 mkdir -p "$RESOURCES_DIR"
 
@@ -78,6 +84,8 @@ echo "Creating Kokoro virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$KOKORO_ENV_DIR/venv"
 echo "Creating CosyVoice virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$COSYVOICE_ENV_DIR/venv"
+echo "Creating STT virtual environment..."
+"$PYTHON_ENV_DIR/bin/python3" -m venv "$STT_ENV_DIR/venv"
 
 # Install Gemma server dependencies into the Gemma venv.
 echo "Installing mlx-vlm into the Gemma environment..."
@@ -99,9 +107,13 @@ echo "Installing Kokoro English G2P model..."
 echo "Installing mlx-audio-plus into the CosyVoice environment..."
 "$COSYVOICE_ENV_DIR/venv/bin/pip" install -U pip
 "$COSYVOICE_ENV_DIR/venv/bin/pip" install "mlx-audio-plus==$MLX_AUDIO_PLUS_VERSION" soundfile
+echo "Installing mlx-audio into the STT environment..."
+"$STT_ENV_DIR/venv/bin/pip" install -U pip
+"$STT_ENV_DIR/venv/bin/pip" install "mlx-audio==$MLX_AUDIO_STT_VERSION" soundfile
 
 echo "Setup complete!"
 echo "Gemma environment: $PYTHON_ENV_DIR/venv"
 echo "CSM environment: $CSM_ENV_DIR/venv"
 echo "Kokoro environment: $KOKORO_ENV_DIR/venv"
 echo "CosyVoice environment: $COSYVOICE_ENV_DIR/venv"
+echo "STT environment: $STT_ENV_DIR/venv"

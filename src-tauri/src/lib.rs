@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -37,6 +37,19 @@ const COSYVOICE2_S3_TOKENIZER_REPO: &str = "mlx-community/S3TokenizerV2";
 const COSYVOICE2_S3_TOKENIZER_CACHE_DIR: &str = "models--mlx-community--S3TokenizerV2";
 const COSYVOICE2_S3_TOKENIZER_CONFIG_FILE: &str = "config.json";
 const COSYVOICE2_S3_TOKENIZER_MODEL_FILE: &str = "model.safetensors";
+const STT_WHISPER_MODEL_REPO: &str = "mlx-community/whisper-large-v3-turbo-asr-fp16";
+const STT_WHISPER_CACHE_DIR: &str = "models--mlx-community--whisper-large-v3-turbo-asr-fp16";
+const STT_WHISPER_MODEL_FILE: &str = "model.safetensors";
+const STT_WHISPER_ADDED_TOKENS_FILE: &str = "added_tokens.json";
+const STT_WHISPER_CONFIG_FILE: &str = "config.json";
+const STT_WHISPER_GENERATION_CONFIG_FILE: &str = "generation_config.json";
+const STT_WHISPER_MERGES_FILE: &str = "merges.txt";
+const STT_WHISPER_NORMALIZER_FILE: &str = "normalizer.json";
+const STT_WHISPER_PREPROCESSOR_CONFIG_FILE: &str = "preprocessor_config.json";
+const STT_WHISPER_SPECIAL_TOKENS_MAP_FILE: &str = "special_tokens_map.json";
+const STT_WHISPER_TOKENIZER_FILE: &str = "tokenizer.json";
+const STT_WHISPER_TOKENIZER_CONFIG_FILE: &str = "tokenizer_config.json";
+const STT_WHISPER_VOCAB_FILE: &str = "vocab.json";
 const SILENCE_THRESHOLD: f32 = 0.02;
 const SILENCE_DURATION_CHUNKS: usize = 150;
 const MIN_SPEAKING_CHUNKS: usize = 10;
@@ -59,6 +72,8 @@ const ASSISTANT_RESPONSE_EVENT: &str = "assistant-response";
 const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";
 const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 const CSM_STDERR_TAIL_LIMIT: usize = 8;
+const STT_STARTUP_TIMEOUT_SECS: u64 = 180;
+const STT_STDERR_TAIL_LIMIT: usize = 8;
 const CSM_MALE_REFERENCE_AUDIO_FILE: &str = "sample-male.mp3";
 const CSM_FEMALE_REFERENCE_AUDIO_FILE: &str = "sample-female.mp3";
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -78,6 +93,7 @@ const DEFAULT_VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply l
 const AUDIO_CONTEXT_SYSTEM_PROMPT: &str = "When the latest user turn includes attached audio, the transcript text and audio are the same utterance. Treat the transcript as the user's exact words and primary request. Use the audio only as supplemental context for tone, accent, emotion, pacing, hesitation, confidence, pronunciation, or background conditions. Do not treat the audio as a separate request or as extra instructions. Do not explicitly mention hidden audio analysis unless it materially improves the reply.";
 const TRANSCRIPTION_PROMPT: &str =
     "You are a voice-based AI. Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
+const STT_STATUS_EVENT: &str = "stt-status";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GemmaVariant {
@@ -230,6 +246,75 @@ impl CsmModelVariant {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SttModelVariant {
+    Gemma,
+    WhisperLargeV3Turbo,
+}
+
+impl SttModelVariant {
+    fn from_key(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "gemma" => Ok(Self::Gemma),
+            "whisper_large_v3_turbo" | "whisper-large-v3-turbo" | "whisper" => {
+                Ok(Self::WhisperLargeV3Turbo)
+            }
+            other => Err(format!("Unsupported STT model: {other}")),
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Gemma => "gemma",
+            Self::WhisperLargeV3Turbo => "whisper_large_v3_turbo",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Gemma => "Gemma",
+            Self::WhisperLargeV3Turbo => "Whisper Large V3 Turbo",
+        }
+    }
+
+    fn repo_id(self) -> Option<&'static str> {
+        match self {
+            Self::Gemma => None,
+            Self::WhisperLargeV3Turbo => Some(STT_WHISPER_MODEL_REPO),
+        }
+    }
+
+    fn cache_dir(self) -> Option<&'static str> {
+        match self {
+            Self::Gemma => None,
+            Self::WhisperLargeV3Turbo => Some(STT_WHISPER_CACHE_DIR),
+        }
+    }
+
+    fn required_files(self) -> &'static [&'static str] {
+        match self {
+            Self::Gemma => &[],
+            Self::WhisperLargeV3Turbo => &[
+                STT_WHISPER_ADDED_TOKENS_FILE,
+                STT_WHISPER_CONFIG_FILE,
+                STT_WHISPER_GENERATION_CONFIG_FILE,
+                STT_WHISPER_MERGES_FILE,
+                STT_WHISPER_MODEL_FILE,
+                STT_WHISPER_NORMALIZER_FILE,
+                STT_WHISPER_PREPROCESSOR_CONFIG_FILE,
+                STT_WHISPER_SPECIAL_TOKENS_MAP_FILE,
+                STT_WHISPER_TOKENIZER_FILE,
+                STT_WHISPER_TOKENIZER_CONFIG_FILE,
+                STT_WHISPER_VOCAB_FILE,
+            ],
+        }
+    }
+
+    fn uses_worker(self) -> bool {
+        matches!(self, Self::WhisperLargeV3Turbo)
+    }
+}
+
 #[derive(Clone, Deserialize)]
 struct AudioPayload {
     data: Vec<f32>,
@@ -271,6 +356,13 @@ struct ChatRequest {
 struct CsmProcess {
     child: Arc<AsyncMutex<Child>>,
     stdin: Arc<AsyncMutex<ChildStdin>>,
+}
+
+#[derive(Clone)]
+struct SttProcess {
+    child: Arc<AsyncMutex<Child>>,
+    stdin: Arc<AsyncMutex<ChildStdin>>,
+    pending_requests: Arc<AsyncMutex<HashMap<u64, oneshot::Sender<Result<String, String>>>>>,
 }
 
 #[derive(Clone)]
@@ -373,10 +465,13 @@ struct AppState {
     loaded_gemma_variant: Mutex<Option<GemmaVariant>>,
     gemma_download_process: Mutex<Option<DownloadProcess>>,
     csm_download_process: Mutex<Option<DownloadProcess>>,
+    stt_download_process: Mutex<Option<DownloadProcess>>,
     gemma_download_state: Mutex<Option<TrackedDownloadState>>,
     csm_download_state: Mutex<Option<TrackedDownloadState>>,
+    stt_download_state: Mutex<Option<TrackedDownloadState>>,
     gemma_download_cancel_requested: Mutex<bool>,
     csm_download_cancel_requested: Mutex<bool>,
+    stt_download_cancel_requested: Mutex<bool>,
     server_process: Mutex<Option<tauri_plugin_shell::process::CommandChild>>,
     server_port: Mutex<Option<u16>>,
     csm_process: Mutex<Option<CsmProcess>>,
@@ -385,9 +480,16 @@ struct AppState {
     csm_stderr_tail: Mutex<VecDeque<String>>,
     selected_csm_model: Mutex<CsmModelVariant>,
     loaded_csm_model: Mutex<Option<CsmModelVariant>>,
+    stt_process: Mutex<Option<SttProcess>>,
+    stt_ready: Mutex<bool>,
+    stt_startup_message: Mutex<Option<String>>,
+    stt_stderr_tail: Mutex<VecDeque<String>>,
+    selected_stt_model: Mutex<SttModelVariant>,
+    loaded_stt_model: Mutex<Option<SttModelVariant>>,
     selected_csm_voice: Mutex<CsmVoice>,
     selected_csm_quantized: Mutex<bool>,
     next_csm_request_id: AtomicU64,
+    next_stt_request_id: AtomicU64,
     next_generation_id: AtomicU64,
     active_generation: Mutex<Option<ActiveGeneration>>,
     conversation_turns: Mutex<VecDeque<ConversationTurn>>,
@@ -427,10 +529,28 @@ enum CsmWorkerEvent {
     },
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SttWorkerEvent {
+    Status {
+        message: String,
+    },
+    Ready {},
+    Transcription {
+        request_id: u64,
+        text: String,
+    },
+    Error {
+        request_id: Option<u64>,
+        message: String,
+    },
+}
+
 #[derive(Clone, Copy)]
 enum DownloadModel {
     Gemma,
     Csm,
+    Stt,
 }
 
 impl DownloadModel {
@@ -438,6 +558,7 @@ impl DownloadModel {
         match value.trim().to_ascii_lowercase().as_str() {
             "gemma" => Ok(Self::Gemma),
             "csm" => Ok(Self::Csm),
+            "stt" => Ok(Self::Stt),
             other => Err(format!("Unsupported download model: {other}")),
         }
     }
@@ -446,6 +567,7 @@ impl DownloadModel {
         match self {
             Self::Gemma => "gemma",
             Self::Csm => "csm",
+            Self::Stt => "stt",
         }
     }
 }
@@ -482,6 +604,11 @@ struct CsmErrorEvent {
 
 #[derive(Clone, Serialize)]
 struct CsmStatusEvent {
+    message: String,
+}
+
+#[derive(Clone, Serialize)]
+struct SttStatusEvent {
     message: String,
 }
 
@@ -631,6 +758,15 @@ async fn is_csm_running(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(csm_process_is_ready(state.inner()).await)
 }
 
+#[tauri::command]
+async fn is_stt_running(state: State<'_, AppState>) -> Result<bool, String> {
+    if !selected_stt_model(state.inner()).uses_worker() {
+        return Ok(true);
+    }
+
+    Ok(stt_process_is_ready(state.inner()).await)
+}
+
 fn selected_gemma_variant(state: &AppState) -> GemmaVariant {
     *state.selected_gemma_variant.lock().unwrap()
 }
@@ -645,6 +781,14 @@ fn selected_csm_model(state: &AppState) -> CsmModelVariant {
 
 fn loaded_csm_model(state: &AppState) -> Option<CsmModelVariant> {
     *state.loaded_csm_model.lock().unwrap()
+}
+
+fn selected_stt_model(state: &AppState) -> SttModelVariant {
+    *state.selected_stt_model.lock().unwrap()
+}
+
+fn loaded_stt_model(state: &AppState) -> Option<SttModelVariant> {
+    *state.loaded_stt_model.lock().unwrap()
 }
 
 #[tauri::command]
@@ -667,6 +811,34 @@ fn set_gemma_variant(state: State<'_, AppState>, variant: String) -> Result<(), 
     }
 
     let mut variant_guard = state.selected_gemma_variant.lock().unwrap();
+    *variant_guard = selected_variant;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_stt_model_variant(state: State<'_, AppState>) -> String {
+    selected_stt_model(state.inner()).key().to_string()
+}
+
+#[tauri::command]
+fn set_stt_model_variant(state: State<'_, AppState>, variant: String) -> Result<(), String> {
+    let selected_variant = SttModelVariant::from_key(&variant)?;
+
+    if active_download_process(state.inner(), DownloadModel::Stt).is_some() {
+        return Err("An STT model download is already in progress.".to_string());
+    }
+
+    if let Some(loaded_variant) = loaded_stt_model(state.inner()) {
+        if loaded_variant != selected_variant {
+            return Err(format!(
+                "{} is already loaded for STT. Unload it before switching to {}.",
+                loaded_variant.label(),
+                selected_variant.label()
+            ));
+        }
+    }
+
+    let mut variant_guard = state.selected_stt_model.lock().unwrap();
     *variant_guard = selected_variant;
     Ok(())
 }
@@ -755,6 +927,14 @@ async fn start_csm_server(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     start_csm_server_inner(&app_handle, state.inner()).await
+}
+
+#[tauri::command]
+async fn start_stt_server(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    start_stt_server_inner(&app_handle, state.inner()).await
 }
 
 #[tauri::command]
@@ -971,6 +1151,157 @@ async fn start_csm_server_inner(
     }
 }
 
+async fn start_stt_server_inner(
+    app_handle: &tauri::AppHandle,
+    state: &AppState,
+) -> Result<(), String> {
+    let selected_variant = selected_stt_model(state);
+    if !selected_variant.uses_worker() {
+        return Ok(());
+    }
+
+    if stt_process_is_ready(state).await {
+        if loaded_stt_model(state) == Some(selected_variant) {
+            return Ok(());
+        }
+
+        if let Some(loaded_variant) = loaded_stt_model(state) {
+            return Err(format!(
+                "{} is already loaded for STT. Unload it before switching to {}.",
+                loaded_variant.label(),
+                selected_variant.label()
+            ));
+        }
+    }
+
+    stop_stt_server_inner(state).await?;
+    reset_stt_startup_state(state);
+    update_stt_startup_message(
+        app_handle,
+        Some(format!("Starting {} worker...", selected_variant.label())),
+        true,
+    );
+
+    let python_executable = resolve_gemma_python_executable(app_handle)?;
+    let python_home = python_executable
+        .parent()
+        .and_then(|path| path.parent())
+        .map(PathBuf::from)
+        .ok_or_else(|| "Failed to resolve STT Python home".to_string())?;
+    let stt_site_packages = resolve_stt_site_packages(app_handle)?;
+    let stt_script = resolve_resource_file(app_handle, "stt_stream.py")?;
+    let model_repo_id = selected_variant.repo_id().ok_or_else(|| {
+        format!(
+            "{} does not use a dedicated STT worker.",
+            selected_variant.label()
+        )
+    })?;
+
+    info!(
+        "Starting STT worker for {} with {}",
+        model_repo_id,
+        python_executable.display()
+    );
+
+    let mut command = Command::new(&python_executable);
+    command
+        .arg(&stt_script)
+        .arg("--server")
+        .arg("--model")
+        .arg(model_repo_id)
+        .env("PYTHONUNBUFFERED", "1")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("PYTHONPYCACHEPREFIX", "/tmp/openduck-pycache")
+        .env("NUMBA_CACHE_DIR", "/tmp/openduck-numba-cache")
+        .env("PYTHONHOME", &python_home)
+        .env("PYTHONPATH", &stt_site_packages)
+        .env("HF_HUB_DISABLE_XET", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Failed to start STT worker: {e}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to open stdin for the STT worker".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to open stdout for the STT worker".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to open stderr for the STT worker".to_string())?;
+
+    let child = Arc::new(AsyncMutex::new(child));
+    let stdin = Arc::new(AsyncMutex::new(stdin));
+    let pending_requests = Arc::new(AsyncMutex::new(HashMap::new()));
+
+    {
+        let mut stt_process_guard = state.stt_process.lock().unwrap();
+        *stt_process_guard = Some(SttProcess {
+            child: child.clone(),
+            stdin: stdin.clone(),
+            pending_requests: pending_requests.clone(),
+        });
+    }
+    {
+        let mut stt_ready_guard = state.stt_ready.lock().unwrap();
+        *stt_ready_guard = false;
+    }
+    {
+        let mut loaded_variant_guard = state.loaded_stt_model.lock().unwrap();
+        *loaded_variant_guard = Some(selected_variant);
+    }
+
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let ready_tx = Arc::new(Mutex::new(Some(ready_tx)));
+
+    tauri::async_runtime::spawn(stt_stdout_task(
+        app_handle.clone(),
+        stdout,
+        pending_requests.clone(),
+        ready_tx.clone(),
+    ));
+    tauri::async_runtime::spawn(stt_stderr_task(app_handle.clone(), stderr));
+    tauri::async_runtime::spawn(stt_exit_monitor(
+        app_handle.clone(),
+        child.clone(),
+        ready_tx.clone(),
+    ));
+
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(STT_STARTUP_TIMEOUT_SECS),
+        ready_rx,
+    )
+    .await
+    {
+        Ok(Ok(Ok(()))) => {
+            update_stt_startup_message(app_handle, None, false);
+            Ok(())
+        }
+        Ok(Ok(Err(message))) => {
+            let _ = stop_stt_server_inner(state).await;
+            Err(message)
+        }
+        Ok(Err(_)) => {
+            let message =
+                stt_startup_failure_message(state, "STT worker closed before it became ready");
+            let _ = stop_stt_server_inner(state).await;
+            Err(message)
+        }
+        Err(_) => {
+            let message =
+                stt_startup_failure_message(state, "Timed out while loading the STT worker");
+            let _ = stop_stt_server_inner(state).await;
+            Err(message)
+        }
+    }
+}
+
 #[tauri::command]
 async fn stop_server(state: State<'_, AppState>) -> Result<(), String> {
     stop_server_inner(state.inner())
@@ -991,6 +1322,11 @@ fn stop_server_inner(state: &AppState) -> Result<(), String> {
 #[tauri::command]
 async fn stop_csm_server(state: State<'_, AppState>) -> Result<(), String> {
     stop_csm_server_inner(state.inner()).await
+}
+
+#[tauri::command]
+async fn stop_stt_server(state: State<'_, AppState>) -> Result<(), String> {
+    stop_stt_server_inner(state.inner()).await
 }
 
 #[tauri::command]
@@ -1155,17 +1491,9 @@ fn receive_audio_chunk(
         buffer.extend_from_slice(&prepared_chunk.samples);
 
         if *silent_count >= SILENCE_DURATION_CHUNKS {
-            info!("Silence detected, sending to MLX Server...");
+            info!("Silence detected, preparing buffered audio for transcription...");
             emit_call_stage(&app_handle, "processing_audio", "Processing Audio");
-            let server_port = {
-                let port_guard = state.server_port.lock().unwrap();
-                *port_guard
-            };
-            if let Some(port) = server_port {
-                process_audio_with_server(&buffer, capture_sample_rate, port, app_handle);
-            } else {
-                error!("MLX Server is not running, skipping audio request");
-            }
+            process_audio_turn(&buffer, capture_sample_rate, app_handle);
             buffer.clear();
             *is_speaking = false;
             *silent_count = 0;
@@ -1174,16 +1502,13 @@ fn receive_audio_chunk(
     }
 }
 
-fn process_audio_with_server(
-    samples: &[f32],
-    capture_sample_rate: u32,
-    server_port: u16,
-    app_handle: tauri::AppHandle,
-) {
+fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tauri::AppHandle) {
     let audio_path = create_temp_wav_path();
     let generation_id;
     let conversation_session_id;
     let gemma_model;
+    let active_stt_model: SttModelVariant;
+    let server_port;
     {
         let state = app_handle.state::<AppState>();
         generation_id = state.next_generation_id.fetch_add(1, Ordering::Relaxed);
@@ -1192,7 +1517,15 @@ fn process_audio_with_server(
             .unwrap_or_else(|| selected_gemma_variant(state.inner()))
             .repo_id()
             .to_string();
+        active_stt_model = selected_stt_model(state.inner());
+        server_port = *state.server_port.lock().unwrap();
     }
+
+    let Some(server_port) = server_port else {
+        error!("Gemma server is not running, skipping audio request");
+        return;
+    };
+
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: capture_sample_rate,
@@ -1230,14 +1563,27 @@ fn process_audio_with_server(
     let app_handle_for_task = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         info!(
-            "Sending audio to MLX Server (saved at: {})",
+            "Dispatching audio turn for {} transcription (saved at: {})",
+            active_stt_model.label(),
             audio_path.display()
         );
 
-        match transcribe_audio_with_gemma(server_port, &gemma_model, &audio_path).await {
+        let transcription_result = match active_stt_model {
+            SttModelVariant::Gemma => {
+                transcribe_audio_with_gemma(server_port, &gemma_model, &audio_path).await
+            }
+            SttModelVariant::WhisperLargeV3Turbo => {
+                transcribe_audio_with_stt_worker(&app_handle_for_task, &audio_path).await
+            }
+        };
+
+        match transcription_result {
             Ok(user_text) => {
                 if user_text.is_empty() {
-                    warn!("Gemma transcription was empty, skipping response generation");
+                    warn!(
+                        "{} transcription was empty, skipping response generation",
+                        active_stt_model.label()
+                    );
                     remove_temp_audio_file(&audio_path);
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
@@ -1273,7 +1619,7 @@ fn process_audio_with_server(
                     return;
                 }
 
-                info!("Gemma transcription: {}", user_text);
+                info!("{} transcription: {}", active_stt_model.label(), user_text);
                 emit_transcript_event(
                     &app_handle_for_task,
                     TranscriptEvent {
@@ -1308,7 +1654,11 @@ fn process_audio_with_server(
                         message: err.clone(),
                     },
                 );
-                error!("Failed to transcribe audio with Gemma: {}", err);
+                error!(
+                    "Failed to transcribe audio with {}: {}",
+                    active_stt_model.label(),
+                    err
+                );
                 remove_temp_audio_file(&audio_path);
                 emit_call_stage(&app_handle_for_task, "listening", "Listening");
             }
@@ -1449,6 +1799,103 @@ async fn transcribe_audio_with_gemma(
 
     info!(
         "STT response received in {:.1} ms ({} chars)",
+        stt_started_at.elapsed().as_secs_f64() * 1000.0,
+        sanitized_transcript.chars().count()
+    );
+
+    Ok(sanitized_transcript)
+}
+
+async fn transcribe_audio_with_stt_worker(
+    app_handle: &tauri::AppHandle,
+    audio_path: &Path,
+) -> Result<String, String> {
+    let stt_started_at = Instant::now();
+    let state = app_handle.state::<AppState>();
+    let selected_variant = selected_stt_model(state.inner());
+
+    if !selected_variant.uses_worker() {
+        return Err(format!(
+            "{} does not use a dedicated STT worker.",
+            selected_variant.label()
+        ));
+    }
+
+    if !stt_process_is_ready(state.inner()).await {
+        info!(
+            "STT worker was unavailable for {}. Attempting restart.",
+            selected_variant.label()
+        );
+        start_stt_server_inner(app_handle, state.inner())
+            .await
+            .map_err(|err| {
+                format!("The selected STT model stopped and could not be restarted: {err}")
+            })?;
+    }
+
+    if !stt_process_is_ready(state.inner()).await {
+        return Err("The selected STT model is not ready. Try loading it again.".to_string());
+    }
+
+    let process = {
+        let stt_process_guard = state.stt_process.lock().unwrap();
+        stt_process_guard
+            .clone()
+            .ok_or_else(|| "STT worker is unavailable".to_string())?
+    };
+    let request_id = state.next_stt_request_id.fetch_add(1, Ordering::Relaxed);
+    let (response_tx, response_rx) = oneshot::channel();
+    {
+        let mut pending_requests = process.pending_requests.lock().await;
+        pending_requests.insert(request_id, response_tx);
+    }
+
+    let request = serde_json::json!({
+        "type": "transcribe",
+        "request_id": request_id,
+        "audio_path": audio_path.to_string_lossy(),
+    });
+
+    let send_result = async {
+        let mut stdin = process.stdin.lock().await;
+        stdin
+            .write_all(request.to_string().as_bytes())
+            .await
+            .map_err(|e| format!("Failed to send audio to the STT worker: {e}"))?;
+        stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|e| format!("Failed to terminate the STT request: {e}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| format!("Failed to flush the STT request: {e}"))?;
+        Ok::<(), String>(())
+    }
+    .await;
+
+    if let Err(err) = send_result {
+        let mut pending_requests = process.pending_requests.lock().await;
+        pending_requests.remove(&request_id);
+        return Err(err);
+    }
+
+    let transcript = response_rx
+        .await
+        .map_err(|_| "STT worker stopped before returning a transcription.".to_string())??;
+    let sanitized_transcript = sanitize_for_voice_output(&transcript);
+
+    if sanitized_transcript.is_empty() {
+        warn!(
+            "{} returned an empty transcription after sanitization. Raw transcription: {:?}",
+            selected_variant.label(),
+            transcript
+        );
+    }
+
+    info!(
+        "{} transcription received in {:.1} ms ({} chars)",
+        selected_variant.label(),
         stt_started_at.elapsed().as_secs_f64() * 1000.0,
         sanitized_transcript.chars().count()
     );
@@ -1974,7 +2421,7 @@ fn build_llm_system_prompt(base_prompt: &str, include_audio_context: bool) -> St
 
 fn build_latest_user_turn_message(
     user_text: &str,
-    latest_audio_path: Option<&Path>,
+    _latest_audio_path: Option<&Path>,
 ) -> ChatMessage {
     // Reserve this for gemma4 support
     // let content = if let Some(audio_path) = latest_audio_path {
@@ -2739,6 +3186,112 @@ fn stop_csm_server_for_exit(state: &AppState) {
     }
 }
 
+async fn stt_process_is_ready(state: &AppState) -> bool {
+    let process = {
+        let stt_process_guard = state.stt_process.lock().unwrap();
+        stt_process_guard.clone()
+    };
+
+    let Some(process) = process else {
+        let mut stt_ready_guard = state.stt_ready.lock().unwrap();
+        *stt_ready_guard = false;
+        return false;
+    };
+
+    let mut child = process.child.lock().await;
+    match child.try_wait() {
+        Ok(None) => {
+            let stt_ready_guard = state.stt_ready.lock().unwrap();
+            *stt_ready_guard
+        }
+        Ok(Some(status)) => {
+            warn!("STT worker exited with status {}", status);
+            drop(child);
+            let mut stt_process_guard = state.stt_process.lock().unwrap();
+            *stt_process_guard = None;
+            let mut loaded_stt_model_guard = state.loaded_stt_model.lock().unwrap();
+            *loaded_stt_model_guard = None;
+            let mut stt_ready_guard = state.stt_ready.lock().unwrap();
+            *stt_ready_guard = false;
+            reset_stt_startup_state(state);
+            false
+        }
+        Err(err) => {
+            error!("Failed to check STT worker status: {}", err);
+            false
+        }
+    }
+}
+
+async fn stop_stt_server_inner(state: &AppState) -> Result<(), String> {
+    let process = take_stt_process(state);
+    reset_stt_runtime_state(state);
+
+    let Some(process) = process else {
+        return Ok(());
+    };
+
+    {
+        let mut stdin = process.stdin.lock().await;
+        let _ = stdin.write_all(br#"{"type":"shutdown"}"#).await;
+        let _ = stdin.write_all(b"\n").await;
+        let _ = stdin.flush().await;
+    }
+
+    fail_pending_stt_requests(
+        process.pending_requests.clone(),
+        "The STT worker was stopped before returning a result.".to_string(),
+    )
+    .await;
+
+    let mut child = process.child.lock().await;
+    if let Err(err) = child.kill().await {
+        warn!("Failed to kill the STT worker cleanly: {}", err);
+    }
+
+    Ok(())
+}
+
+fn take_stt_process(state: &AppState) -> Option<SttProcess> {
+    let mut stt_process_guard = state.stt_process.lock().unwrap();
+    stt_process_guard.take()
+}
+
+fn reset_stt_runtime_state(state: &AppState) {
+    {
+        let mut loaded_stt_model_guard = state.loaded_stt_model.lock().unwrap();
+        *loaded_stt_model_guard = None;
+    }
+    {
+        let mut stt_ready_guard = state.stt_ready.lock().unwrap();
+        *stt_ready_guard = false;
+    }
+    reset_stt_startup_state(state);
+}
+
+fn stop_stt_server_for_exit(state: &AppState) {
+    let process = take_stt_process(state);
+    reset_stt_runtime_state(state);
+
+    let Some(process) = process else {
+        return;
+    };
+
+    {
+        let mut pending_requests = process.pending_requests.blocking_lock();
+        for (_, sender) in pending_requests.drain() {
+            let _ = sender.send(Err(
+                "The STT worker stopped while the app was exiting.".to_string()
+            ));
+        }
+    }
+
+    let mut child = process.child.blocking_lock();
+    if let Err(err) = child.start_kill() {
+        warn!("Failed to stop the STT worker during app exit: {}", err);
+    }
+}
+
 fn cleanup_before_app_exit(app_handle: &AppHandle) {
     let state = app_handle.state::<AppState>();
     *state.call_in_progress.lock().unwrap() = false;
@@ -2748,6 +3301,7 @@ fn cleanup_before_app_exit(app_handle: &AppHandle) {
         warn!("Failed to stop MLX server during app exit: {}", err);
     });
     stop_csm_server_for_exit(state.inner());
+    stop_stt_server_for_exit(state.inner());
 }
 
 fn request_app_quit(app_handle: &AppHandle) {
@@ -3017,6 +3571,164 @@ async fn csm_exit_monitor(
     }
 }
 
+async fn stt_stdout_task(
+    app_handle: tauri::AppHandle,
+    stdout: ChildStdout,
+    pending_requests: Arc<AsyncMutex<HashMap<u64, oneshot::Sender<Result<String, String>>>>>,
+    ready_tx: Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>,
+) {
+    let mut lines = BufReader::new(stdout).lines();
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        match serde_json::from_str::<SttWorkerEvent>(&line) {
+            Ok(SttWorkerEvent::Status { message }) => {
+                info!("STT worker status: {}", message);
+                update_stt_startup_message(&app_handle, Some(message), true);
+            }
+            Ok(SttWorkerEvent::Ready {}) => {
+                info!("STT worker ready");
+                let state = app_handle.state::<AppState>();
+                let mut stt_ready_guard = state.stt_ready.lock().unwrap();
+                *stt_ready_guard = true;
+                update_stt_startup_message(&app_handle, None, false);
+                send_ready_signal(&ready_tx, Ok(()));
+            }
+            Ok(SttWorkerEvent::Transcription { request_id, text }) => {
+                if let Some(sender) = pending_requests.lock().await.remove(&request_id) {
+                    let _ = sender.send(Ok(text));
+                } else {
+                    warn!(
+                        "Ignoring STT transcription for unknown request {}",
+                        request_id
+                    );
+                }
+            }
+            Ok(SttWorkerEvent::Error {
+                request_id,
+                message,
+            }) => {
+                error!("STT worker error: {}", message);
+                update_stt_startup_message(&app_handle, Some(message.clone()), true);
+
+                if let Some(request_id) = request_id {
+                    if let Some(sender) = pending_requests.lock().await.remove(&request_id) {
+                        let _ = sender.send(Err(message));
+                    } else {
+                        warn!("Ignoring STT error for unknown request {}", request_id);
+                    }
+                } else {
+                    send_ready_signal(&ready_tx, Err(message));
+                }
+            }
+            Err(err) => {
+                warn!("Ignoring non-JSON STT worker stdout: {} ({})", err, line);
+            }
+        }
+    }
+
+    let failure_message = {
+        let state = app_handle.state::<AppState>();
+        {
+            let mut stt_ready_guard = state.stt_ready.lock().unwrap();
+            *stt_ready_guard = false;
+        }
+        {
+            let mut stt_process_guard = state.stt_process.lock().unwrap();
+            *stt_process_guard = None;
+        }
+        {
+            let mut loaded_stt_model_guard = state.loaded_stt_model.lock().unwrap();
+            *loaded_stt_model_guard = None;
+        }
+
+        stt_startup_failure_message(
+            state.inner(),
+            "STT worker stopped before completing startup",
+        )
+    };
+
+    fail_pending_stt_requests(pending_requests, failure_message.clone()).await;
+    send_ready_signal(&ready_tx, Err(failure_message));
+}
+
+async fn stt_stderr_task(app_handle: tauri::AppHandle, stderr: ChildStderr) {
+    let mut lines = BufReader::new(stderr).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let preview = if line.chars().count() > 512 {
+            let truncated = line.chars().take(512).collect::<String>();
+            format!(
+                "{truncated}...[truncated {} chars]",
+                line.chars().count() - 512
+            )
+        } else {
+            line.clone()
+        };
+        error!("STT worker stderr: {}", preview);
+        push_stt_stderr_line(app_handle.state::<AppState>().inner(), line);
+    }
+}
+
+async fn stt_exit_monitor(
+    app_handle: tauri::AppHandle,
+    child: Arc<AsyncMutex<Child>>,
+    ready_tx: Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>,
+) {
+    loop {
+        {
+            let state = app_handle.state::<AppState>();
+            let stt_ready_guard = state.stt_ready.lock().unwrap();
+            if *stt_ready_guard {
+                return;
+            }
+        }
+
+        let exit_status = {
+            let mut child_guard = child.lock().await;
+            match child_guard.try_wait() {
+                Ok(status) => status,
+                Err(err) => {
+                    error!("Failed while waiting for STT worker startup: {}", err);
+                    send_ready_signal(
+                        &ready_tx,
+                        Err(stt_startup_failure_message(
+                            app_handle.state::<AppState>().inner(),
+                            &format!("Failed to inspect the STT worker process: {err}"),
+                        )),
+                    );
+                    return;
+                }
+            }
+        };
+
+        if let Some(status) = exit_status {
+            send_ready_signal(
+                &ready_tx,
+                Err(stt_startup_failure_message(
+                    app_handle.state::<AppState>().inner(),
+                    &format!("STT worker exited with status {status}"),
+                )),
+            );
+            return;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+async fn fail_pending_stt_requests(
+    pending_requests: Arc<AsyncMutex<HashMap<u64, oneshot::Sender<Result<String, String>>>>>,
+    message: String,
+) {
+    let mut pending_requests_guard = pending_requests.lock().await;
+    for (_, sender) in pending_requests_guard.drain() {
+        let _ = sender.send(Err(message.clone()));
+    }
+}
+
 fn send_ready_signal(
     ready_tx: &Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>,
     result: Result<(), String>,
@@ -3053,6 +3765,12 @@ fn emit_csm_audio_stop(app_handle: &tauri::AppHandle) {
 fn emit_csm_status(app_handle: &tauri::AppHandle, payload: CsmStatusEvent) {
     if let Err(err) = app_handle.emit(CSM_STATUS_EVENT, payload) {
         error!("Failed to emit CSM status event: {}", err);
+    }
+}
+
+fn emit_stt_status(app_handle: &tauri::AppHandle, payload: SttStatusEvent) {
+    if let Err(err) = app_handle.emit(STT_STATUS_EVENT, payload) {
+        error!("Failed to emit STT status event: {}", err);
     }
 }
 
@@ -3345,6 +4063,62 @@ fn csm_startup_failure_message(state: &AppState, base: &str) -> String {
     message
 }
 
+fn reset_stt_startup_state(state: &AppState) {
+    {
+        let mut startup_message_guard = state.stt_startup_message.lock().unwrap();
+        *startup_message_guard = None;
+    }
+    let mut stderr_tail_guard = state.stt_stderr_tail.lock().unwrap();
+    stderr_tail_guard.clear();
+}
+
+fn update_stt_startup_message(
+    app_handle: &tauri::AppHandle,
+    message: Option<String>,
+    emit_event: bool,
+) {
+    let state = app_handle.state::<AppState>();
+    {
+        let mut startup_message_guard = state.stt_startup_message.lock().unwrap();
+        *startup_message_guard = message.clone();
+    }
+
+    if emit_event {
+        if let Some(message) = message {
+            emit_stt_status(app_handle, SttStatusEvent { message });
+        }
+    }
+}
+
+fn push_stt_stderr_line(state: &AppState, line: String) {
+    let mut stderr_tail_guard = state.stt_stderr_tail.lock().unwrap();
+    stderr_tail_guard.push_back(line);
+    while stderr_tail_guard.len() > STT_STDERR_TAIL_LIMIT {
+        stderr_tail_guard.pop_front();
+    }
+}
+
+fn stt_startup_failure_message(state: &AppState, base: &str) -> String {
+    let mut message = base.to_string();
+
+    if let Some(stage) = state.stt_startup_message.lock().unwrap().clone() {
+        if !stage.trim().is_empty() {
+            message.push_str(&format!(". Last stage: {}", stage.trim()));
+        }
+    }
+
+    let stderr_tail_guard = state.stt_stderr_tail.lock().unwrap();
+    if let Some(last_stderr) = stderr_tail_guard
+        .iter()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+    {
+        message.push_str(&format!(". Last stderr: {}", last_stderr.trim()));
+    }
+
+    message
+}
+
 fn create_temp_wav_path() -> PathBuf {
     let timestamp_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3533,10 +4307,21 @@ fn csm_model_cache_exists(variant: CsmModelVariant) -> bool {
     true
 }
 
+fn stt_model_cache_exists(variant: SttModelVariant) -> bool {
+    match variant {
+        SttModelVariant::Gemma => true,
+        SttModelVariant::WhisperLargeV3Turbo => huggingface_cached_files_exist(
+            STT_WHISPER_CACHE_DIR,
+            SttModelVariant::WhisperLargeV3Turbo.required_files(),
+        ),
+    }
+}
+
 fn active_download_process(state: &AppState, model: DownloadModel) -> Option<DownloadProcess> {
     match model {
         DownloadModel::Gemma => state.gemma_download_process.lock().unwrap().clone(),
         DownloadModel::Csm => state.csm_download_process.lock().unwrap().clone(),
+        DownloadModel::Stt => state.stt_download_process.lock().unwrap().clone(),
     }
 }
 
@@ -3552,6 +4337,9 @@ fn set_active_download_process(
         DownloadModel::Csm => {
             *state.csm_download_process.lock().unwrap() = process;
         }
+        DownloadModel::Stt => {
+            *state.stt_download_process.lock().unwrap() = process;
+        }
     }
 }
 
@@ -3559,6 +4347,7 @@ fn tracked_download_state(state: &AppState, model: DownloadModel) -> Option<Trac
     match model {
         DownloadModel::Gemma => state.gemma_download_state.lock().unwrap().clone(),
         DownloadModel::Csm => state.csm_download_state.lock().unwrap().clone(),
+        DownloadModel::Stt => state.stt_download_state.lock().unwrap().clone(),
     }
 }
 
@@ -3573,6 +4362,9 @@ fn set_tracked_download_state(
         }
         DownloadModel::Csm => {
             *state.csm_download_state.lock().unwrap() = tracked_state;
+        }
+        DownloadModel::Stt => {
+            *state.stt_download_state.lock().unwrap() = tracked_state;
         }
     }
 }
@@ -3683,6 +4475,9 @@ fn set_download_cancel_requested(state: &AppState, model: DownloadModel, request
         DownloadModel::Csm => {
             *state.csm_download_cancel_requested.lock().unwrap() = requested;
         }
+        DownloadModel::Stt => {
+            *state.stt_download_cancel_requested.lock().unwrap() = requested;
+        }
     }
 }
 
@@ -3690,6 +4485,7 @@ fn take_download_cancel_requested(state: &AppState, model: DownloadModel) -> boo
     let cancel_requested = match model {
         DownloadModel::Gemma => &state.gemma_download_cancel_requested,
         DownloadModel::Csm => &state.csm_download_cancel_requested,
+        DownloadModel::Stt => &state.stt_download_cancel_requested,
     };
     let mut guard = cancel_requested.lock().unwrap();
     let was_requested = *guard;
@@ -3748,6 +4544,17 @@ fn resolve_cosyvoice_site_packages(app_handle: &tauri::AppHandle) -> Result<Path
     )
     .map_err(|_| {
         "CosyVoice dependencies are not installed. Run scripts/setup_python_env.sh to create src-tauri/resources/cosyvoice_env.".to_string()
+    })
+}
+
+fn resolve_stt_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    resolve_existing_path_dev_first(
+        app_handle,
+        Path::new("resources/stt_env/venv/lib/python3.11/site-packages"),
+        "bundled STT site-packages",
+    )
+    .map_err(|_| {
+        "Whisper STT dependencies are not installed. Run scripts/setup_python_env.sh to create src-tauri/resources/stt_env.".to_string()
     })
 }
 
@@ -3842,7 +4649,7 @@ fn resolve_csm_context_audio_file(
 }
 
 fn reap_stale_model_processes(app_handle: &tauri::AppHandle) {
-    for resource_name in ["patch_mlx_vlm.py", "csm_stream.py"] {
+    for resource_name in ["patch_mlx_vlm.py", "csm_stream.py", "stt_stream.py"] {
         let Ok(resource_path) = resolve_resource_file(app_handle, resource_name) else {
             warn!(
                 "Skipping stale worker cleanup because {} could not be located",
@@ -3891,6 +4698,11 @@ fn check_csm_status(state: State<'_, AppState>) -> bool {
 }
 
 #[tauri::command]
+fn check_stt_status(state: State<'_, AppState>) -> bool {
+    stt_model_cache_exists(selected_stt_model(state.inner()))
+}
+
+#[tauri::command]
 fn clear_model_cache(state: State<'_, AppState>, model: String) -> Result<(), String> {
     let download_model = DownloadModel::from_key(&model)?;
     if active_download_process(state.inner(), download_model).is_some() {
@@ -3919,6 +4731,28 @@ fn clear_model_cache(state: State<'_, AppState>, model: String) -> Result<(), St
             }
 
             clear_csm_model_cache(selected_variant)?;
+        }
+        DownloadModel::Stt => {
+            let selected_variant = selected_stt_model(state.inner());
+            if !selected_variant.uses_worker() {
+                return Err(format!(
+                    "{} does not use a dedicated STT cache.",
+                    selected_variant.label()
+                ));
+            }
+
+            if loaded_stt_model(state.inner()) == Some(selected_variant) {
+                return Err(format!(
+                    "Unload {} before clearing its cache.",
+                    selected_variant.label()
+                ));
+            }
+
+            clear_huggingface_cache(
+                selected_variant
+                    .cache_dir()
+                    .ok_or_else(|| "Missing STT cache directory.".to_string())?,
+            )?;
         }
     }
 
@@ -3980,6 +4814,32 @@ async fn download_csm_model(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+async fn download_stt_model(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let selected_variant = selected_stt_model(state.inner());
+    let model_repo_id = selected_variant.repo_id().ok_or_else(|| {
+        format!(
+            "{} does not require a dedicated STT download.",
+            selected_variant.label()
+        )
+    })?;
+    let python_executable = resolve_gemma_python_executable(&app_handle)?;
+    let stt_site_packages = resolve_stt_site_packages(&app_handle)?;
+
+    run_hf_download(
+        &app_handle,
+        python_executable,
+        stt_site_packages,
+        "stt",
+        model_repo_id,
+        selected_variant.required_files(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -4296,21 +5156,31 @@ pub fn run() {
             loaded_gemma_variant: Mutex::new(None),
             gemma_download_process: Mutex::new(None),
             csm_download_process: Mutex::new(None),
+            stt_download_process: Mutex::new(None),
             gemma_download_state: Mutex::new(None),
             csm_download_state: Mutex::new(None),
+            stt_download_state: Mutex::new(None),
             gemma_download_cancel_requested: Mutex::new(false),
             csm_download_cancel_requested: Mutex::new(false),
+            stt_download_cancel_requested: Mutex::new(false),
             server_process: Mutex::new(None),
             server_port: Mutex::new(None),
             csm_process: Mutex::new(None),
             csm_ready: Mutex::new(false),
             csm_startup_message: Mutex::new(None),
             csm_stderr_tail: Mutex::new(VecDeque::new()),
+            stt_process: Mutex::new(None),
+            stt_ready: Mutex::new(false),
+            stt_startup_message: Mutex::new(None),
+            stt_stderr_tail: Mutex::new(VecDeque::new()),
             selected_csm_model: Mutex::new(CsmModelVariant::Expressiva1b),
             loaded_csm_model: Mutex::new(None),
+            selected_stt_model: Mutex::new(SttModelVariant::Gemma),
+            loaded_stt_model: Mutex::new(None),
             selected_csm_voice: Mutex::new(CsmVoice::Female),
             selected_csm_quantized: Mutex::new(default_csm_quantized),
             next_csm_request_id: AtomicU64::new(1),
+            next_stt_request_id: AtomicU64::new(1),
             next_generation_id: AtomicU64::new(1),
             active_generation: Mutex::new(None),
             conversation_turns: Mutex::new(VecDeque::new()),
@@ -4335,24 +5205,31 @@ pub fn run() {
             set_call_muted,
             get_gemma_variant,
             set_gemma_variant,
+            get_stt_model_variant,
+            set_stt_model_variant,
             check_model_status,
             check_csm_status,
+            check_stt_status,
             clear_model_cache,
             get_model_download_status,
             download_model,
             download_csm_model,
+            download_stt_model,
             cancel_model_download,
             is_server_running,
             is_csm_running,
+            is_stt_running,
             start_server,
             start_csm_server,
+            start_stt_server,
             get_csm_model_variant,
             get_csm_quantize,
             set_csm_model_variant,
             set_csm_quantize,
             set_csm_voice,
             stop_server,
-            stop_csm_server
+            stop_csm_server,
+            stop_stt_server
         ])
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]

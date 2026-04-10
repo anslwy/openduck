@@ -32,6 +32,10 @@
         message: string;
     };
 
+    type SttStatusEvent = {
+        message: string;
+    };
+
     type CallStageEvent = {
         phase: string;
         message: string;
@@ -51,7 +55,7 @@
     type TrayToggleMuteEvent = Record<string, never>;
 
     type ModelDownloadProgressEvent = {
-        model: "gemma" | "csm";
+        model: "gemma" | "csm" | "stt";
         phase: "progress" | "completed" | "error" | "cancelled";
         message: string;
         progress?: number | null;
@@ -62,6 +66,7 @@
 
     type GemmaVariant = "e4b" | "e2b";
     type CsmModelVariant = "expressiva_1b" | "kokoro_82m" | "cosyvoice2_0_5b";
+    type SttModelVariant = "gemma" | "whisper_large_v3_turbo";
 
     type ConversationLogEntry = {
         id: number;
@@ -363,6 +368,8 @@
     let isGemmaLoaded = $state(false);
     let isCsmDownloaded = $state(false);
     let isCsmLoaded = $state(false);
+    let isSttDownloaded = $state(false);
+    let isSttLoaded = $state(false);
     let isDownloadingGemma = $state(false);
     let isClearingGemmaCache = $state(false);
     let isCancellingGemmaDownload = $state(false);
@@ -370,8 +377,12 @@
     let isDownloadingCsm = $state(false);
     let isClearingCsmCache = $state(false);
     let isLoadingCsm = $state(false);
+    let isDownloadingStt = $state(false);
+    let isClearingSttCache = $state(false);
+    let isLoadingStt = $state(false);
     let isUnloadingGemma = $state(false);
     let isUnloadingCsm = $state(false);
+    let isUnloadingStt = $state(false);
     let isUpdatingCsmQuantize = $state(false);
     let gemmaDownloadMessage = $state("Preparing download...");
     let gemmaDownloadProgress = $state<number | null>(null);
@@ -379,11 +390,17 @@
     let gemmaDownloadError = $state<string | null>(null);
     let selectedGemmaVariant = $state<GemmaVariant>("e4b");
     let selectedCsmModel = $state<CsmModelVariant>("expressiva_1b");
+    let selectedSttModel = $state<SttModelVariant>("gemma");
     let csmDownloadMessage = $state("Preparing download...");
     let csmDownloadProgress = $state<number | null>(null);
     let csmDownloadIndeterminate = $state(true);
     let csmDownloadError = $state<string | null>(null);
     let csmLoadMessage = $state("Starting worker...");
+    let sttDownloadMessage = $state("Preparing download...");
+    let sttDownloadProgress = $state<number | null>(null);
+    let sttDownloadIndeterminate = $state(true);
+    let sttDownloadError = $state<string | null>(null);
+    let sttLoadMessage = $state("Starting worker...");
     let isCsmQuantized = $state(true);
 
     let captureContext: AudioContext | null = null;
@@ -431,7 +448,11 @@
             .toString()
             .padStart(2, "0")}:${(time % 60).toString().padStart(2, "0")}`,
     );
-    const modelsReady = $derived(isGemmaLoaded && isCsmLoaded);
+    const sttUsesGemma = $derived(selectedSttModel === "gemma");
+    const effectiveSttLoaded = $derived(
+        sttUsesGemma ? isGemmaLoaded : isSttLoaded,
+    );
+    const modelsReady = $derived(isGemmaLoaded && isCsmLoaded && effectiveSttLoaded);
     const gemmaVariantDisabled = $derived(
         isGemmaLoaded ||
             isDownloadingGemma ||
@@ -446,6 +467,13 @@
             isClearingCsmCache ||
             isLoadingCsm ||
             isUnloadingCsm,
+    );
+    const sttVariantDisabled = $derived(
+        isDownloadingStt ||
+            isClearingSttCache ||
+            isLoadingStt ||
+            isUnloadingStt ||
+            (selectedSttModel === "whisper_large_v3_turbo" && isSttLoaded),
     );
     let conversationLogViewport = $state<HTMLDivElement | null>(null);
     const gemmaVariantOptions: Array<{
@@ -463,6 +491,16 @@
         { value: "kokoro_82m", label: "Kokoro-82M" },
         { value: "cosyvoice2_0_5b", label: "CosyVoice2-0.5B" },
     ];
+    const sttModelOptions: Array<{
+        value: SttModelVariant;
+        label: string;
+    }> = [
+        { value: "gemma", label: "Gemma" },
+        {
+            value: "whisper_large_v3_turbo",
+            label: "Whisper Large V3 Turbo",
+        },
+    ];
     const gemmaVariantTooltip = $derived(
         selectedGemmaVariant === "e4b"
             ? "E4B uses more RAM but is generally more capable. Recommended for Macs with 24 GB+ of unified memory."
@@ -478,6 +516,15 @@
             : selectedCsmModel === "kokoro_82m"
               ? "Kokoro-82M is a lighter English TTS backend. Quantization is not used for this model."
               : "CosyVoice2-0.5B produces high quality audio with higher usage of memory. Quantization is not used for this model.",
+    );
+    const selectedSttModelLabel = $derived(
+        sttModelOptions.find((option) => option.value === selectedSttModel)
+            ?.label ?? "Gemma",
+    );
+    const sttModelTooltip = $derived(
+        selectedSttModel === "gemma"
+            ? "Use the loaded Gemma model for transcription. There is no separate STT model to load."
+            : "Use mlx-audio with mlx-community/whisper-large-v3-turbo-asr-fp16 for transcription. Download and load it separately from Gemma.",
     );
     const csmQuantizeAvailable = $derived(selectedCsmModel === "expressiva_1b");
     const selectedContact = $derived(
@@ -922,12 +969,20 @@
         );
     }
 
-    function resetDownloadState(model: "gemma" | "csm") {
+    function resetDownloadState(model: "gemma" | "csm" | "stt") {
         if (model === "gemma") {
             gemmaDownloadMessage = "Preparing download...";
             gemmaDownloadProgress = null;
             gemmaDownloadIndeterminate = true;
             gemmaDownloadError = null;
+            return;
+        }
+
+        if (model === "stt") {
+            sttDownloadMessage = "Preparing download...";
+            sttDownloadProgress = null;
+            sttDownloadIndeterminate = true;
+            sttDownloadError = null;
             return;
         }
 
@@ -1002,6 +1057,21 @@
             return;
         }
 
+        if (payload.model === "stt") {
+            sttDownloadMessage = payload.message;
+            sttDownloadProgress = payload.progress ?? null;
+            sttDownloadIndeterminate = payload.indeterminate;
+            if (payload.phase === "error") {
+                sttDownloadError = normalizeDownloadErrorMessage(payload.message);
+            } else if (
+                payload.phase === "completed" ||
+                payload.phase === "cancelled"
+            ) {
+                sttDownloadError = null;
+            }
+            return;
+        }
+
         csmDownloadMessage = payload.message;
         csmDownloadProgress = payload.progress ?? null;
         csmDownloadIndeterminate = payload.indeterminate;
@@ -1023,13 +1093,13 @@
     }
 
     async function pollActiveDownloadStatuses() {
-        if (!isDownloadingGemma && !isDownloadingCsm) {
+        if (!isDownloadingGemma && !isDownloadingCsm && !isDownloadingStt) {
             stopDownloadStatusPolling();
             return;
         }
 
         try {
-            const [gemmaStatus, csmStatus] = await Promise.all([
+            const [gemmaStatus, csmStatus, sttStatus] = await Promise.all([
                 isDownloadingGemma
                     ? invoke<ModelDownloadProgressEvent | null>(
                           "get_model_download_status",
@@ -1042,6 +1112,12 @@
                           { model: "csm" },
                       )
                     : Promise.resolve(null),
+                isDownloadingStt
+                    ? invoke<ModelDownloadProgressEvent | null>(
+                          "get_model_download_status",
+                          { model: "stt" },
+                      )
+                    : Promise.resolve(null),
             ]);
 
             if (
@@ -1052,6 +1128,9 @@
             }
             if (csmStatus) {
                 applyDownloadEvent(csmStatus);
+            }
+            if (sttStatus) {
+                applyDownloadEvent(sttStatus);
             }
         } catch (err) {
             console.error("Failed to poll download status:", err);
@@ -1125,32 +1204,60 @@
         }
     }
 
+    async function handleSttModelChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        const nextVariant = target.value as SttModelVariant;
+        const previousVariant = selectedSttModel;
+
+        selectedSttModel = nextVariant;
+
+        try {
+            await invoke("set_stt_model_variant", { variant: nextVariant });
+            resetDownloadState("stt");
+            sttLoadMessage = "Starting worker...";
+            await syncModelStatus();
+        } catch (err) {
+            selectedSttModel = previousVariant;
+            console.error("Failed to update STT model:", err);
+            alert(`Failed to update the STT model.\n${String(err)}`);
+        }
+    }
+
     async function syncModelStatus() {
         try {
             const [
                 gemmaVariant,
                 csmModelVariant,
+                sttModelVariant,
                 gemmaDownloaded,
                 gemmaLoaded,
                 csmDownloaded,
                 csmLoaded,
+                sttDownloaded,
+                sttLoaded,
                 csmQuantized,
             ] = await Promise.all([
                 invoke<GemmaVariant>("get_gemma_variant"),
                 invoke<CsmModelVariant>("get_csm_model_variant"),
+                invoke<SttModelVariant>("get_stt_model_variant"),
                 invoke<boolean>("check_model_status"),
                 invoke<boolean>("is_server_running"),
                 invoke<boolean>("check_csm_status"),
                 invoke<boolean>("is_csm_running"),
+                invoke<boolean>("check_stt_status"),
+                invoke<boolean>("is_stt_running"),
                 invoke<boolean>("get_csm_quantize"),
             ]);
 
             selectedGemmaVariant = gemmaVariant;
             selectedCsmModel = csmModelVariant;
+            selectedSttModel = sttModelVariant;
             isGemmaDownloaded = gemmaDownloaded;
             isGemmaLoaded = gemmaLoaded;
             isCsmDownloaded = csmDownloaded;
             isCsmLoaded = csmLoaded;
+            isSttDownloaded = sttDownloaded;
+            isSttLoaded = sttLoaded;
             isCsmQuantized = csmQuantized;
         } catch (err) {
             console.error("Failed to sync model status:", err);
@@ -1494,7 +1601,7 @@
         } finally {
             isDownloadingGemma = false;
             isCancellingGemmaDownload = false;
-            if (!isDownloadingCsm) {
+            if (!isDownloadingCsm && !isDownloadingStt) {
                 stopDownloadStatusPolling();
             }
             await syncModelStatus();
@@ -1579,7 +1686,30 @@
             csmDownloadIndeterminate = true;
         } finally {
             isDownloadingCsm = false;
-            if (!isDownloadingGemma) {
+            if (!isDownloadingGemma && !isDownloadingStt) {
+                stopDownloadStatusPolling();
+            }
+            await syncModelStatus();
+        }
+    }
+
+    async function handleDownloadStt() {
+        isDownloadingStt = true;
+        resetDownloadState("stt");
+        ensureDownloadStatusPolling();
+        try {
+            await invoke("download_stt_model");
+            await syncModelStatus();
+        } catch (err) {
+            console.error("Download STT model failed:", err);
+            const message = normalizeDownloadErrorMessage(err);
+            sttDownloadError = message;
+            sttDownloadMessage = message;
+            sttDownloadProgress = null;
+            sttDownloadIndeterminate = true;
+        } finally {
+            isDownloadingStt = false;
+            if (!isDownloadingGemma && !isDownloadingCsm) {
                 stopDownloadStatusPolling();
             }
             await syncModelStatus();
@@ -1611,6 +1741,29 @@
         }
     }
 
+    async function handleClearSttCache() {
+        if (isClearingSttCache || isLoadingStt || isUnloadingStt) {
+            return;
+        }
+
+        isClearingSttCache = true;
+        sttDownloadError = null;
+        resetDownloadState("stt");
+
+        try {
+            await invoke("clear_model_cache", { model: "stt" });
+        } catch (err) {
+            const message = normalizeErrorMessage(err);
+            console.error("Failed to clear STT model cache:", err);
+            sttDownloadError = message;
+            alert(`Failed to clear ${selectedSttModelLabel} cache.\n${message}`);
+            return;
+        } finally {
+            isClearingSttCache = false;
+            await syncModelStatus();
+        }
+    }
+
     async function handleLoadCsm() {
         isLoadingCsm = true;
         csmLoadMessage = "Starting worker...";
@@ -1625,6 +1778,21 @@
             alert(`Failed to load ${selectedCsmModelLabel}.\n${String(err)}`);
         } finally {
             isLoadingCsm = false;
+            await syncModelStatus();
+        }
+    }
+
+    async function handleLoadStt() {
+        isLoadingStt = true;
+        sttLoadMessage = "Starting worker...";
+        try {
+            await invoke("start_stt_server");
+            isSttLoaded = true;
+        } catch (err) {
+            console.error("Load STT model failed:", err);
+            alert(`Failed to load ${selectedSttModelLabel}.\n${String(err)}`);
+        } finally {
+            isLoadingStt = false;
             await syncModelStatus();
         }
     }
@@ -1653,6 +1821,20 @@
             alert(`Failed to unload ${selectedCsmModelLabel}.\n${String(err)}`);
         } finally {
             isUnloadingCsm = false;
+            await syncModelStatus();
+        }
+    }
+
+    async function handleUnloadStt() {
+        isUnloadingStt = true;
+        try {
+            await invoke("stop_stt_server");
+            isSttLoaded = false;
+        } catch (err) {
+            console.error("Unload STT model failed:", err);
+            alert(`Failed to unload ${selectedSttModelLabel}.\n${String(err)}`);
+        } finally {
+            isUnloadingStt = false;
             await syncModelStatus();
         }
     }
@@ -1744,6 +1926,11 @@
                     listen<CsmStatusEvent>("csm-status", ({ payload }) => {
                         if (isLoadingCsm) {
                             csmLoadMessage = payload.message;
+                        }
+                    }),
+                    listen<SttStatusEvent>("stt-status", ({ payload }) => {
+                        if (isLoadingStt) {
+                            sttLoadMessage = payload.message;
                         }
                     }),
                     listen<AssistantResponseEvent>(
@@ -2059,6 +2246,265 @@
                             {isDownloadingGemma
                                 ? "Downloading..."
                                 : gemmaDownloadError
+                                  ? "Retry Download"
+                                  : "Download Model"}
+                        </button>
+                    </div>
+                {/if}
+            </div>
+
+            <div
+                class="download-banner"
+                class:ready={sttUsesGemma
+                    ? isGemmaLoaded
+                    : isSttDownloaded && isSttLoaded}
+            >
+                {#if sttUsesGemma}
+                    <div class="banner-row">
+                        <div class="banner-copy">
+                            <div class="banner-heading-row">
+                                <span class="banner-title">STT</span>
+                                <div class="tooltip-shell variant-select-shell">
+                                    <select
+                                        class="variant-select"
+                                        value={selectedSttModel}
+                                        aria-label="STT model"
+                                        disabled={sttVariantDisabled}
+                                        onchange={handleSttModelChange}
+                                    >
+                                        {#each sttModelOptions as option}
+                                            <option value={option.value}
+                                                >{option.label}</option
+                                            >
+                                        {/each}
+                                    </select>
+                                    <div class="tooltip-bubble variant-tooltip">
+                                        {sttModelTooltip}
+                                    </div>
+                                </div>
+                            </div>
+                            <span class="banner-subtitle"
+                                >{isGemmaLoaded
+                                    ? "Using the loaded Gemma model"
+                                    : "Loads with the Gemma model above"}</span
+                            >
+                        </div>
+                    </div>
+                {:else if isDownloadingStt}
+                    <div class="download-content">
+                        <div class="banner-heading-row">
+                            <span class="banner-title">STT</span>
+                            <div class="tooltip-shell variant-select-shell">
+                                <select
+                                    class="variant-select"
+                                    value={selectedSttModel}
+                                    aria-label="STT model"
+                                    disabled={sttVariantDisabled}
+                                    onchange={handleSttModelChange}
+                                >
+                                    {#each sttModelOptions as option}
+                                        <option value={option.value}
+                                            >{option.label}</option
+                                        >
+                                    {/each}
+                                </select>
+                                <div class="tooltip-bubble variant-tooltip">
+                                    {sttModelTooltip}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="download-row">
+                            <span
+                                class="download-status-text"
+                                class:failed={!!sttDownloadError}
+                                >{selectedSttModelLabel}: {sttDownloadMessage}</span
+                            >
+                            {#if sttDownloadProgress !== null}
+                                <span class="download-percent"
+                                    >{formatDownloadPercent(
+                                        sttDownloadProgress,
+                                    )}</span
+                                >
+                            {/if}
+                        </div>
+                        <div class="progress-track">
+                            <div
+                                class="progress-fill"
+                                class:indeterminate={sttDownloadIndeterminate}
+                                class:failed={!!sttDownloadError}
+                                style:width={sttDownloadIndeterminate
+                                    ? "38%"
+                                    : `${sttDownloadProgress ?? 0}%`}
+                            ></div>
+                        </div>
+                    </div>
+                {:else if isSttDownloaded}
+                    <div class="banner-row">
+                        {#if isSttLoaded}
+                            <div class="banner-status">
+                                <div class="banner-copy">
+                                    <div class="banner-heading-row">
+                                        <span class="banner-title">STT</span>
+                                        <div
+                                            class="tooltip-shell variant-select-shell"
+                                        >
+                                            <select
+                                                class="variant-select"
+                                                value={selectedSttModel}
+                                                aria-label="STT model"
+                                                disabled={sttVariantDisabled}
+                                                onchange={handleSttModelChange}
+                                            >
+                                                {#each sttModelOptions as option}
+                                                    <option value={option.value}
+                                                        >{option.label}</option
+                                                    >
+                                                {/each}
+                                            </select>
+                                            <div
+                                                class="tooltip-bubble variant-tooltip"
+                                            >
+                                                {sttModelTooltip}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <span class="banner-subtitle">Loaded</span>
+                                </div>
+                                <div class="loaded-actions">
+                                    <button
+                                        class="utility-btn"
+                                        disabled={isUnloadingStt}
+                                        onclick={handleUnloadStt}
+                                    >
+                                        {isUnloadingStt
+                                            ? "Unloading..."
+                                            : "Unload"}
+                                    </button>
+                                    <div class="status-icon">
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="18"
+                                            height="18"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="#34c759"
+                                            stroke-width="3"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            ><polyline
+                                                points="20 6 9 17 4 12"
+                                            /></svg
+                                        >
+                                    </div>
+                                </div>
+                            </div>
+                        {:else}
+                            <div class="banner-copy">
+                                <div class="banner-heading-row">
+                                    <span class="banner-title">STT</span>
+                                    <div
+                                        class="tooltip-shell variant-select-shell"
+                                    >
+                                        <select
+                                            class="variant-select"
+                                            value={selectedSttModel}
+                                            aria-label="STT model"
+                                            disabled={sttVariantDisabled}
+                                            onchange={handleSttModelChange}
+                                        >
+                                            {#each sttModelOptions as option}
+                                                <option value={option.value}
+                                                    >{option.label}</option
+                                                >
+                                            {/each}
+                                        </select>
+                                        <div
+                                            class="tooltip-bubble variant-tooltip"
+                                        >
+                                            {sttModelTooltip}
+                                        </div>
+                                    </div>
+                                </div>
+                                {#if isLoadingStt}
+                                    <span class="banner-subtitle"
+                                        >{sttLoadMessage}</span
+                                    >
+                                {:else}
+                                    <div class="banner-subtitle-row">
+                                        <span class="banner-subtitle"
+                                            >Downloaded</span
+                                        >
+                                        <button
+                                            type="button"
+                                            class="utility-btn subtitle-action-btn"
+                                            disabled={isLoadingStt ||
+                                                isUnloadingStt ||
+                                                isClearingSttCache}
+                                            onclick={handleClearSttCache}
+                                        >
+                                            {isClearingSttCache
+                                                ? "Clearing..."
+                                                : "Clear Cache"}
+                                        </button>
+                                    </div>
+                                {/if}
+                            </div>
+                            <button
+                                class="download-btn"
+                                disabled={isLoadingStt ||
+                                    isUnloadingStt ||
+                                    isClearingSttCache}
+                                onclick={handleLoadStt}
+                            >
+                                {isLoadingStt ? "Loading..." : "Load Model"}
+                            </button>
+                        {/if}
+                    </div>
+                {:else}
+                    <div class="banner-row">
+                        <div class="banner-copy">
+                            <div class="banner-heading-row">
+                                <span class="banner-title">STT</span>
+                                <div class="tooltip-shell variant-select-shell">
+                                    <select
+                                        class="variant-select"
+                                        value={selectedSttModel}
+                                        aria-label="STT model"
+                                        disabled={sttVariantDisabled}
+                                        onchange={handleSttModelChange}
+                                    >
+                                        {#each sttModelOptions as option}
+                                            <option value={option.value}
+                                                >{option.label}</option
+                                            >
+                                        {/each}
+                                    </select>
+                                    <div class="tooltip-bubble variant-tooltip">
+                                        {sttModelTooltip}
+                                    </div>
+                                </div>
+                            </div>
+                            {#if sttDownloadError}
+                                <span class="banner-subtitle error"
+                                    >Download failed</span
+                                >
+                                <span class="banner-detail error"
+                                    >{sttDownloadError}</span
+                                >
+                            {:else}
+                                <span class="banner-subtitle"
+                                    >Model not found in cache</span
+                                >
+                            {/if}
+                        </div>
+                        <button
+                            class="download-btn"
+                            disabled={isDownloadingStt}
+                            onclick={handleDownloadStt}
+                        >
+                            {isDownloadingStt
+                                ? "Downloading..."
+                                : sttDownloadError
                                   ? "Retry Download"
                                   : "Download Model"}
                         </button>
