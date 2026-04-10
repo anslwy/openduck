@@ -452,7 +452,9 @@
     const effectiveSttLoaded = $derived(
         sttUsesGemma ? isGemmaLoaded : isSttLoaded,
     );
-    const modelsReady = $derived(isGemmaLoaded && isCsmLoaded && effectiveSttLoaded);
+    const modelsReady = $derived(
+        isGemmaLoaded && isCsmLoaded && effectiveSttLoaded,
+    );
     const gemmaVariantDisabled = $derived(
         isGemmaLoaded ||
             isDownloadingGemma ||
@@ -1062,7 +1064,9 @@
             sttDownloadProgress = payload.progress ?? null;
             sttDownloadIndeterminate = payload.indeterminate;
             if (payload.phase === "error") {
-                sttDownloadError = normalizeDownloadErrorMessage(payload.message);
+                sttDownloadError = normalizeDownloadErrorMessage(
+                    payload.message,
+                );
             } else if (
                 payload.phase === "completed" ||
                 payload.phase === "cancelled"
@@ -1756,7 +1760,9 @@
             const message = normalizeErrorMessage(err);
             console.error("Failed to clear STT model cache:", err);
             sttDownloadError = message;
-            alert(`Failed to clear ${selectedSttModelLabel} cache.\n${message}`);
+            alert(
+                `Failed to clear ${selectedSttModelLabel} cache.\n${message}`,
+            );
             return;
         } finally {
             isClearingSttCache = false;
@@ -3892,10 +3898,6 @@
         align-items: stretch;
         flex-direction: column;
         gap: 14px;
-    }
-
-    .download-banner.voice-config-banner.ready {
-        padding: 14px 24px;
     }
 
     .download-content {
