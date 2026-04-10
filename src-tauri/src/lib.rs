@@ -7,7 +7,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 #[cfg(target_os = "macos")]
-use tauri::{menu::MenuBuilder, tray::TrayIconBuilder};
+use tauri::{
+    menu::{MenuBuilder, MenuItemBuilder},
+    tray::TrayIconBuilder,
+};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
@@ -81,6 +84,14 @@ const TRAY_ICON_ID: &str = "openduck-tray";
 const TRAY_SHOW_MENU_ID: &str = "tray-show-openduck";
 const TRAY_END_CALL_MENU_ID: &str = "tray-end-call";
 const TRAY_TOGGLE_MUTE_MENU_ID: &str = "tray-toggle-mute";
+const TRAY_MEMORY_SUMMARY_MENU_ID: &str = "tray-memory-summary";
+const TRAY_MEMORY_GEMMA_MENU_ID: &str = "tray-memory-gemma";
+const TRAY_MEMORY_STT_MENU_ID: &str = "tray-memory-stt";
+const TRAY_MEMORY_CSM_MENU_ID: &str = "tray-memory-csm";
+const TRAY_UNLOAD_GEMMA_MENU_ID: &str = "tray-unload-gemma";
+const TRAY_UNLOAD_STT_MENU_ID: &str = "tray-unload-stt";
+const TRAY_UNLOAD_CSM_MENU_ID: &str = "tray-unload-csm";
+const TRAY_UNLOAD_ALL_MODELS_MENU_ID: &str = "tray-unload-all-models";
 const TRAY_QUIT_MENU_ID: &str = "tray-quit-openduck";
 const TRAY_END_CALL_EVENT: &str = "tray-end-call";
 const TRAY_TOGGLE_MUTE_EVENT: &str = "tray-toggle-mute";
@@ -388,6 +399,28 @@ struct DownloadManifest {
 struct TrackedDownloadState {
     latest_event: ModelDownloadEvent,
     manifest: Option<DownloadManifest>,
+}
+
+#[derive(Clone, Copy)]
+struct ProcessMemorySnapshot {
+    ppid: u32,
+    rss_kb: u64,
+}
+
+#[derive(Clone, Serialize)]
+struct ModelMemoryUsageEntry {
+    key: String,
+    label: String,
+    detail: Option<String>,
+    bytes: u64,
+    root_pid: u32,
+    process_count: usize,
+}
+
+#[derive(Clone, Default, Serialize)]
+struct ModelMemoryUsageSnapshot {
+    total_bytes: u64,
+    models: Vec<ModelMemoryUsageEntry>,
 }
 
 #[derive(Clone)]
@@ -767,6 +800,11 @@ async fn is_stt_running(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(stt_process_is_ready(state.inner()).await)
 }
 
+#[tauri::command]
+fn get_model_memory_usage(state: State<'_, AppState>) -> Result<ModelMemoryUsageSnapshot, String> {
+    loaded_model_memory_snapshot(state.inner())
+}
+
 fn selected_gemma_variant(state: &AppState) -> GemmaVariant {
     *state.selected_gemma_variant.lock().unwrap()
 }
@@ -789,6 +827,201 @@ fn selected_stt_model(state: &AppState) -> SttModelVariant {
 
 fn loaded_stt_model(state: &AppState) -> Option<SttModelVariant> {
     *state.loaded_stt_model.lock().unwrap()
+}
+
+fn format_memory_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+
+    let bytes = bytes as f64;
+    if bytes >= GIB {
+        format!("{:.2} GB", bytes / GIB)
+    } else if bytes >= MIB {
+        format!("{:.0} MB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.0} KB", bytes / KIB)
+    } else {
+        format!("{} B", bytes as u64)
+    }
+}
+
+fn snapshot_process_memory() -> Result<HashMap<u32, ProcessMemorySnapshot>, String> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid=,rss="])
+        .output()
+        .map_err(|err| format!("Failed to inspect process memory: {err}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "Failed to inspect process memory with ps: {}",
+            stderr.trim()
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut snapshots = HashMap::new();
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let Some(pid) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(ppid) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(rss_kb) = parts.next().and_then(|value| value.parse::<u64>().ok()) else {
+            continue;
+        };
+
+        snapshots.insert(pid, ProcessMemorySnapshot { ppid, rss_kb });
+    }
+
+    Ok(snapshots)
+}
+
+fn aggregate_process_tree_memory(
+    process_snapshots: &HashMap<u32, ProcessMemorySnapshot>,
+    root_pid: u32,
+) -> Option<(u64, usize)> {
+    let mut children_by_parent: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (&pid, snapshot) in process_snapshots {
+        children_by_parent
+            .entry(snapshot.ppid)
+            .or_default()
+            .push(pid);
+    }
+
+    let mut visited = HashSet::new();
+    let mut stack = vec![root_pid];
+    let mut total_rss_kb = 0_u64;
+    let mut process_count = 0_usize;
+
+    while let Some(pid) = stack.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
+
+        let Some(snapshot) = process_snapshots.get(&pid) else {
+            continue;
+        };
+
+        total_rss_kb = total_rss_kb.saturating_add(snapshot.rss_kb);
+        process_count += 1;
+
+        if let Some(children) = children_by_parent.get(&pid) {
+            stack.extend(children.iter().copied());
+        }
+    }
+
+    if process_count == 0 {
+        None
+    } else {
+        Some((total_rss_kb.saturating_mul(1024), process_count))
+    }
+}
+
+fn loaded_gemma_root_pid(state: &AppState) -> Option<u32> {
+    state
+        .server_process
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|child| child.pid())
+}
+
+fn loaded_csm_root_pid(state: &AppState) -> Option<u32> {
+    let process = {
+        let process_guard = state.csm_process.lock().unwrap();
+        process_guard.clone()
+    }?;
+
+    let child = process.child.try_lock().ok()?;
+    child.id()
+}
+
+fn loaded_stt_root_pid(state: &AppState) -> Option<u32> {
+    let process = {
+        let process_guard = state.stt_process.lock().unwrap();
+        process_guard.clone()
+    }?;
+
+    let child = process.child.try_lock().ok()?;
+    child.id()
+}
+
+fn loaded_model_memory_snapshot(state: &AppState) -> Result<ModelMemoryUsageSnapshot, String> {
+    let mut targets: Vec<(String, String, Option<String>, u32)> = Vec::new();
+
+    if let Some(loaded_variant) = loaded_gemma_variant(state) {
+        if let Some(root_pid) = loaded_gemma_root_pid(state) {
+            targets.push((
+                "gemma".to_string(),
+                "Gemma".to_string(),
+                Some(loaded_variant.label().to_string()),
+                root_pid,
+            ));
+        }
+    }
+
+    if let Some(loaded_variant) = loaded_stt_model(state) {
+        if let Some(root_pid) = loaded_stt_root_pid(state) {
+            targets.push((
+                "stt".to_string(),
+                "STT".to_string(),
+                Some(loaded_variant.label().to_string()),
+                root_pid,
+            ));
+        }
+    }
+
+    if let Some(loaded_variant) = loaded_csm_model(state) {
+        if let Some(root_pid) = loaded_csm_root_pid(state) {
+            targets.push((
+                "csm".to_string(),
+                "Speech".to_string(),
+                Some(loaded_variant.label().to_string()),
+                root_pid,
+            ));
+        }
+    }
+
+    if targets.is_empty() {
+        return Ok(ModelMemoryUsageSnapshot::default());
+    }
+
+    let process_snapshots = snapshot_process_memory()?;
+    let mut total_bytes = 0_u64;
+    let mut models = Vec::new();
+
+    for (key, label, detail, root_pid) in targets {
+        let Some((bytes, process_count)) =
+            aggregate_process_tree_memory(&process_snapshots, root_pid)
+        else {
+            continue;
+        };
+
+        total_bytes = total_bytes.saturating_add(bytes);
+        models.push(ModelMemoryUsageEntry {
+            key,
+            label,
+            detail,
+            bytes,
+            root_pid,
+            process_count,
+        });
+    }
+
+    Ok(ModelMemoryUsageSnapshot {
+        total_bytes,
+        models,
+    })
 }
 
 #[tauri::command]
@@ -917,6 +1150,7 @@ async fn start_server(
     }
 
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    refresh_tray_presentation(&app_handle);
 
     Ok(())
 }
@@ -926,7 +1160,9 @@ async fn start_csm_server(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    start_csm_server_inner(&app_handle, state.inner()).await
+    start_csm_server_inner(&app_handle, state.inner()).await?;
+    refresh_tray_presentation(&app_handle);
+    Ok(())
 }
 
 #[tauri::command]
@@ -934,7 +1170,9 @@ async fn start_stt_server(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    start_stt_server_inner(&app_handle, state.inner()).await
+    start_stt_server_inner(&app_handle, state.inner()).await?;
+    refresh_tray_presentation(&app_handle);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1303,8 +1541,13 @@ async fn start_stt_server_inner(
 }
 
 #[tauri::command]
-async fn stop_server(state: State<'_, AppState>) -> Result<(), String> {
-    stop_server_inner(state.inner())
+async fn stop_server(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    stop_server_inner(state.inner())?;
+    refresh_tray_presentation(&app_handle);
+    Ok(())
 }
 
 fn stop_server_inner(state: &AppState) -> Result<(), String> {
@@ -1320,13 +1563,23 @@ fn stop_server_inner(state: &AppState) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn stop_csm_server(state: State<'_, AppState>) -> Result<(), String> {
-    stop_csm_server_inner(state.inner()).await
+async fn stop_csm_server(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    stop_csm_server_inner(state.inner()).await?;
+    refresh_tray_presentation(&app_handle);
+    Ok(())
 }
 
 #[tauri::command]
-async fn stop_stt_server(state: State<'_, AppState>) -> Result<(), String> {
-    stop_stt_server_inner(state.inner()).await
+async fn stop_stt_server(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    stop_stt_server_inner(state.inner()).await?;
+    refresh_tray_presentation(&app_handle);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1339,7 +1592,7 @@ fn start_call_timer(app_handle: AppHandle, state: State<'_, AppState>, muted: bo
         let mut call_muted_guard = state.call_muted.lock().unwrap();
         *call_muted_guard = muted;
     }
-    refresh_tray_menu(&app_handle);
+    refresh_tray_presentation(&app_handle);
     start_call_timer_inner(&app_handle, state.inner());
 }
 
@@ -1353,7 +1606,7 @@ fn stop_call_timer(app_handle: AppHandle, state: State<'_, AppState>) {
         let mut call_muted_guard = state.call_muted.lock().unwrap();
         *call_muted_guard = false;
     }
-    refresh_tray_menu(&app_handle);
+    refresh_tray_presentation(&app_handle);
     stop_call_timer_inner(&app_handle, state.inner());
 }
 
@@ -3320,8 +3573,75 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     let state = app_handle.state::<AppState>();
     let call_in_progress = *state.call_in_progress.lock().unwrap();
     let call_muted = *state.call_muted.lock().unwrap();
+    let gemma_loaded = loaded_gemma_variant(state.inner()).is_some();
+    let stt_loaded = loaded_stt_model(state.inner()).is_some();
+    let csm_loaded = loaded_csm_model(state.inner()).is_some();
+    let any_models_loaded = gemma_loaded || stt_loaded || csm_loaded;
+    let memory_snapshot = match loaded_model_memory_snapshot(state.inner()) {
+        Ok(snapshot) => Some(snapshot),
+        Err(err) => {
+            error!("Failed to build tray memory snapshot: {}", err);
+            None
+        }
+    };
 
     let mut builder = MenuBuilder::new(app_handle).text(TRAY_SHOW_MENU_ID, "Show OpenDuck");
+    builder = builder.separator();
+
+    let summary_text = if let Some(snapshot) = memory_snapshot.as_ref() {
+        if snapshot.total_bytes > 0 {
+            format!("Memory Used: {}", format_memory_bytes(snapshot.total_bytes))
+        } else if any_models_loaded {
+            "Memory Used: unavailable".to_string()
+        } else {
+            "No models loaded".to_string()
+        }
+    } else if any_models_loaded {
+        "Memory Used: unavailable".to_string()
+    } else {
+        "No models loaded".to_string()
+    };
+
+    let summary_item = match MenuItemBuilder::with_id(TRAY_MEMORY_SUMMARY_MENU_ID, summary_text)
+        .enabled(false)
+        .build(app_handle)
+    {
+        Ok(item) => item,
+        Err(err) => {
+            error!("Failed to build tray memory summary item: {}", err);
+            return;
+        }
+    };
+    builder = builder.item(&summary_item);
+
+    if let Some(snapshot) = memory_snapshot.as_ref() {
+        for model in &snapshot.models {
+            let item_id = match model.key.as_str() {
+                "gemma" => TRAY_MEMORY_GEMMA_MENU_ID,
+                "stt" => TRAY_MEMORY_STT_MENU_ID,
+                "csm" => TRAY_MEMORY_CSM_MENU_ID,
+                _ => continue,
+            };
+
+            let mut item_text = model.label.clone();
+            if let Some(detail) = &model.detail {
+                item_text.push_str(&format!(" ({detail})"));
+            }
+            item_text.push_str(&format!(": {}", format_memory_bytes(model.bytes)));
+
+            let memory_item = match MenuItemBuilder::with_id(item_id, item_text)
+                .enabled(false)
+                .build(app_handle)
+            {
+                Ok(item) => item,
+                Err(err) => {
+                    error!("Failed to build tray memory item: {}", err);
+                    return;
+                }
+            };
+            builder = builder.item(&memory_item);
+        }
+    }
 
     if call_in_progress {
         let mute_label = if call_muted { "Unmute" } else { "Mute" };
@@ -3329,6 +3649,31 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
             .separator()
             .text(TRAY_END_CALL_MENU_ID, "End Call")
             .text(TRAY_TOGGLE_MUTE_MENU_ID, mute_label);
+    } else if any_models_loaded {
+        builder = builder.separator();
+
+        if gemma_loaded {
+            builder = builder.text(TRAY_UNLOAD_GEMMA_MENU_ID, "Unload Gemma");
+        }
+        if stt_loaded {
+            builder = builder.text(TRAY_UNLOAD_STT_MENU_ID, "Unload STT");
+        }
+        if csm_loaded {
+            builder = builder.text(TRAY_UNLOAD_CSM_MENU_ID, "Unload Speech");
+        }
+
+        let unload_all_item =
+            match MenuItemBuilder::with_id(TRAY_UNLOAD_ALL_MODELS_MENU_ID, "Unload All Models")
+                .enabled(any_models_loaded)
+                .build(app_handle)
+            {
+                Ok(item) => item,
+                Err(err) => {
+                    error!("Failed to build tray unload-all item: {}", err);
+                    return;
+                }
+            };
+        builder = builder.item(&unload_all_item);
     }
 
     let menu = match builder
@@ -3361,6 +3706,7 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
 
     let menu = MenuBuilder::new(app_handle)
         .text(TRAY_SHOW_MENU_ID, "Show OpenDuck")
+        .separator()
         .text(TRAY_QUIT_MENU_ID, "Quit OpenDuck")
         .build()?;
 
@@ -3386,6 +3732,76 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
                     error!("Failed to emit tray mute toggle event: {}", err);
                 }
             }
+            TRAY_UNLOAD_GEMMA_MENU_ID => {
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app_handle.state::<AppState>();
+                    if *state.call_in_progress.lock().unwrap() {
+                        refresh_tray_presentation(&app_handle);
+                        return;
+                    }
+
+                    if let Err(err) = stop_server_inner(state.inner()) {
+                        error!("Failed to unload Gemma from tray: {}", err);
+                    }
+
+                    refresh_tray_presentation(&app_handle);
+                });
+            }
+            TRAY_UNLOAD_STT_MENU_ID => {
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app_handle.state::<AppState>();
+                    if *state.call_in_progress.lock().unwrap() {
+                        refresh_tray_presentation(&app_handle);
+                        return;
+                    }
+
+                    if let Err(err) = stop_stt_server_inner(state.inner()).await {
+                        error!("Failed to unload STT from tray: {}", err);
+                    }
+
+                    refresh_tray_presentation(&app_handle);
+                });
+            }
+            TRAY_UNLOAD_CSM_MENU_ID => {
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app_handle.state::<AppState>();
+                    if *state.call_in_progress.lock().unwrap() {
+                        refresh_tray_presentation(&app_handle);
+                        return;
+                    }
+
+                    if let Err(err) = stop_csm_server_inner(state.inner()).await {
+                        error!("Failed to unload Speech from tray: {}", err);
+                    }
+
+                    refresh_tray_presentation(&app_handle);
+                });
+            }
+            TRAY_UNLOAD_ALL_MODELS_MENU_ID => {
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app_handle.state::<AppState>();
+                    if *state.call_in_progress.lock().unwrap() {
+                        refresh_tray_presentation(&app_handle);
+                        return;
+                    }
+
+                    if let Err(err) = stop_stt_server_inner(state.inner()).await {
+                        error!("Failed to unload STT from tray: {}", err);
+                    }
+                    if let Err(err) = stop_csm_server_inner(state.inner()).await {
+                        error!("Failed to unload Speech from tray: {}", err);
+                    }
+                    if let Err(err) = stop_server_inner(state.inner()) {
+                        error!("Failed to unload Gemma from tray: {}", err);
+                    }
+
+                    refresh_tray_presentation(&app_handle);
+                });
+            }
             TRAY_QUIT_MENU_ID => {
                 request_app_quit(app_handle);
             }
@@ -3393,7 +3809,7 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
         })
         .build(app_handle)?;
 
-    update_tray_timer_title(app_handle, None);
+    refresh_tray_presentation(app_handle);
 
     Ok(())
 }
@@ -3505,6 +3921,7 @@ async fn csm_stdout_task(
             "CSM worker stopped before completing startup",
         )),
     );
+    refresh_tray_presentation(&app_handle);
 }
 
 async fn csm_stderr_task(app_handle: tauri::AppHandle, stderr: ChildStderr) {
@@ -3653,6 +4070,7 @@ async fn stt_stdout_task(
 
     fail_pending_stt_requests(pending_requests, failure_message.clone()).await;
     send_ready_signal(&ready_tx, Err(failure_message));
+    refresh_tray_presentation(&app_handle);
 }
 
 async fn stt_stderr_task(app_handle: tauri::AppHandle, stderr: ChildStderr) {
@@ -3946,6 +4364,26 @@ fn clear_call_timer_state(state: &AppState) {
 }
 
 #[cfg(target_os = "macos")]
+fn current_tray_title(app_handle: &AppHandle) -> Option<String> {
+    let state = app_handle.state::<AppState>();
+
+    if let Some(started_at) = *state.call_started_at.lock().unwrap() {
+        return Some(format_tray_timer_title(started_at.elapsed()));
+    }
+
+    match loaded_model_memory_snapshot(state.inner()) {
+        Ok(snapshot) if snapshot.total_bytes > 0 => {
+            Some(format!(" {}", format_memory_bytes(snapshot.total_bytes)))
+        }
+        Ok(_) => None,
+        Err(err) => {
+            error!("Failed to build tray title memory summary: {}", err);
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn update_tray_timer_title(app_handle: &AppHandle, title: Option<&str>) {
     let Some(tray) = app_handle.tray_by_id(TRAY_ICON_ID) else {
         return;
@@ -3959,6 +4397,20 @@ fn update_tray_timer_title(app_handle: &AppHandle, title: Option<&str>) {
 #[cfg(not(target_os = "macos"))]
 fn update_tray_timer_title(_app_handle: &AppHandle, _title: Option<&str>) {}
 
+#[cfg(target_os = "macos")]
+fn refresh_tray_title(app_handle: &AppHandle) {
+    let title = current_tray_title(app_handle);
+    update_tray_timer_title(app_handle, title.as_deref());
+}
+
+#[cfg(not(target_os = "macos"))]
+fn refresh_tray_title(_app_handle: &AppHandle) {}
+
+fn refresh_tray_presentation(app_handle: &AppHandle) {
+    refresh_tray_menu(app_handle);
+    refresh_tray_title(app_handle);
+}
+
 fn start_call_timer_inner(app_handle: &AppHandle, state: &AppState) {
     let started_at = Instant::now();
     let generation = state.tray_timer_generation.fetch_add(1, Ordering::Relaxed) + 1;
@@ -3968,8 +4420,7 @@ fn start_call_timer_inner(app_handle: &AppHandle, state: &AppState) {
         *started_at_guard = Some(started_at);
     }
 
-    let initial_title = format_tray_timer_title(Duration::from_secs(0));
-    update_tray_timer_title(app_handle, Some(initial_title.as_str()));
+    refresh_tray_title(app_handle);
 
     let app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
@@ -3981,19 +4432,18 @@ fn start_call_timer_inner(app_handle: &AppHandle, state: &AppState) {
                 break;
             }
 
-            let Some(call_started_at) = *state.call_started_at.lock().unwrap() else {
+            if state.call_started_at.lock().unwrap().is_none() {
                 break;
-            };
+            }
 
-            let title = format_tray_timer_title(call_started_at.elapsed());
-            update_tray_timer_title(&app_handle, Some(title.as_str()));
+            refresh_tray_title(&app_handle);
         }
     });
 }
 
 fn stop_call_timer_inner(app_handle: &AppHandle, state: &AppState) {
     clear_call_timer_state(state);
-    update_tray_timer_title(app_handle, None);
+    refresh_tray_title(app_handle);
 }
 
 fn show_main_window(app_handle: &AppHandle) -> Result<(), String> {
@@ -5219,6 +5669,7 @@ pub fn run() {
             is_server_running,
             is_csm_running,
             is_stt_running,
+            get_model_memory_usage,
             start_server,
             start_csm_server,
             start_stt_server,

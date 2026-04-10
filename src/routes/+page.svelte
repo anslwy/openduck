@@ -64,6 +64,20 @@
         indeterminate: boolean;
     };
 
+    type ModelMemoryUsageEntry = {
+        key: "gemma" | "csm" | "stt";
+        label: string;
+        detail?: string | null;
+        bytes: number;
+        root_pid: number;
+        process_count: number;
+    };
+
+    type ModelMemoryUsageSnapshot = {
+        total_bytes: number;
+        models: ModelMemoryUsageEntry[];
+    };
+
     type GemmaVariant = "e4b" | "e2b";
     type CsmModelVariant = "expressiva_1b" | "kokoro_82m" | "cosyvoice2_0_5b";
     type SttModelVariant = "gemma" | "whisper_large_v3_turbo";
@@ -483,6 +497,7 @@
     let sttDownloadError = $state<string | null>(null);
     let sttLoadMessage = $state("Starting worker...");
     let isCsmQuantized = $state(true);
+    let modelMemorySnapshot = $state<ModelMemoryUsageSnapshot | null>(null);
 
     let captureContext: AudioContext | null = null;
     let mediaStream: MediaStream | null = null;
@@ -495,6 +510,8 @@
     let downloadStatusPollInterval: ReturnType<
         typeof window.setInterval
     > | null = null;
+    let modelMemoryPollInterval: ReturnType<typeof window.setInterval> | null =
+        null;
     let callTimerInterval: ReturnType<typeof window.setInterval> | null = null;
     let playbackIdleTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let eventUnlisteners: UnlistenFn[] = [];
@@ -538,6 +555,12 @@
     const sttUsesGemma = $derived(selectedSttModel === "gemma");
     const effectiveSttLoaded = $derived(
         sttUsesGemma ? isGemmaLoaded : isSttLoaded,
+    );
+    const hasLoadedModelProcess = $derived(
+        isGemmaLoaded || isCsmLoaded || isSttLoaded,
+    );
+    const showModelMemorySummary = $derived(
+        (modelMemorySnapshot?.total_bytes ?? 0) > 0,
     );
     const modelsReady = $derived(
         isGemmaLoaded && isCsmLoaded && effectiveSttLoaded,
@@ -1234,6 +1257,65 @@
         return `${Math.round(progress)}%`;
     }
 
+    function formatMemoryUsage(bytes: number) {
+        const gib = 1024 ** 3;
+        const mib = 1024 ** 2;
+        const kib = 1024;
+
+        if (bytes >= gib) {
+            return `${(bytes / gib).toFixed(2)} GB`;
+        }
+        if (bytes >= mib) {
+            return `${Math.round(bytes / mib)} MB`;
+        }
+        if (bytes >= kib) {
+            return `${Math.round(bytes / kib)} KB`;
+        }
+        return `${bytes} B`;
+    }
+
+    function stopModelMemoryPolling() {
+        if (modelMemoryPollInterval) {
+            clearInterval(modelMemoryPollInterval);
+            modelMemoryPollInterval = null;
+        }
+    }
+
+    async function syncModelMemoryUsage() {
+        if (!hasLoadedModelProcess) {
+            modelMemorySnapshot = null;
+            stopModelMemoryPolling();
+            return;
+        }
+
+        try {
+            const snapshot = await invoke<ModelMemoryUsageSnapshot>(
+                "get_model_memory_usage",
+            );
+
+            if (snapshot.models.length === 0) {
+                modelMemorySnapshot = null;
+                return;
+            }
+
+            modelMemorySnapshot = snapshot;
+        } catch (err) {
+            console.error("Failed to sync model memory usage:", err);
+        }
+    }
+
+    function ensureModelMemoryPolling() {
+        if (modelMemoryPollInterval || !hasLoadedModelProcess) {
+            return;
+        }
+
+        void syncModelMemoryUsage();
+        // Polling every 60 seconds
+        modelMemoryPollInterval = window.setInterval(() => {
+            void syncModelMemoryUsage();
+        }, 60000);
+    }
+
     function applyDownloadEvent(payload: ModelDownloadProgressEvent) {
         if (payload.model === "gemma") {
             gemmaDownloadMessage = payload.message;
@@ -1460,6 +1542,14 @@
             isSttLoaded = sttLoaded;
             isCsmQuantized = csmQuantized;
             persistModelPreferences();
+
+            if (gemmaLoaded || csmLoaded || sttLoaded) {
+                ensureModelMemoryPolling();
+                await syncModelMemoryUsage();
+            } else {
+                modelMemorySnapshot = null;
+                stopModelMemoryPolling();
+            }
         } catch (err) {
             console.error("Failed to sync model status:", err);
         }
@@ -2419,6 +2509,7 @@
             clearInterval(healthCheckInterval);
         }
         stopDownloadStatusPolling();
+        stopModelMemoryPolling();
         if (selectedContactPromptSyncTimeout) {
             clearTimeout(selectedContactPromptSyncTimeout);
         }
@@ -3232,6 +3323,15 @@
     </main>
 
     <div class="control-bar-wrapper">
+        {#if showModelMemorySummary && modelMemorySnapshot}
+            <div class="model-memory-pill" aria-live="polite">
+                <span class="model-memory-pill-label">Memory</span>
+                <span class="model-memory-pill-value"
+                    >{formatMemoryUsage(modelMemorySnapshot.total_bytes)}</span
+                >
+            </div>
+        {/if}
+
         {#if showContactsPopup}
             <button
                 type="button"
@@ -3773,10 +3873,41 @@
         bottom: 40px;
         width: 100%;
         display: flex;
+        flex-direction: column;
         justify-content: center;
         align-items: center;
+        gap: 10px;
         padding: 0 20px;
         z-index: 20;
+    }
+
+    .model-memory-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgba(32, 31, 24, 0.88);
+        border: 1px solid rgba(255, 220, 102, 0.14);
+        box-shadow:
+            0 10px 28px rgba(0, 0, 0, 0.28),
+            0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+        backdrop-filter: blur(16px);
+    }
+
+    .model-memory-pill-label {
+        color: rgba(255, 255, 255, 0.62);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+    }
+
+    .model-memory-pill-value {
+        color: #fff6d7;
+        font-size: 0.96rem;
+        font-weight: 700;
+        letter-spacing: -0.02em;
     }
 
     .control-bar {
@@ -4737,6 +4868,17 @@
     }
 
     @media (max-width: 720px) {
+        .control-bar-wrapper {
+            bottom: 20px;
+            gap: 10px;
+            padding: 0 14px;
+        }
+
+        .model-memory-pill {
+            max-width: calc(100vw - 28px);
+            padding: 8px 12px;
+        }
+
         .contacts-popup {
             width: calc(100vw - 28px);
             height: calc(100vh - 28px);

@@ -37,6 +37,8 @@ COSYVOICE2_S3_TOKENIZER_REPO = "mlx-community/S3TokenizerV2"
 COSYVOICE2_S3_TOKENIZER_CONFIG_FILE = "config.json"
 COSYVOICE2_S3_TOKENIZER_MODEL_FILE = "model.safetensors"
 SAMPLE_RATE = 24_000
+CSM_WARMUP_TEXT = "Okay."
+CSM_WARMUP_MAX_AUDIO_LENGTH_MS = 320
 DEVNULL = open(os.devnull, "w")
 
 # Keep PyTorch MPS fallback enabled for any speech dependency that may import torch.
@@ -350,6 +352,30 @@ def run_csm_server(
         traceback.print_exc(file=sys.stderr)
         return 1
 
+    try:
+        emit_status("Warming up CSM runtime...")
+        warmup_sampler = make_sampler(temp=0.0, top_k=1)
+        warmup_audio = generate(
+            model,
+            text=CSM_WARMUP_TEXT,
+            speaker=CSM_MODEL_SPEAKER,
+            context=[],
+            max_audio_length_ms=CSM_WARMUP_MAX_AUDIO_LENGTH_MS,
+            sampler=warmup_sampler,
+        )
+        # Materialize the generated audio once so MLX allocates the decoder
+        # runtime during model load instead of on the first live reply.
+        normalize_audio_array(warmup_audio)
+    except Exception as exc:
+        emit_status(f"CSM warmup skipped: {exc}")
+        traceback.print_exc(file=sys.stderr)
+    finally:
+        with contextlib.suppress(Exception):
+            del warmup_audio
+        with contextlib.suppress(Exception):
+            del warmup_sampler
+        gc.collect()
+
     emit_status("CSM worker ready.")
     emit({"type": "ready", "sample_rate": SAMPLE_RATE})
     reference_audio = None
@@ -505,7 +531,6 @@ def run_csm_server(
             )
             traceback.print_exc(file=sys.stderr)
         finally:
-            mx.clear_cache()
             gc.collect()
 
     return 0
