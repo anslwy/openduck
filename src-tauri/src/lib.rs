@@ -2836,8 +2836,54 @@ fn drain_next_sse_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
     Some(buffer.drain(..separator + 2).take(separator).collect())
 }
 
+fn debug_attachment_file_name(path_text: &str) -> String {
+    Path::new(path_text)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path_text.to_string())
+}
+
+fn serialize_chat_content_for_debug(content: &ChatContent) -> serde_json::Value {
+    match content {
+        ChatContent::Text { text } => serde_json::json!({
+            "type": "text",
+            "text": text,
+        }),
+        ChatContent::InputImage { image_url } => serde_json::json!({
+            "type": "input_image",
+            "file_name": debug_attachment_file_name(image_url),
+        }),
+        ChatContent::InputAudio { input_audio } => serde_json::json!({
+            "type": "input_audio",
+            "input_audio": {
+                "data": input_audio.data,
+                "format": input_audio.format,
+            },
+        }),
+    }
+}
+
+fn serialize_chat_messages_for_debug(messages: &[ChatMessage]) -> serde_json::Value {
+    serde_json::Value::Array(
+        messages
+            .iter()
+            .map(|message| {
+                serde_json::json!({
+                    "role": message.role,
+                    "content": message
+                        .content
+                        .iter()
+                        .map(serialize_chat_content_for_debug)
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect(),
+    )
+}
+
 fn log_chat_request_debug(conversation_session_id: u64, request: &ChatRequest) {
-    match serde_json::to_string_pretty(&request.messages) {
+    match serde_json::to_string_pretty(&serialize_chat_messages_for_debug(&request.messages)) {
         Ok(messages_json) => debug!(
             "Sending chat request for conversation session {} with {} messages:\n{}",
             conversation_session_id,
@@ -3227,9 +3273,9 @@ mod tests {
         build_latest_user_turn_message, build_llm_system_prompt, parse_gemma_stream_event,
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, resolve_capture_sample_rate,
-        sanitize_for_voice_output, suppress_playback_echo, AudioPayload, ParsedGemmaStreamEvent,
-        AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT,
-        MAX_SPOKEN_WORDS_PER_SEGMENT,
+        sanitize_for_voice_output, serialize_chat_messages_for_debug, suppress_playback_echo,
+        AudioPayload, ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE,
+        IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT,
     };
     use std::path::Path;
 
@@ -3361,6 +3407,27 @@ mod tests {
         );
         assert_eq!(serialized["content"][1]["type"], "text");
         assert_eq!(serialized["content"][1]["text"], "hello there");
+    }
+
+    #[test]
+    fn debug_chat_messages_show_image_file_name() {
+        let messages = vec![build_latest_user_turn_message(
+            "hello there",
+            None,
+            Some(Path::new("/tmp/openduck-screen-test.png")),
+        )];
+        let serialized = serialize_chat_messages_for_debug(&messages);
+
+        assert_eq!(serialized[0]["role"], "user");
+        assert_eq!(serialized[0]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(serialized[0]["content"][0]["type"], "input_image");
+        assert_eq!(
+            serialized[0]["content"][0]["file_name"],
+            "openduck-screen-test.png"
+        );
+        assert!(serialized[0]["content"][0].get("image_url").is_none());
+        assert_eq!(serialized[0]["content"][1]["type"], "text");
+        assert_eq!(serialized[0]["content"][1]["text"], "hello there");
     }
 
     #[test]
