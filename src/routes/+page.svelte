@@ -418,8 +418,14 @@
     let playbackIdleTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let eventUnlisteners: UnlistenFn[] = [];
     let activeTtsRequestId: number | null = null;
+    let pendingCompletionPongRequestId = $state<number | null>(null);
     let pendingTtsSegments = $state(0);
     let queuedPlaybackChunkCount = $state(0);
+    let isQueueingCompletionPong = false;
+    let cachedPongPlaybackSamples = $state<Float32Array | null>(null);
+    let cachedPongPlaybackSampleRate = $state<number | null>(null);
+    let activePongSource = $state<AudioBufferSourceNode | null>(null);
+    let activePongGainNode = $state<GainNode | null>(null);
     let contacts = $state<ContactProfile[]>([createDefaultContact()]);
     let selectedContactId = $state(DEFAULT_CONTACT_ID);
     let showContactsPopup = $state(false);
@@ -547,6 +553,8 @@
         `background-image: url('${selectedContactIconUrl}')`,
     );
     const PLAYBACK_PREBUFFER_SAMPLES = 2048;
+    const PONG_VOLUME = 0.7;
+    const pongUrl = "/pong.mp3";
 
     function setCallStage(
         phase:
@@ -1341,7 +1349,13 @@
                     if (queuedPlaybackChunkCount === 0 && calling) {
                         playbackIdleTimeout = window.setTimeout(() => {
                             if (queuedPlaybackChunkCount === 0 && calling) {
-                                updateStageAfterPlaybackStateChange();
+                                void queueCompletionPongIfReady(
+                                    requestId ?? null,
+                                ).then((didQueuePong) => {
+                                    if (!didQueuePong) {
+                                        updateStageAfterPlaybackStateChange();
+                                    }
+                                });
                             }
                             playbackIdleTimeout = null;
                         }, 450);
@@ -1391,6 +1405,8 @@
             mediaStream.getTracks().forEach((track) => track.stop());
             mediaStream = null;
         }
+
+        stopActivePongPlayback();
     }
 
     function stopPlayback(_closeContext = false) {
@@ -1403,7 +1419,10 @@
         }
         queuedPlaybackChunkCount = 0;
         activeTtsRequestId = null;
+        pendingCompletionPongRequestId = null;
         pendingTtsSegments = 0;
+        isQueueingCompletionPong = false;
+        stopActivePongPlayback();
     }
 
     function updateStageAfterPlaybackStateChange() {
@@ -1515,6 +1534,162 @@
         }
     }
 
+    async function getPongPlaybackSamples() {
+        if (!captureContext) {
+            return null;
+        }
+
+        if (
+            cachedPongPlaybackSamples &&
+            cachedPongPlaybackSampleRate === captureContext.sampleRate
+        ) {
+            return cachedPongPlaybackSamples;
+        }
+
+        const response = await fetch(pongUrl);
+        if (!response.ok) {
+            throw new Error(`Failed to fetch pong.mp3 (${response.status})`);
+        }
+
+        const audioBytes = await response.arrayBuffer();
+        const decodedAudio = await captureContext.decodeAudioData(
+            audioBytes.slice(0),
+        );
+        const playbackSamples = mixAudioBufferToMono(decodedAudio);
+
+        cachedPongPlaybackSamples = playbackSamples;
+        cachedPongPlaybackSampleRate = captureContext.sampleRate;
+        return playbackSamples;
+    }
+
+    function stopActivePongPlayback() {
+        if (activePongSource) {
+            try {
+                activePongSource.stop();
+            } catch {
+                // Ignore stop errors when the source already finished.
+            }
+            activePongSource.disconnect();
+            activePongSource = null;
+        }
+
+        if (activePongGainNode) {
+            activePongGainNode.disconnect();
+            activePongGainNode = null;
+        }
+    }
+
+    async function playCallStartPong() {
+        if (!calling || !captureContext) {
+            return false;
+        }
+
+        try {
+            if (captureContext.state === "suspended") {
+                await captureContext.resume();
+            }
+
+            const pongSamples = await getPongPlaybackSamples();
+            if (!pongSamples || pongSamples.length === 0 || !captureContext) {
+                return false;
+            }
+
+            stopActivePongPlayback();
+
+            const audioBuffer = captureContext.createBuffer(
+                1,
+                pongSamples.length,
+                captureContext.sampleRate,
+            );
+            audioBuffer.copyToChannel(pongSamples, 0);
+
+            const source = captureContext.createBufferSource();
+            const gainNode = captureContext.createGain();
+            gainNode.gain.value = PONG_VOLUME;
+            source.buffer = audioBuffer;
+            source.connect(gainNode);
+            gainNode.connect(captureContext.destination);
+            source.onended = () => {
+                if (activePongSource === source) {
+                    activePongSource = null;
+                }
+                if (activePongGainNode === gainNode) {
+                    activePongGainNode = null;
+                }
+                source.disconnect();
+                gainNode.disconnect();
+            };
+
+            activePongSource = source;
+            activePongGainNode = gainNode;
+            source.start();
+            return true;
+        } catch (err) {
+            console.error("Failed to play call start pong:", err);
+            stopActivePongPlayback();
+            return false;
+        }
+    }
+
+    async function queueCompletionPongIfReady(requestId: number | null) {
+        if (
+            requestId == null ||
+            requestId !== activeTtsRequestId ||
+            requestId !== pendingCompletionPongRequestId ||
+            !calling ||
+            !captureContext ||
+            !playbackProcessor ||
+            pendingTtsSegments > 0 ||
+            queuedPlaybackChunkCount > 0 ||
+            isQueueingCompletionPong
+        ) {
+            return false;
+        }
+
+        isQueueingCompletionPong = true;
+        pendingCompletionPongRequestId = null;
+
+        try {
+            if (playbackIdleTimeout) {
+                clearTimeout(playbackIdleTimeout);
+                playbackIdleTimeout = null;
+            }
+
+            const pongSamples = await getPongPlaybackSamples();
+            if (
+                !pongSamples ||
+                pongSamples.length === 0 ||
+                !calling ||
+                requestId !== activeTtsRequestId ||
+                !playbackProcessor
+            ) {
+                return false;
+            }
+
+            const playbackSamples = new Float32Array(pongSamples.length);
+            for (let index = 0; index < pongSamples.length; index += 1) {
+                playbackSamples[index] = pongSamples[index] * PONG_VOLUME;
+            }
+            queuedPlaybackChunkCount += 1;
+            updateStageAfterPlaybackStateChange();
+            playbackProcessor.port.postMessage(
+                {
+                    type: "push",
+                    requestId,
+                    samples: playbackSamples,
+                    prebufferSamples: 0,
+                },
+                [playbackSamples.buffer],
+            );
+            return true;
+        } catch (err) {
+            console.error("Failed to queue completion pong:", err);
+            return false;
+        } finally {
+            isQueueingCompletionPong = false;
+        }
+    }
+
     async function handleStartCall() {
         if (!modelsReady) {
             return;
@@ -1540,7 +1715,10 @@
         void invoke("start_call_timer", { muted: micMuted }).catch((err) =>
             console.error("Failed to start tray call timer", err),
         );
-        void startAudioCapture();
+        await startAudioCapture();
+        if (calling) {
+            void playCallStartPong();
+        }
         void invoke("ping").catch((err) =>
             console.error("Backend ping failed", err),
         );
@@ -1873,6 +2051,7 @@
                                 stopPlayback();
                                 activeTtsRequestId = payload.request_id;
                             }
+                            pendingCompletionPongRequestId = payload.request_id;
                         },
                     ),
                     listen<CsmAudioQueuedEvent>(
@@ -1904,13 +2083,20 @@
                                     pendingTtsSegments - 1,
                                 );
                                 if (queuedPlaybackChunkCount === 0) {
-                                    updateStageAfterPlaybackStateChange();
+                                    void queueCompletionPongIfReady(
+                                        payload.request_id,
+                                    ).then((didQueuePong) => {
+                                        if (!didQueuePong) {
+                                            updateStageAfterPlaybackStateChange();
+                                        }
+                                    });
                                 }
                                 console.log("Finished streaming CSM response");
                             }
                         },
                     ),
                     listen<CsmAudioStopEvent>("csm-audio-stop", () => {
+                        pendingCompletionPongRequestId = null;
                         stopPlayback();
                         if (calling) {
                             updateStageAfterPlaybackStateChange();
@@ -1923,6 +2109,7 @@
                             payload.request_id == null ||
                             payload.request_id === activeTtsRequestId
                         ) {
+                            pendingCompletionPongRequestId = null;
                             stopPlayback();
                             if (calling) {
                                 updateStageAfterPlaybackStateChange();
