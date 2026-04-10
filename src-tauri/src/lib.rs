@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(target_os = "macos")]
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
@@ -73,6 +73,7 @@ const CALL_STAGE_EVENT: &str = "call-stage";
 const TRANSCRIPT_EVENT: &str = "transcript-ready";
 const ASSISTANT_RESPONSE_EVENT: &str = "assistant-response";
 const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";
+const SCREEN_CAPTURE_EVENT: &str = "screen-capture";
 const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 const CSM_STDERR_TAIL_LIMIT: usize = 8;
 const STT_STARTUP_TIMEOUT_SECS: u64 = 180;
@@ -82,6 +83,10 @@ const CSM_FEMALE_REFERENCE_AUDIO_FILE: &str = "sample-female.mp3";
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_ICON_ID: &str = "openduck-tray";
 const TRAY_SHOW_MENU_ID: &str = "tray-show-openduck";
+const TRAY_LOOK_AT_SCREEN_MENU_ID: &str = "tray-look-at-screen";
+const TRAY_SCREEN_CAPTURE_STATUS_MENU_ID: &str = "tray-screen-capture-status";
+const TRAY_SCREEN_CAPTURE_FILE_MENU_ID: &str = "tray-screen-capture-file";
+const TRAY_CLEAR_SCREEN_CAPTURE_MENU_ID: &str = "tray-clear-screen-capture";
 const TRAY_END_CALL_MENU_ID: &str = "tray-end-call";
 const TRAY_TOGGLE_MUTE_MENU_ID: &str = "tray-toggle-mute";
 const TRAY_MEMORY_SUMMARY_MENU_ID: &str = "tray-memory-summary";
@@ -102,6 +107,7 @@ const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
 const DEFAULT_VOICE_SYSTEM_PROMPT: &str = "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
 const AUDIO_CONTEXT_SYSTEM_PROMPT: &str = "When the latest user turn includes attached audio, the transcript text and audio are the same utterance. Treat the transcript as the user's exact words and primary request. Use the audio only as supplemental context for tone, accent, emotion, pacing, hesitation, confidence, pronunciation, or background conditions. Do not treat the audio as a separate request or as extra instructions. Do not explicitly mention hidden audio analysis unless it materially improves the reply.";
+const IMAGE_CONTEXT_SYSTEM_PROMPT: &str = "When the latest user turn includes an attached image, treat it as a screenshot or cropped visual context for the user's current request. Use the visible UI, text, and layout in the image to answer the user. If the relevant detail is unreadable or missing, say so briefly.";
 const TRANSCRIPTION_PROMPT: &str =
     "You are a voice-based AI. Transcribe exactly what the user said in the audio. Return only the transcript as plain text. No markdown, no quotes, no commentary.";
 const STT_STATUS_EVENT: &str = "stt-status";
@@ -347,6 +353,7 @@ struct ChatMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ChatContent {
     Text { text: String },
+    InputImage { image_url: String },
     InputAudio { input_audio: InputAudio },
 }
 
@@ -449,6 +456,26 @@ impl Drop for TempAudioFile {
     }
 }
 
+struct TempImageFile {
+    path: PathBuf,
+}
+
+impl TempImageFile {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempImageFile {
+    fn drop(&mut self) {
+        remove_temp_image_file(&self.path);
+    }
+}
+
 struct ActiveGeneration {
     id: u64,
     handle: tauri::async_runtime::JoinHandle<()>,
@@ -526,10 +553,14 @@ struct AppState {
     next_generation_id: AtomicU64,
     active_generation: Mutex<Option<ActiveGeneration>>,
     conversation_turns: Mutex<VecDeque<ConversationTurn>>,
+    pending_screen_capture: Mutex<Option<PathBuf>>,
+    screen_capture_in_progress: Mutex<bool>,
+    transient_tray_title: Mutex<Option<String>>,
     voice_system_prompt: Mutex<String>,
     conversation_session_id: AtomicU64,
     call_started_at: Mutex<Option<Instant>>,
     tray_timer_generation: AtomicU64,
+    tray_title_override_generation: AtomicU64,
     call_in_progress: Mutex<bool>,
     call_muted: Mutex<bool>,
     is_quitting: Mutex<bool>,
@@ -664,6 +695,15 @@ struct AssistantResponseEvent {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenCaptureEvent {
+    phase: String,
+    message: String,
+    has_pending_attachment: bool,
+    file_name: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
 struct ModelDownloadEvent {
     model: String,
     phase: String,
@@ -711,6 +751,16 @@ struct ContactExportResult {
 #[tauri::command]
 fn ping() {
     info!("Backend: ping command received");
+}
+
+#[tauri::command]
+async fn capture_screen_selection(app_handle: AppHandle) -> Result<(), String> {
+    capture_screen_selection_inner(&app_handle).await
+}
+
+#[tauri::command]
+fn clear_pending_screen_capture(app_handle: AppHandle) {
+    clear_pending_screen_capture_inner(&app_handle, true);
 }
 
 #[tauri::command]
@@ -764,6 +814,7 @@ async fn reset_call_session(
 ) -> Result<(), String> {
     cancel_active_generation(&app_handle, false).await;
     reset_call_session_state(state.inner());
+    clear_pending_screen_capture_inner(&app_handle, true);
     reset_csm_reference_context(&app_handle).await?;
     Ok(())
 }
@@ -1889,6 +1940,15 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                 }
 
                 emit_call_stage(&app_handle_for_task, "thinking", "Thinking");
+                let latest_screen_capture_path =
+                    take_pending_screen_capture(app_handle_for_task.state::<AppState>().inner());
+                if latest_screen_capture_path.is_some() {
+                    emit_screen_capture_event(
+                        &app_handle_for_task,
+                        "consumed",
+                        "Screen region attached to this turn.",
+                    );
+                }
                 start_response_generation(
                     &app_handle_for_task,
                     server_port,
@@ -1897,6 +1957,7 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                     gemma_model,
                     user_text,
                     audio_path,
+                    latest_screen_capture_path,
                 );
             }
             Err(err) => {
@@ -1927,16 +1988,19 @@ fn start_response_generation(
     gemma_model: String,
     user_text: String,
     latest_audio_path: PathBuf,
+    latest_image_path: Option<PathBuf>,
 ) {
     let app_handle_for_task = app_handle.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let latest_audio_file = TempAudioFile::new(latest_audio_path);
+        let latest_image_file = latest_image_path.map(TempImageFile::new);
         match stream_gemma_response_to_csm(
             &app_handle_for_task,
             server_port,
             &gemma_model,
             &user_text,
             Some(latest_audio_file.path()),
+            latest_image_file.as_ref().map(TempImageFile::path),
         )
         .await
         {
@@ -2162,6 +2226,7 @@ async fn stream_gemma_response_to_csm(
     gemma_model: &str,
     user_text: &str,
     latest_audio_path: Option<&Path>,
+    latest_image_path: Option<&Path>,
 ) -> Result<String, String> {
     start_csm_server_inner(app_handle, app_handle.state::<AppState>().inner()).await?;
 
@@ -2180,6 +2245,7 @@ async fn stream_gemma_response_to_csm(
         (session_id, turns)
     };
     let has_latest_audio = latest_audio_path.is_some();
+    let has_latest_image = latest_image_path.is_some();
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
         content: vec![ChatContent::Text {
@@ -2191,6 +2257,7 @@ async fn stream_gemma_response_to_csm(
                     .unwrap()
                     .clone(),
                 has_latest_audio,
+                has_latest_image,
             ),
         }],
     }];
@@ -2210,7 +2277,11 @@ async fn stream_gemma_response_to_csm(
         });
     }
 
-    messages.push(build_latest_user_turn_message(user_text, latest_audio_path));
+    messages.push(build_latest_user_turn_message(
+        user_text,
+        latest_audio_path,
+        latest_image_path,
+    ));
 
     let request = ChatRequest {
         model: gemma_model.to_string(),
@@ -2664,36 +2735,40 @@ fn build_input_audio_content(audio_path: &Path) -> ChatContent {
     }
 }
 
-fn build_llm_system_prompt(base_prompt: &str, include_audio_context: bool) -> String {
-    if !include_audio_context {
-        return base_prompt.to_string();
+fn build_input_image_content(image_path: &Path) -> ChatContent {
+    ChatContent::InputImage {
+        image_url: image_path.to_string_lossy().into_owned(),
+    }
+}
+
+fn build_llm_system_prompt(
+    base_prompt: &str,
+    include_audio_context: bool,
+    include_image_context: bool,
+) -> String {
+    let mut sections = vec![base_prompt.to_string()];
+    if include_audio_context {
+        sections.push(AUDIO_CONTEXT_SYSTEM_PROMPT.to_string());
+    }
+    if include_image_context {
+        sections.push(IMAGE_CONTEXT_SYSTEM_PROMPT.to_string());
     }
 
-    format!("{base_prompt}\n\n{AUDIO_CONTEXT_SYSTEM_PROMPT}")
+    sections.join("\n\n")
 }
 
 fn build_latest_user_turn_message(
     user_text: &str,
     _latest_audio_path: Option<&Path>,
+    latest_image_path: Option<&Path>,
 ) -> ChatMessage {
-    // Reserve this for gemma4 support
-    // let content = if let Some(audio_path) = latest_audio_path {
-    //     vec![
-    //         ChatContent::Text {
-    //             text: format!(
-    //                 "Transcript of the attached audio. The transcript and audio are the same user turn.\n\nTranscript:\n{user_text}. Please use both to formulate your answer (Audio for tone, accent, emotion and Text for the content)"
-    //             ),
-    //         },
-    //         build_input_audio_content(audio_path),
-    //     ]
-    // } else {
-    //     vec![ChatContent::Text {
-    //         text: user_text.to_string(),
-    //     }]
-    // };
-    let content = vec![ChatContent::Text {
+    let mut content = Vec::new();
+    if let Some(image_path) = latest_image_path {
+        content.push(build_input_image_content(image_path));
+    }
+    content.push(ChatContent::Text {
         text: user_text.to_string(),
-    }];
+    });
 
     ChatMessage {
         role: "user".to_string(),
@@ -2783,6 +2858,18 @@ fn remove_temp_audio_file(audio_path: &Path) {
         Err(err) => warn!(
             "Failed to remove temp audio file {}: {}",
             audio_path.display(),
+            err
+        ),
+    }
+}
+
+fn remove_temp_image_file(image_path: &Path) {
+    match std::fs::remove_file(image_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => warn!(
+            "Failed to remove temp image file {}: {}",
+            image_path.display(),
             err
         ),
     }
@@ -3141,7 +3228,8 @@ mod tests {
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, resolve_capture_sample_rate,
         sanitize_for_voice_output, suppress_playback_echo, AudioPayload, ParsedGemmaStreamEvent,
-        AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE, MAX_SPOKEN_WORDS_PER_SEGMENT,
+        AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT,
+        MAX_SPOKEN_WORDS_PER_SEGMENT,
     };
     use std::path::Path;
 
@@ -3246,7 +3334,7 @@ mod tests {
 
     #[test]
     fn latest_user_turn_message_stays_text_only_without_audio() {
-        let message = build_latest_user_turn_message("hello there", None);
+        let message = build_latest_user_turn_message("hello there", None, None);
         let serialized = serde_json::to_value(&message).unwrap();
 
         assert_eq!(serialized["role"], "user");
@@ -3256,32 +3344,40 @@ mod tests {
     }
 
     #[test]
-    fn latest_user_turn_message_includes_audio_when_available() {
+    fn latest_user_turn_message_includes_image_when_available() {
         let message = build_latest_user_turn_message(
             "hello there",
-            Some(Path::new("/tmp/openduck-audio-test.wav")),
+            None,
+            Some(Path::new("/tmp/openduck-screen-test.png")),
         );
         let serialized = serde_json::to_value(&message).unwrap();
 
         assert_eq!(serialized["role"], "user");
         assert_eq!(serialized["content"].as_array().unwrap().len(), 2);
-        assert_eq!(serialized["content"][0]["type"], "text");
-        assert_eq!(serialized["content"][1]["type"], "input_audio");
+        assert_eq!(serialized["content"][0]["type"], "input_image");
         assert_eq!(
-            serialized["content"][1]["input_audio"]["data"],
-            "/tmp/openduck-audio-test.wav"
+            serialized["content"][0]["image_url"],
+            "/tmp/openduck-screen-test.png"
         );
-        assert_eq!(serialized["content"][1]["input_audio"]["format"], "wav");
+        assert_eq!(serialized["content"][1]["type"], "text");
+        assert_eq!(serialized["content"][1]["text"], "hello there");
     }
 
     #[test]
-    fn llm_system_prompt_appends_audio_context_only_when_needed() {
+    fn llm_system_prompt_appends_context_only_when_needed() {
         let base_prompt = "Base prompt";
 
-        assert_eq!(build_llm_system_prompt(base_prompt, false), "Base prompt");
         assert_eq!(
-            build_llm_system_prompt(base_prompt, true),
+            build_llm_system_prompt(base_prompt, false, false),
+            "Base prompt"
+        );
+        assert_eq!(
+            build_llm_system_prompt(base_prompt, true, false),
             format!("Base prompt\n\n{AUDIO_CONTEXT_SYSTEM_PROMPT}")
+        );
+        assert_eq!(
+            build_llm_system_prompt(base_prompt, false, true),
+            format!("Base prompt\n\n{IMAGE_CONTEXT_SYSTEM_PROMPT}")
         );
     }
 
@@ -3550,6 +3646,7 @@ fn cleanup_before_app_exit(app_handle: &AppHandle) {
     *state.call_in_progress.lock().unwrap() = false;
     *state.call_muted.lock().unwrap() = false;
     clear_call_timer_state(state.inner());
+    clear_pending_screen_capture_inner(app_handle, false);
     stop_server_inner(state.inner()).unwrap_or_else(|err| {
         warn!("Failed to stop MLX server during app exit: {}", err);
     });
@@ -3573,6 +3670,8 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     let state = app_handle.state::<AppState>();
     let call_in_progress = *state.call_in_progress.lock().unwrap();
     let call_muted = *state.call_muted.lock().unwrap();
+    let screen_capture_in_progress = *state.screen_capture_in_progress.lock().unwrap();
+    let has_pending_screen_capture = has_pending_screen_capture(state.inner());
     let gemma_loaded = loaded_gemma_variant(state.inner()).is_some();
     let stt_loaded = loaded_stt_model(state.inner()).is_some();
     let csm_loaded = loaded_csm_model(state.inner()).is_some();
@@ -3586,6 +3685,66 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     };
 
     let mut builder = MenuBuilder::new(app_handle).text(TRAY_SHOW_MENU_ID, "Show OpenDuck");
+    if call_in_progress {
+        let look_at_screen_label = if screen_capture_in_progress {
+            "Selecting Screen..."
+        } else if has_pending_screen_capture {
+            "Replace Screen Region"
+        } else {
+            "Look at Screen"
+        };
+        let look_at_screen_item =
+            match MenuItemBuilder::with_id(TRAY_LOOK_AT_SCREEN_MENU_ID, look_at_screen_label)
+                .enabled(!screen_capture_in_progress)
+                .build(app_handle)
+            {
+                Ok(item) => item,
+                Err(err) => {
+                    error!("Failed to build tray look-at-screen item: {}", err);
+                    return;
+                }
+            };
+        builder = builder.item(&look_at_screen_item);
+
+        if has_pending_screen_capture {
+            let attached_item = match MenuItemBuilder::with_id(
+                TRAY_SCREEN_CAPTURE_STATUS_MENU_ID,
+                "Screen Region Attached",
+            )
+            .enabled(false)
+            .build(app_handle)
+            {
+                Ok(item) => item,
+                Err(err) => {
+                    error!(
+                        "Failed to build tray screen attachment status item: {}",
+                        err
+                    );
+                    return;
+                }
+            };
+            builder = builder.item(&attached_item);
+
+            if let Some(file_name) = pending_screen_capture_file_name(state.inner()) {
+                let file_item = match MenuItemBuilder::with_id(
+                    TRAY_SCREEN_CAPTURE_FILE_MENU_ID,
+                    truncate_tray_label(&file_name, 38),
+                )
+                .enabled(false)
+                .build(app_handle)
+                {
+                    Ok(item) => item,
+                    Err(err) => {
+                        error!("Failed to build tray screen attachment file item: {}", err);
+                        return;
+                    }
+                };
+                builder = builder.item(&file_item);
+            }
+
+            builder = builder.text(TRAY_CLEAR_SCREEN_CAPTURE_MENU_ID, "Clear Screen Region");
+        }
+    }
     builder = builder.separator();
 
     let summary_text = if let Some(snapshot) = memory_snapshot.as_ref() {
@@ -3721,6 +3880,17 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
                 if let Err(err) = show_main_window(app_handle) {
                     error!("Failed to show OpenDuck from tray: {}", err);
                 }
+            }
+            TRAY_LOOK_AT_SCREEN_MENU_ID => {
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = capture_screen_selection_inner(&app_handle).await {
+                        error!("Failed to capture screen from tray: {}", err);
+                    }
+                });
+            }
+            TRAY_CLEAR_SCREEN_CAPTURE_MENU_ID => {
+                clear_pending_screen_capture_inner(app_handle, true);
             }
             TRAY_END_CALL_MENU_ID => {
                 if let Err(err) = app_handle.emit(TRAY_END_CALL_EVENT, ()) {
@@ -4216,6 +4386,22 @@ fn emit_assistant_response(app_handle: &tauri::AppHandle, payload: AssistantResp
     }
 }
 
+fn emit_screen_capture_event(app_handle: &tauri::AppHandle, phase: &str, message: &str) {
+    let state = app_handle.state::<AppState>();
+    let file_name = pending_screen_capture_file_name(state.inner());
+    if let Err(err) = app_handle.emit(
+        SCREEN_CAPTURE_EVENT,
+        ScreenCaptureEvent {
+            phase: phase.to_string(),
+            message: message.to_string(),
+            has_pending_attachment: file_name.is_some(),
+            file_name,
+        },
+    ) {
+        error!("Failed to emit screen capture event: {}", err);
+    }
+}
+
 fn emit_model_download_event(app_handle: &tauri::AppHandle, payload: ModelDownloadEvent) {
     if let Err(err) = app_handle.emit(MODEL_DOWNLOAD_EVENT, payload) {
         error!("Failed to emit model download event: {}", err);
@@ -4315,6 +4501,68 @@ fn append_conversation_turn(state: &AppState, user_text: String, assistant_text:
     }
 }
 
+fn has_pending_screen_capture(state: &AppState) -> bool {
+    state.pending_screen_capture.lock().unwrap().is_some()
+}
+
+fn pending_screen_capture_file_name(state: &AppState) -> Option<String> {
+    state
+        .pending_screen_capture
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+}
+
+fn truncate_tray_label(text: &str, max_chars: usize) -> String {
+    let char_count = text.chars().count();
+    if char_count <= max_chars {
+        return text.to_string();
+    }
+
+    if max_chars <= 3 {
+        return "...".chars().take(max_chars).collect();
+    }
+
+    let prefix_chars = (max_chars - 3) / 2;
+    let suffix_chars = max_chars - 3 - prefix_chars;
+    let prefix: String = text.chars().take(prefix_chars).collect();
+    let suffix: String = text
+        .chars()
+        .rev()
+        .take(suffix_chars)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("{prefix}...{suffix}")
+}
+
+fn replace_pending_screen_capture(state: &AppState, path: PathBuf) {
+    let previous = {
+        let mut pending_screen_capture_guard = state.pending_screen_capture.lock().unwrap();
+        pending_screen_capture_guard.replace(path)
+    };
+    if let Some(previous_path) = previous {
+        remove_temp_image_file(&previous_path);
+    }
+}
+
+fn take_pending_screen_capture(state: &AppState) -> Option<PathBuf> {
+    state.pending_screen_capture.lock().unwrap().take()
+}
+
+fn clear_pending_screen_capture_state(state: &AppState) -> bool {
+    let previous = state.pending_screen_capture.lock().unwrap().take();
+    if let Some(previous_path) = previous {
+        remove_temp_image_file(&previous_path);
+        return true;
+    }
+
+    false
+}
+
 fn current_conversation_session_id(state: &AppState) -> u64 {
     state.conversation_session_id.load(Ordering::Relaxed)
 }
@@ -4359,6 +4607,10 @@ fn format_tray_timer_title(elapsed: Duration) -> String {
 
 fn clear_call_timer_state(state: &AppState) {
     state.tray_timer_generation.fetch_add(1, Ordering::Relaxed);
+    state
+        .tray_title_override_generation
+        .fetch_add(1, Ordering::Relaxed);
+    clear_transient_tray_title(state);
     let mut started_at_guard = state.call_started_at.lock().unwrap();
     *started_at_guard = None;
 }
@@ -4366,6 +4618,10 @@ fn clear_call_timer_state(state: &AppState) {
 #[cfg(target_os = "macos")]
 fn current_tray_title(app_handle: &AppHandle) -> Option<String> {
     let state = app_handle.state::<AppState>();
+
+    if let Some(title) = state.transient_tray_title.lock().unwrap().clone() {
+        return Some(title);
+    }
 
     if let Some(started_at) = *state.call_started_at.lock().unwrap() {
         return Some(format_tray_timer_title(started_at.elapsed()));
@@ -4411,6 +4667,43 @@ fn refresh_tray_presentation(app_handle: &AppHandle) {
     refresh_tray_title(app_handle);
 }
 
+fn clear_transient_tray_title(state: &AppState) {
+    let mut transient_title_guard = state.transient_tray_title.lock().unwrap();
+    *transient_title_guard = None;
+}
+
+#[cfg(target_os = "macos")]
+fn show_temporary_tray_title(app_handle: &AppHandle, title: &str, duration: Duration) {
+    let state = app_handle.state::<AppState>();
+    let generation = state
+        .tray_title_override_generation
+        .fetch_add(1, Ordering::Relaxed)
+        + 1;
+
+    {
+        let mut transient_title_guard = state.transient_tray_title.lock().unwrap();
+        *transient_title_guard = Some(title.to_string());
+    }
+
+    refresh_tray_title(app_handle);
+
+    let app_handle = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(duration).await;
+
+        let state = app_handle.state::<AppState>();
+        if state.tray_title_override_generation.load(Ordering::Relaxed) != generation {
+            return;
+        }
+
+        clear_transient_tray_title(state.inner());
+        refresh_tray_title(&app_handle);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_temporary_tray_title(_app_handle: &AppHandle, _title: &str, _duration: Duration) {}
+
 fn start_call_timer_inner(app_handle: &AppHandle, state: &AppState) {
     let started_at = Instant::now();
     let generation = state.tray_timer_generation.fetch_add(1, Ordering::Relaxed) + 1;
@@ -4455,6 +4748,142 @@ fn show_main_window(app_handle: &AppHandle) -> Result<(), String> {
     window.show().map_err(|err| err.to_string())?;
     window.set_focus().map_err(|err| err.to_string())?;
     Ok(())
+}
+
+fn clear_pending_screen_capture_inner(app_handle: &AppHandle, emit_event: bool) {
+    let state = app_handle.state::<AppState>();
+    let had_pending = clear_pending_screen_capture_state(state.inner());
+    if emit_event {
+        let message = if had_pending {
+            "Screen attachment cleared."
+        } else {
+            "No screen attachment to clear."
+        };
+        emit_screen_capture_event(app_handle, "cleared", message);
+    }
+    refresh_tray_presentation(app_handle);
+}
+
+async fn capture_screen_selection_inner(app_handle: &AppHandle) -> Result<(), String> {
+    let state = app_handle.state::<AppState>();
+    if !*state.call_in_progress.lock().unwrap() {
+        return Err("Look at Screen is only available during an active call.".to_string());
+    }
+    {
+        let mut in_progress_guard = state.screen_capture_in_progress.lock().unwrap();
+        if *in_progress_guard {
+            return Err("A screen capture is already in progress.".to_string());
+        }
+        *in_progress_guard = true;
+    }
+
+    refresh_tray_presentation(app_handle);
+    let capture_prompt = if has_pending_screen_capture(state.inner()) {
+        "Select a screen region to replace the current attachment."
+    } else {
+        "Select a screen region to attach to your next turn."
+    };
+    emit_screen_capture_event(app_handle, "capturing", capture_prompt);
+
+    let capture_result = run_interactive_screen_capture().await;
+
+    {
+        let mut in_progress_guard = state.screen_capture_in_progress.lock().unwrap();
+        *in_progress_guard = false;
+    }
+
+    if !*state.call_in_progress.lock().unwrap() {
+        if let Ok(Some(path)) = &capture_result {
+            remove_temp_image_file(path);
+        }
+        refresh_tray_presentation(app_handle);
+        return Ok(());
+    }
+
+    match capture_result {
+        Ok(Some(path)) => {
+            replace_pending_screen_capture(state.inner(), path);
+            emit_screen_capture_event(
+                app_handle,
+                "ready",
+                "Screen region attached to your next turn.",
+            );
+            show_temporary_tray_title(app_handle, " Shared", Duration::from_secs(3));
+            refresh_tray_presentation(app_handle);
+            Ok(())
+        }
+        Ok(None) => {
+            let message = if has_pending_screen_capture(state.inner()) {
+                "Screen selection cancelled. The previous screen region is still attached."
+            } else {
+                "Screen selection cancelled."
+            };
+            emit_screen_capture_event(app_handle, "cancelled", message);
+            refresh_tray_presentation(app_handle);
+            Ok(())
+        }
+        Err(err) => {
+            let message = if has_pending_screen_capture(state.inner()) {
+                format!(
+                    "Screen capture failed. The previous screen region is still attached. {err}"
+                )
+            } else {
+                format!("Screen capture failed. {err}")
+            };
+            emit_screen_capture_event(app_handle, "error", &message);
+            refresh_tray_presentation(app_handle);
+            Err(err)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn run_interactive_screen_capture() -> Result<Option<PathBuf>, String> {
+    let capture_path = create_temp_screen_capture_path();
+    let (capture_path, output) = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new("/usr/sbin/screencapture")
+            .args(["-i", "-x"])
+            .arg(&capture_path)
+            .output()
+            .map(|output| (capture_path, output))
+            .map_err(|err| format!("Failed to launch screencapture: {err}"))
+    })
+    .await
+    .map_err(|err| format!("Screen capture task failed: {err}"))??;
+
+    if output.status.success() {
+        return match std::fs::metadata(&capture_path) {
+            Ok(metadata) if metadata.len() > 0 => Ok(Some(capture_path)),
+            _ => {
+                remove_temp_image_file(&capture_path);
+                Ok(None)
+            }
+        };
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !capture_path.exists() && (stderr.is_empty() || output.status.code() == Some(1)) {
+        return Ok(None);
+    }
+
+    remove_temp_image_file(&capture_path);
+
+    if stderr.is_empty() {
+        Err(format!(
+            "screencapture exited with status {}.",
+            output.status
+        ))
+    } else {
+        Err(format!(
+            "screencapture exited with status {}: {}",
+            output.status, stderr
+        ))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn run_interactive_screen_capture() -> Result<Option<PathBuf>, String> {
+    Err("Interactive screen capture is only supported on macOS right now.".to_string())
 }
 
 fn reset_csm_startup_state(state: &AppState) {
@@ -4570,8 +4999,8 @@ fn stt_startup_failure_message(state: &AppState, base: &str) -> String {
 }
 
 fn create_temp_wav_path() -> PathBuf {
-    let timestamp_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
 
@@ -4586,6 +5015,21 @@ fn create_temp_wav_path() -> PathBuf {
     let _ = std::fs::create_dir_all(&path);
 
     path.push(format!("openduck-audio-{}.wav", timestamp_ms));
+    path
+}
+
+fn create_temp_screen_capture_path() -> PathBuf {
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+
+    let mut path = std::env::temp_dir();
+    path.push("openduck-screen-captures");
+
+    let _ = std::fs::create_dir_all(&path);
+
+    path.push(format!("openduck-screen-{}.png", timestamp_ms));
     path
 }
 
@@ -5634,10 +6078,14 @@ pub fn run() {
             next_generation_id: AtomicU64::new(1),
             active_generation: Mutex::new(None),
             conversation_turns: Mutex::new(VecDeque::new()),
+            pending_screen_capture: Mutex::new(None),
+            screen_capture_in_progress: Mutex::new(false),
+            transient_tray_title: Mutex::new(None),
             voice_system_prompt: Mutex::new(DEFAULT_VOICE_SYSTEM_PROMPT.to_string()),
             conversation_session_id: AtomicU64::new(1),
             call_started_at: Mutex::new(None),
             tray_timer_generation: AtomicU64::new(0),
+            tray_title_override_generation: AtomicU64::new(0),
             call_in_progress: Mutex::new(false),
             call_muted: Mutex::new(false),
             is_quitting: Mutex::new(false),
@@ -5645,6 +6093,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
+            capture_screen_selection,
+            clear_pending_screen_capture,
             receive_audio_chunk,
             ping,
             set_voice_system_prompt,

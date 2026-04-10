@@ -51,6 +51,19 @@
         is_final: boolean;
     };
 
+    type ScreenCaptureEvent = {
+        phase:
+            | "capturing"
+            | "ready"
+            | "cancelled"
+            | "cleared"
+            | "consumed"
+            | "error";
+        message: string;
+        hasPendingAttachment: boolean;
+        fileName?: string | null;
+    };
+
     type TrayEndCallEvent = Record<string, never>;
     type TrayToggleMuteEvent = Record<string, never>;
 
@@ -541,6 +554,10 @@
         | "speaking"
     >("idle");
     let callStageMessage = $state("");
+    let screenCapturePhase = $state<ScreenCaptureEvent["phase"] | null>(null);
+    let screenCaptureMessage = $state("");
+    let screenCaptureHasPendingAttachment = $state(false);
+    let screenCaptureFileName = $state<string | null>(null);
     let contactsImportInput: HTMLInputElement | null = null;
     let contactIconInput: HTMLInputElement | null = null;
     let selectedContactPromptSyncTimeout: ReturnType<
@@ -561,6 +578,12 @@
     );
     const showModelMemorySummary = $derived(
         (modelMemorySnapshot?.total_bytes ?? 0) > 0,
+    );
+    const showScreenCaptureCard = $derived(
+        calling &&
+            (screenCapturePhase === "capturing" ||
+                screenCapturePhase === "error" ||
+                screenCaptureHasPendingAttachment),
     );
     const modelsReady = $derived(
         isGemmaLoaded && isCsmLoaded && effectiveSttLoaded,
@@ -717,6 +740,19 @@
     const PLAYBACK_PREBUFFER_SAMPLES = 2048;
     const PONG_VOLUME = 0.7;
     const pongUrl = "/pong.mp3";
+    const screenCaptureTitle = $derived(
+        screenCapturePhase === "capturing"
+            ? "Select a Screen Region"
+            : screenCapturePhase === "error" &&
+                !screenCaptureHasPendingAttachment
+              ? "Screen Capture Failed"
+              : screenCapturePhase === "error"
+                ? "Screen Region Unchanged"
+                : "Screen Region Attached",
+    );
+    const screenCaptureActionLabel = $derived(
+        screenCaptureHasPendingAttachment ? "Clear" : "Dismiss",
+    );
 
     function setCallStage(
         phase:
@@ -807,6 +843,44 @@
         nextConversationEntryId = 1;
         activeAssistantResponseId = null;
         activeAssistantConversationEntryId = null;
+    }
+
+    function resetScreenCaptureStatus() {
+        screenCapturePhase = null;
+        screenCaptureMessage = "";
+        screenCaptureHasPendingAttachment = false;
+        screenCaptureFileName = null;
+    }
+
+    function applyScreenCaptureEvent(payload: ScreenCaptureEvent) {
+        const shouldShow =
+            payload.phase === "capturing" ||
+            payload.phase === "error" ||
+            payload.hasPendingAttachment;
+
+        if (!shouldShow) {
+            resetScreenCaptureStatus();
+            return;
+        }
+
+        screenCapturePhase = payload.phase;
+        screenCaptureMessage = payload.message.trim();
+        screenCaptureHasPendingAttachment = payload.hasPendingAttachment;
+        screenCaptureFileName = payload.fileName?.trim() || null;
+    }
+
+    async function handleClearPendingScreenCapture() {
+        if (!screenCaptureHasPendingAttachment) {
+            resetScreenCaptureStatus();
+            return;
+        }
+
+        try {
+            await invoke("clear_pending_screen_capture");
+        } catch (err) {
+            console.error("Failed to clear pending screen capture:", err);
+            alert(`Failed to clear the screen attachment.\n${String(err)}`);
+        }
     }
 
     function persistContactsMetadata() {
@@ -1985,6 +2059,7 @@
         closeContactsPopup();
         closeConversationPopup();
         resetConversationLog();
+        resetScreenCaptureStatus();
         calling = true;
         callStartedAtMs = Date.now();
         syncCallElapsedTime();
@@ -2025,6 +2100,7 @@
         closeContactsPopup();
         closeConversationPopup();
         resetConversationLog();
+        resetScreenCaptureStatus();
         setCallStage("idle", "");
         stopCallTimerTracking();
 
@@ -2487,6 +2563,9 @@
                             applyDownloadEvent(payload);
                         },
                     ),
+                    listen<ScreenCaptureEvent>("screen-capture", ({ payload }) => {
+                        applyScreenCaptureEvent(payload);
+                    }),
                     listen<TrayEndCallEvent>("tray-end-call", () => {
                         if (calling) {
                             void handleEndCall();
@@ -3332,6 +3411,39 @@
             </div>
         {/if}
 
+        {#if showScreenCaptureCard}
+            <div
+                class="screen-capture-card"
+                data-phase={screenCapturePhase ?? "ready"}
+                aria-live="polite"
+            >
+                <div class="screen-capture-copy">
+                    <span class="screen-capture-title"
+                        >{screenCaptureTitle}</span
+                    >
+                    {#if screenCaptureFileName && screenCaptureHasPendingAttachment}
+                        <span class="screen-capture-file"
+                            >{screenCaptureFileName}</span
+                        >
+                    {/if}
+                    {#if screenCaptureMessage}
+                        <span class="screen-capture-detail"
+                            >{screenCaptureMessage}</span
+                        >
+                    {/if}
+                </div>
+                {#if screenCapturePhase !== "capturing"}
+                    <button
+                        type="button"
+                        class="utility-btn subtitle-action-btn"
+                        onclick={handleClearPendingScreenCapture}
+                    >
+                        {screenCaptureActionLabel}
+                    </button>
+                {/if}
+            </div>
+        {/if}
+
         {#if showContactsPopup}
             <button
                 type="button"
@@ -3908,6 +4020,63 @@
         font-size: 0.96rem;
         font-weight: 700;
         letter-spacing: -0.02em;
+    }
+
+    .screen-capture-card {
+        width: min(560px, calc(100vw - 40px));
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 16px;
+        border-radius: 24px;
+        background: rgba(23, 31, 39, 0.9);
+        border: 1px solid rgba(116, 184, 255, 0.2);
+        box-shadow:
+            0 12px 32px rgba(0, 0, 0, 0.28),
+            0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+        backdrop-filter: blur(18px);
+    }
+
+    .screen-capture-card[data-phase="capturing"] {
+        border-color: rgba(255, 211, 107, 0.3);
+        background: rgba(39, 30, 16, 0.92);
+    }
+
+    .screen-capture-card[data-phase="error"] {
+        border-color: rgba(255, 127, 127, 0.28);
+        background: rgba(43, 21, 21, 0.92);
+    }
+
+    .screen-capture-copy {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .screen-capture-title {
+        color: rgba(255, 255, 255, 0.94);
+        font-size: 0.95rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+    }
+
+    .screen-capture-file {
+        color: rgba(187, 223, 255, 0.88);
+        font-size: 0.8rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .screen-capture-detail {
+        color: rgba(255, 255, 255, 0.72);
+        font-size: 0.82rem;
+        line-height: 1.35;
     }
 
     .control-bar {
@@ -4877,6 +5046,12 @@
         .model-memory-pill {
             max-width: calc(100vw - 28px);
             padding: 8px 12px;
+        }
+
+        .screen-capture-card {
+            width: calc(100vw - 28px);
+            padding: 12px 14px;
+            border-radius: 20px;
         }
 
         .contacts-popup {
