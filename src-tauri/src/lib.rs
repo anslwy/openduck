@@ -3263,15 +3263,9 @@ fn split_long_spoken_segment_for_csm(segment: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut start = 0usize;
     while start < words.len() {
-        let limit = (start + MAX_SPOKEN_WORDS_PER_SEGMENT).min(words.len());
-        let mut end = limit;
-
-        if let Some(preferred_end) = find_preferred_spoken_chunk_end(&words, start, limit) {
-            let chunk_word_count = preferred_end.saturating_sub(start);
-            if chunk_word_count >= 4 || preferred_end == words.len() {
-                end = preferred_end;
-            }
-        }
+        let target_end = (start + MAX_SPOKEN_WORDS_PER_SEGMENT).min(words.len());
+        let hard_limit = (start + MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT).min(words.len());
+        let end = choose_spoken_chunk_end(&words, start, target_end, hard_limit);
 
         let is_last = end == words.len();
         chunks.push((words[start..end].join(" "), is_last));
@@ -3281,11 +3275,29 @@ fn split_long_spoken_segment_for_csm(segment: &str) -> Vec<String> {
     normalize_spoken_chunks_for_csm(chunks)
 }
 
+fn choose_spoken_chunk_end(
+    words: &[&str],
+    start: usize,
+    target_end: usize,
+    hard_limit: usize,
+) -> usize {
+    if hard_limit == words.len() {
+        return words.len();
+    }
+
+    if let Some(preferred_end) = find_preferred_spoken_chunk_end(words, start, target_end) {
+        let chunk_word_count = preferred_end.saturating_sub(start);
+        if chunk_word_count >= 4 || preferred_end == words.len() {
+            return preferred_end;
+        }
+    }
+
+    find_extended_spoken_chunk_end(words, target_end, hard_limit).unwrap_or(target_end)
+}
+
 fn find_preferred_spoken_chunk_end(words: &[&str], start: usize, limit: usize) -> Option<usize> {
     for candidate in (start + 1..=limit).rev() {
-        let trailing_word = words[candidate - 1]
-            .trim_end_matches(|ch: char| matches!(ch, '"' | '\'' | ')' | ']' | '}'));
-        let Some(last_char) = trailing_word.chars().last() else {
+        let Some(last_char) = trailing_spoken_word_punctuation(words[candidate - 1]) else {
             continue;
         };
 
@@ -3295,6 +3307,38 @@ fn find_preferred_spoken_chunk_end(words: &[&str], start: usize, limit: usize) -
     }
 
     None
+}
+
+fn find_extended_spoken_chunk_end(words: &[&str], start: usize, limit: usize) -> Option<usize> {
+    find_spoken_chunk_end_with_punctuation(words, start, limit, true)
+        .or_else(|| find_spoken_chunk_end_with_punctuation(words, start, limit, false))
+}
+
+fn find_spoken_chunk_end_with_punctuation(
+    words: &[&str],
+    start: usize,
+    limit: usize,
+    strong_only: bool,
+) -> Option<usize> {
+    for candidate in start + 1..=limit {
+        let Some(last_char) = trailing_spoken_word_punctuation(words[candidate - 1]) else {
+            continue;
+        };
+
+        if matches!(last_char, '.' | '!' | '?')
+            || (!strong_only && matches!(last_char, ',' | ';' | ':'))
+        {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn trailing_spoken_word_punctuation(word: &str) -> Option<char> {
+    word.trim_end_matches(|ch: char| matches!(ch, '"' | '\'' | ')' | ']' | '}'))
+        .chars()
+        .last()
 }
 
 fn normalize_spoken_chunks_for_csm(chunks: Vec<(String, bool)>) -> Vec<String> {
@@ -3357,7 +3401,7 @@ mod tests {
         prepare_spoken_response_segments_for_csm, resolve_capture_sample_rate,
         sanitize_for_voice_output, serialize_chat_messages_for_debug, suppress_playback_echo,
         AudioPayload, ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE,
-        IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT,
+        IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
     use std::path::Path;
 
@@ -3413,9 +3457,26 @@ mod tests {
         let segments = prepare_spoken_response_segments_for_csm(response_text);
 
         assert!(segments.len() > 1);
-        assert!(segments
-            .iter()
-            .all(|segment| { segment.split_whitespace().count() <= MAX_SPOKEN_WORDS_PER_SEGMENT }));
+        assert!(segments.iter().all(|segment| {
+            segment.split_whitespace().count() <= MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT
+        }));
+    }
+
+    #[test]
+    fn completed_spoken_segments_keep_short_finished_question_intact() {
+        let response_text =
+            "Is there a particular line or concept in this code you would like me to focus on? Next bit";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(
+            segments,
+            vec![
+                "Is there a particular line or concept in this code you would like me to focus on?"
+                    .to_string()
+            ]
+        );
+        assert_eq!(&response_text[consumed_len..], "Next bit");
     }
 
     #[test]

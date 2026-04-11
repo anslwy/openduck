@@ -92,6 +92,7 @@ pub(crate) const CONVERSATION_IMAGE_HISTORY_CLEARED_EVENT: &str =
 pub(crate) const MAX_CONVERSATION_TURNS: usize = 24;
 pub(crate) const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 1;
 pub(crate) const MAX_SPOKEN_WORDS_PER_SEGMENT: usize = 16;
+pub(crate) const MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT: usize = 24;
 pub(crate) const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 pub(crate) const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
 pub(crate) const DEFAULT_VOICE_SYSTEM_PROMPT: &str = "You are a friendly voice AI assistant from OpenDuck. You are in a live voice call right now. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Try to ask follow-up questions more often.";
