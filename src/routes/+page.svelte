@@ -121,7 +121,7 @@
     let sttLoadMessage = $state("Starting worker...");
     let isPreparingRuntime = $state(false);
     let runtimeSetupMessage = $state(
-        "Preparing local Python runtime. This can take several minutes on first launch.",
+        "Preparing local Python runtime. [Time Needed: ~2mins]",
     );
     let runtimeSetupError = $state<string | null>(null);
     let isCsmQuantized = $state(true);
