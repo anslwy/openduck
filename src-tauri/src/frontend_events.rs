@@ -104,6 +104,9 @@ pub(crate) struct ConversationContextCommittedEvent {
     pub(crate) assistant_entry_id: u64,
 }
 
+#[derive(Clone, Serialize)]
+pub(crate) struct ConversationImageHistoryClearedEvent {}
+
 pub(crate) fn emit_csm_error(app_handle: &AppHandle, payload: CsmErrorEvent) {
     if let Err(err) = app_handle.emit(CSM_ERROR_EVENT, payload) {
         error!("Failed to emit CSM error event: {}", err);
@@ -205,6 +208,18 @@ pub(crate) fn emit_conversation_context_committed(
     if let Err(err) = app_handle.emit(CONVERSATION_CONTEXT_COMMITTED_EVENT, payload) {
         error!(
             "Failed to emit conversation context committed event: {}",
+            err
+        );
+    }
+}
+
+pub(crate) fn emit_conversation_image_history_cleared(app_handle: &AppHandle) {
+    if let Err(err) = app_handle.emit(
+        CONVERSATION_IMAGE_HISTORY_CLEARED_EVENT,
+        ConversationImageHistoryClearedEvent {},
+    ) {
+        error!(
+            "Failed to emit conversation image history cleared event: {}",
             err
         );
     }

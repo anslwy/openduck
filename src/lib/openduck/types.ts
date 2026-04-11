@@ -80,6 +80,7 @@ export type ConversationContextCommittedEvent = {
     user_entry_id: number;
     assistant_entry_id: number;
 };
+export type ConversationImageHistoryClearedEvent = Record<string, never>;
 
 export type DownloadModelKey = "gemma" | "csm" | "stt";
 

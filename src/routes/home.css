@@ -685,6 +685,13 @@ body {
         gap: 16px;
     }
 
+    .conversation-popup-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+    }
+
     .conversation-popup-copy {
         display: flex;
         flex-direction: column;
@@ -705,6 +712,7 @@ body {
         letter-spacing: -0.01em;
     }
 
+    .conversation-header-btn,
     .conversation-close-btn {
         width: 34px;
         height: 34px;
@@ -720,15 +728,32 @@ body {
         transition:
             background-color 0.2s ease,
             color 0.2s ease,
+            opacity 0.2s ease,
             transform 0.1s ease;
     }
 
-    .conversation-close-btn:hover {
+    .conversation-header-btn {
+        width: auto;
+        padding: 0 12px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+    }
+
+    .conversation-header-btn:hover:not(:disabled),
+    .conversation-close-btn:hover:not(:disabled) {
         background: rgba(255, 255, 255, 0.12);
         color: #ffffff;
     }
 
-    .conversation-close-btn:active {
+    .conversation-header-btn:disabled,
+    .conversation-close-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .conversation-header-btn:active:not(:disabled),
+    .conversation-close-btn:active:not(:disabled) {
         transform: scale(0.95);
     }
 

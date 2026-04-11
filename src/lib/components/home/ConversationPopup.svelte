@@ -5,12 +5,16 @@
     let {
         conversationLogEntries,
         closeConversationPopup,
+        clearConversationLogImages,
+        isClearingConversationLogImages,
         isSavingConversationLogEntryEdit,
         saveConversationLogEntryEdit,
         setConversationLogViewport,
     } = $props<{
         conversationLogEntries: ConversationLogEntry[];
         closeConversationPopup: () => void;
+        clearConversationLogImages: () => Promise<void>;
+        isClearingConversationLogImages: boolean;
         isSavingConversationLogEntryEdit: boolean;
         saveConversationLogEntryEdit: (
             entryId: number,
@@ -24,6 +28,12 @@
     let editingEntryId = $state<number | null>(null);
     let editingText = $state("");
     let editingImageRemoved = $state(false);
+    const popupActionsBusy = $derived(
+        isSavingConversationLogEntryEdit || isClearingConversationLogImages,
+    );
+    const hasClearableConversationImages = $derived(
+        conversationLogEntries.some((entry) => entry.imageUrl !== null),
+    );
 
     $effect(() => {
         setConversationLogViewport(viewport);
@@ -72,6 +82,11 @@
             cancelEditingConversationEntry();
         }
     }
+
+    async function handleClearConversationImages() {
+        cancelEditingConversationEntry();
+        await clearConversationLogImages();
+    }
 </script>
 
 <div
@@ -86,30 +101,42 @@
             <span class="conversation-popup-title">Conversation</span>
             <span class="conversation-popup-subtitle">Live call transcript</span>
         </div>
-        <button
-            type="button"
-            class="conversation-close-btn"
-            onclick={closeConversationPopup}
-            aria-label="Close conversation log"
-        >
-            <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2.2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                ><line x1="18" y1="6" x2="6" y2="18" /><line
-                    x1="6"
-                    y1="6"
-                    x2="18"
-                    y2="18"
-                /></svg
+        <div class="conversation-popup-actions">
+            <button
+                type="button"
+                class="conversation-header-btn"
+                onclick={handleClearConversationImages}
+                disabled={!hasClearableConversationImages || popupActionsBusy}
             >
-        </button>
+                {isClearingConversationLogImages
+                    ? "Clearing..."
+                    : "Clear Image History"}
+            </button>
+            <button
+                type="button"
+                class="conversation-close-btn"
+                onclick={closeConversationPopup}
+                aria-label="Close conversation log"
+            >
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    ><line x1="18" y1="6" x2="6" y2="18" /><line
+                        x1="6"
+                        y1="6"
+                        x2="18"
+                        y2="18"
+                    /></svg
+                >
+            </button>
+        </div>
     </div>
 
     <div class="conversation-log" bind:this={viewport}>
@@ -137,7 +164,7 @@
                                             onclick={() => {
                                                 editingImageRemoved = true;
                                             }}
-                                            disabled={isSavingConversationLogEntryEdit}
+                                            disabled={popupActionsBusy}
                                         >
                                             Remove image
                                         </button>
@@ -149,7 +176,7 @@
                                     bind:value={editingText}
                                     rows="4"
                                     placeholder="Edit this message"
-                                    disabled={isSavingConversationLogEntryEdit}
+                                    disabled={popupActionsBusy}
                                 ></textarea>
                             {:else}
                                 {#if entry.imageUrl}
@@ -177,7 +204,7 @@
                                     type="button"
                                     class="conversation-entry-action-btn secondary"
                                     onclick={cancelEditingConversationEntry}
-                                    disabled={isSavingConversationLogEntryEdit}
+                                    disabled={popupActionsBusy}
                                 >
                                     Cancel
                                 </button>
@@ -185,7 +212,7 @@
                                     type="button"
                                     class="conversation-entry-action-btn primary"
                                     onclick={handleSaveConversationEntryEdit}
-                                    disabled={isSavingConversationLogEntryEdit}
+                                    disabled={popupActionsBusy}
                                 >
                                     {isSavingConversationLogEntryEdit
                                         ? "Saving..."
@@ -203,7 +230,7 @@
                                     onclick={() => {
                                         startEditingConversationEntry(entry);
                                     }}
-                                    disabled={isSavingConversationLogEntryEdit}
+                                    disabled={popupActionsBusy}
                                 >
                                     Edit
                                 </button>

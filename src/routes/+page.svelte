@@ -51,6 +51,7 @@
         ContactExportResult,
         ContactProfile,
         ConversationContextCommittedEvent,
+        ConversationImageHistoryClearedEvent,
         ConversationLogEntry,
         CsmAudioChunkEvent,
         CsmAudioDoneEvent,
@@ -172,6 +173,7 @@
     let activeAssistantResponseId: number | null = null;
     let activeAssistantConversationEntryId: number | null = null;
     let isSavingConversationLogEntryEdit = $state(false);
+    let isClearingConversationLogImages = $state(false);
     let callStagePhase = $state<CallStagePhase>("idle");
     let callStageMessage = $state("");
     let screenCapturePhase = $state<ScreenCaptureEvent["phase"] | null>(null);
@@ -183,6 +185,7 @@
     let selectedContactPromptSyncTimeout: ReturnType<
         typeof window.setTimeout
     > | null = null;
+    let syncedConversationLogHasVisibleImages: boolean | null = null;
 
     const formattedTime = $derived(
         `${Math.floor(time / 60)
@@ -217,6 +220,9 @@
     );
     const showRuntimeSetupBanner = $derived(
         isPreparingRuntime || runtimeSetupError !== null,
+    );
+    const conversationLogHasVisibleImages = $derived(
+        conversationLogEntries.some((entry) => entry.imageUrl !== null),
     );
     const modelsReady = $derived(
         isGemmaLoaded && isCsmLoaded && effectiveSttLoaded,
@@ -765,6 +771,64 @@
             isSavingConversationLogEntryEdit = false;
         }
     }
+
+    async function clearConversationLogImages() {
+        const hasVisibleImages = conversationLogEntries.some(
+            (entry) => entry.imageUrl !== null,
+        );
+        if (!hasVisibleImages) {
+            return;
+        }
+
+        const hasContextImages = conversationLogEntries.some(
+            (entry) => entry.contextEntryId !== null && entry.imageUrl !== null,
+        );
+
+        isClearingConversationLogImages = true;
+
+        try {
+            if (hasContextImages) {
+                await invoke("clear_conversation_context_images");
+            }
+            clearConversationLogImageHistoryEntries();
+        } catch (err) {
+            console.error("Failed to clear conversation images:", err);
+            alert(`Failed to clear conversation images.\n${String(err)}`);
+        } finally {
+            isClearingConversationLogImages = false;
+        }
+    }
+
+    function clearConversationLogImageHistoryEntries() {
+        conversationLogEntries = conversationLogEntries.map((entry) => ({
+            ...entry,
+            imageUrl: null,
+        }));
+    }
+
+    $effect(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        if (
+            syncedConversationLogHasVisibleImages ===
+            conversationLogHasVisibleImages
+        ) {
+            return;
+        }
+
+        syncedConversationLogHasVisibleImages =
+            conversationLogHasVisibleImages;
+        void invoke("sync_conversation_log_has_visible_images", {
+            visible: conversationLogHasVisibleImages,
+        }).catch((err) =>
+            console.error(
+                "Failed to sync visible conversation image history:",
+                err,
+            ),
+        );
+    });
 
     function getCurrentModelSelection(): ModelSelection {
         return {
@@ -2621,6 +2685,12 @@
                             markConversationTurnAsContextBacked(payload);
                         },
                     ),
+                    listen<ConversationImageHistoryClearedEvent>(
+                        "conversation-image-history-cleared",
+                        () => {
+                            clearConversationLogImageHistoryEntries();
+                        },
+                    ),
                     listen<CallStageEvent>("call-stage", ({ payload }) => {
                         if (!calling) {
                             return;
@@ -2950,7 +3020,9 @@
             <ConversationPopup
                 {conversationLogEntries}
                 {closeConversationPopup}
+                {isClearingConversationLogImages}
                 {isSavingConversationLogEntryEdit}
+                {clearConversationLogImages}
                 {saveConversationLogEntryEdit}
                 setConversationLogViewport={(element) => {
                     conversationLogViewport = element;

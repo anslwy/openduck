@@ -69,6 +69,7 @@ pub(crate) const TRAY_LOOK_AT_SCREEN_MENU_ID: &str = "tray-look-at-screen";
 pub(crate) const TRAY_SCREEN_CAPTURE_STATUS_MENU_ID: &str = "tray-screen-capture-status";
 pub(crate) const TRAY_SCREEN_CAPTURE_FILE_MENU_ID: &str = "tray-screen-capture-file";
 pub(crate) const TRAY_CLEAR_SCREEN_CAPTURE_MENU_ID: &str = "tray-clear-screen-capture";
+pub(crate) const TRAY_CLEAR_IMAGE_HISTORY_MENU_ID: &str = "tray-clear-image-history";
 pub(crate) const TRAY_INTERRUPT_TTS_MENU_ID: &str = "tray-interrupt-tts";
 pub(crate) const TRAY_END_CALL_MENU_ID: &str = "tray-end-call";
 pub(crate) const TRAY_TOGGLE_MUTE_MENU_ID: &str = "tray-toggle-mute";
@@ -86,6 +87,8 @@ pub(crate) const TRAY_END_CALL_EVENT: &str = "tray-end-call";
 pub(crate) const TRAY_TOGGLE_MUTE_EVENT: &str = "tray-toggle-mute";
 pub(crate) const TRAY_PONG_PLAYBACK_EVENT: &str = "tray-pong-playback";
 pub(crate) const CONVERSATION_CONTEXT_COMMITTED_EVENT: &str = "conversation-context-committed";
+pub(crate) const CONVERSATION_IMAGE_HISTORY_CLEARED_EVENT: &str =
+    "conversation-image-history-cleared";
 pub(crate) const MAX_CONVERSATION_TURNS: usize = 24;
 pub(crate) const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 1;
 pub(crate) const MAX_SPOKEN_WORDS_PER_SEGMENT: usize = 16;

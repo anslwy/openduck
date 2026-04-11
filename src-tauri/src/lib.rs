@@ -280,6 +280,7 @@ struct AppState {
     tray_pong_playback_enabled: Mutex<bool>,
     tray_pong_playback_hydrated: Mutex<bool>,
     tray_pong_playback_modified_before_hydration: Mutex<bool>,
+    conversation_log_has_visible_images: Mutex<bool>,
     next_conversation_entry_id: AtomicU64,
     is_quitting: Mutex<bool>,
 }
@@ -565,6 +566,82 @@ fn update_conversation_context_entry(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+fn clear_conversation_context_images(state: State<'_, AppState>) -> usize {
+    clear_conversation_context_images_inner(state.inner())
+}
+
+#[tauri::command]
+fn sync_conversation_log_has_visible_images(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    visible: bool,
+) {
+    set_conversation_log_has_visible_images_state(&app_handle, state.inner(), visible);
+}
+
+fn clear_conversation_context_images_inner(state: &AppState) -> usize {
+    let removed_image_paths = {
+        let mut conversation_turns = state.conversation_turns.lock().unwrap();
+        let mut removed_paths = Vec::new();
+
+        for turn in conversation_turns.iter_mut() {
+            if let Some(image_path) = turn.image_path.take() {
+                removed_paths.push(image_path);
+            }
+        }
+
+        removed_paths
+    };
+
+    if removed_image_paths.is_empty() {
+        return 0;
+    }
+
+    let removed_image_path_set = removed_image_paths.iter().cloned().collect::<HashSet<_>>();
+    state
+        .conversation_image_paths
+        .lock()
+        .unwrap()
+        .retain(|candidate| !removed_image_path_set.contains(candidate));
+
+    for image_path in removed_image_paths {
+        remove_temp_image_file(&image_path);
+    }
+
+    removed_image_path_set.len()
+}
+
+fn has_conversation_image_history(state: &AppState) -> bool {
+    state
+        .conversation_turns
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|turn| turn.image_path.is_some())
+}
+
+fn set_conversation_log_has_visible_images_state(
+    app_handle: &AppHandle,
+    state: &AppState,
+    visible: bool,
+) {
+    let changed = {
+        let mut conversation_log_has_visible_images =
+            state.conversation_log_has_visible_images.lock().unwrap();
+        if *conversation_log_has_visible_images == visible {
+            false
+        } else {
+            *conversation_log_has_visible_images = visible;
+            true
+        }
+    };
+
+    if changed {
+        refresh_tray_menu(app_handle);
+    }
 }
 
 #[tauri::command]
@@ -1898,11 +1975,17 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                 let latest_screen_capture_path =
                     take_pending_screen_capture(app_handle_for_task.state::<AppState>().inner());
                 if latest_screen_capture_path.is_some() {
+                    set_conversation_log_has_visible_images_state(
+                        &app_handle_for_task,
+                        app_handle_for_task.state::<AppState>().inner(),
+                        true,
+                    );
                     emit_screen_capture_event(
                         &app_handle_for_task,
                         "consumed",
                         "Screen region attached to this turn.",
                     );
+                    refresh_tray_presentation(&app_handle_for_task);
                 }
                 emit_transcript_event(
                     &app_handle_for_task,
@@ -3736,10 +3819,11 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     let state = app_handle.state::<AppState>();
     let call_in_progress = *state.call_in_progress.lock().unwrap();
     let call_muted = *state.call_muted.lock().unwrap();
-    let tts_playback_active = *state.tts_playback_active.lock().unwrap();
     let tray_pong_playback_enabled = *state.tray_pong_playback_enabled.lock().unwrap();
     let screen_capture_in_progress = *state.screen_capture_in_progress.lock().unwrap();
     let has_pending_screen_capture = has_pending_screen_capture(state.inner());
+    let has_conversation_image_history = has_conversation_image_history(state.inner())
+        || *state.conversation_log_has_visible_images.lock().unwrap();
     let gemma_loaded = loaded_gemma_variant(state.inner()).is_some();
     let stt_loaded = loaded_stt_model(state.inner()).is_some();
     let csm_loaded = loaded_csm_model(state.inner()).is_some();
@@ -3872,11 +3956,21 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
 
     if call_in_progress {
         let mute_label = if call_muted { "Unmute" } else { "Mute" };
+        let clear_image_history_item =
+            match MenuItemBuilder::with_id(TRAY_CLEAR_IMAGE_HISTORY_MENU_ID, "Clear Image History")
+                .enabled(has_conversation_image_history)
+                .build(app_handle)
+            {
+                Ok(item) => item,
+                Err(err) => {
+                    error!("Failed to build tray clear-image-history item: {}", err);
+                    return;
+                }
+            };
         builder = builder.separator();
-        if tts_playback_active {
-            builder = builder.text(TRAY_INTERRUPT_TTS_MENU_ID, "Interrupt");
-        }
         builder = builder
+            .text(TRAY_INTERRUPT_TTS_MENU_ID, "Interrupt")
+            .item(&clear_image_history_item)
             .text(TRAY_END_CALL_MENU_ID, "End Call")
             .text(TRAY_TOGGLE_MUTE_MENU_ID, mute_label);
     } else if any_models_loaded {
@@ -3971,6 +4065,13 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
             }
             TRAY_CLEAR_SCREEN_CAPTURE_MENU_ID => {
                 clear_pending_screen_capture_inner(app_handle, true);
+            }
+            TRAY_CLEAR_IMAGE_HISTORY_MENU_ID => {
+                let state = app_handle.state::<AppState>();
+                clear_conversation_context_images_inner(state.inner());
+                set_conversation_log_has_visible_images_state(app_handle, state.inner(), false);
+                emit_conversation_image_history_cleared(app_handle);
+                refresh_tray_presentation(app_handle);
             }
             TRAY_INTERRUPT_TTS_MENU_ID => {
                 let app_handle = app_handle.clone();
@@ -4480,18 +4581,9 @@ fn clear_active_generation_if_matches(app_handle: &tauri::AppHandle, generation_
 
 fn set_tts_playback_active_state(app_handle: &AppHandle, active: bool) {
     let state = app_handle.state::<AppState>();
-    let changed = {
-        let mut tts_playback_active_guard = state.tts_playback_active.lock().unwrap();
-        if *tts_playback_active_guard == active {
-            false
-        } else {
-            *tts_playback_active_guard = active;
-            true
-        }
-    };
-
-    if changed {
-        refresh_tray_menu(app_handle);
+    let mut tts_playback_active_guard = state.tts_playback_active.lock().unwrap();
+    if *tts_playback_active_guard != active {
+        *tts_playback_active_guard = active;
     }
 }
 
@@ -4683,17 +4775,6 @@ fn reset_call_session_state(state: &AppState) {
         .fetch_add(1, Ordering::Relaxed);
 }
 
-fn format_call_duration(elapsed: Duration) -> String {
-    let total_seconds = elapsed.as_secs();
-    let minutes = total_seconds / 60;
-    let seconds = total_seconds % 60;
-    format!("{minutes:02}:{seconds:02}")
-}
-
-fn format_tray_timer_title(elapsed: Duration) -> String {
-    format!(" {}", format_call_duration(elapsed))
-}
-
 #[cfg(target_os = "macos")]
 fn tray_icon_image(muted: bool) -> tauri::Result<tauri::image::Image<'static>> {
     let bytes = if muted {
@@ -4723,8 +4804,8 @@ fn current_tray_title(app_handle: &AppHandle) -> Option<String> {
         return Some(title);
     }
 
-    if let Some(started_at) = *state.call_started_at.lock().unwrap() {
-        return Some(format_tray_timer_title(started_at.elapsed()));
+    if state.call_started_at.lock().unwrap().is_some() {
+        return None;
     }
 
     match loaded_model_memory_snapshot(state.inner()) {
@@ -6396,6 +6477,7 @@ pub fn run() {
             tray_pong_playback_enabled: Mutex::new(true),
             tray_pong_playback_hydrated: Mutex::new(false),
             tray_pong_playback_modified_before_hydration: Mutex::new(false),
+            conversation_log_has_visible_images: Mutex::new(false),
             next_conversation_entry_id: AtomicU64::new(1),
             is_quitting: Mutex::new(false),
         })
@@ -6416,6 +6498,8 @@ pub fn run() {
             set_call_muted,
             set_tts_playback_active,
             initialize_pong_playback_preference,
+            clear_conversation_context_images,
+            sync_conversation_log_has_visible_images,
             get_gemma_variant,
             set_gemma_variant,
             get_stt_model_variant,
