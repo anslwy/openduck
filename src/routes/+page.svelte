@@ -6,6 +6,7 @@
     import { invoke } from "@tauri-apps/api/core";
     import { listen, type UnlistenFn } from "@tauri-apps/api/event";
     import { save } from "@tauri-apps/plugin-dialog";
+    import AboutModal from "$lib/components/home/AboutModal.svelte";
     import ContactsModal from "$lib/components/home/ContactsModal.svelte";
     import ConversationPopup from "$lib/components/home/ConversationPopup.svelte";
     import GemmaBanner from "$lib/components/home/GemmaBanner.svelte";
@@ -46,6 +47,7 @@
     } from "$lib/openduck/model-preferences";
     import type {
         AssistantResponseEvent,
+        BuildInfo,
         CallStageEvent,
         CallStagePhase,
         ContactExportResult,
@@ -69,6 +71,7 @@
         RuntimeSetupStatusEvent,
         ScreenCaptureEvent,
         SelectOption,
+        ShowAboutModalEvent,
         StoredModelPreferences,
         SttModelVariant,
         SttStatusEvent,
@@ -167,7 +170,10 @@
     let selectedContactId = $state(DEFAULT_CONTACT_ID);
     let showContactsPopup = $state(false);
     let showConversationPopup = $state(false);
+    let showAboutPopup = $state(false);
     let conversationLogEntries = $state<ConversationLogEntry[]>([]);
+    let buildInfo = $state<BuildInfo | null>(null);
+    let buildInfoError = $state<string | null>(null);
     let nextConversationEntryId = 1;
     let pendingConversationUserLogEntryId: number | null = null;
     let activeAssistantResponseId: number | null = null;
@@ -928,10 +934,35 @@
         showConversationPopup = false;
     }
 
+    function closeAboutPopup() {
+        showAboutPopup = false;
+    }
+
+    async function loadBuildInfo() {
+        try {
+            buildInfo = await invoke<BuildInfo>("get_build_info");
+            buildInfoError = null;
+        } catch (err) {
+            console.error("Failed to load build info:", err);
+            buildInfoError = normalizeErrorMessage(err);
+        }
+    }
+
+    function openAboutPopup() {
+        showAboutPopup = true;
+        closeContactsPopup();
+        closeConversationPopup();
+
+        if (!buildInfo) {
+            void loadBuildInfo();
+        }
+    }
+
     function toggleContactsPopup() {
         showContactsPopup = !showContactsPopup;
         if (showContactsPopup) {
             closeConversationPopup();
+            closeAboutPopup();
         }
     }
 
@@ -939,8 +970,18 @@
         showConversationPopup = !showConversationPopup;
         if (showConversationPopup) {
             closeContactsPopup();
+            closeAboutPopup();
             scrollConversationLogToBottom();
         }
+    }
+
+    function toggleAboutPopup() {
+        if (showAboutPopup) {
+            closeAboutPopup();
+            return;
+        }
+
+        openAboutPopup();
     }
 
     function selectContact(contactId: string) {
@@ -1196,6 +1237,11 @@
         }
 
         if (event.key !== "Escape") {
+            return;
+        }
+
+        if (showAboutPopup) {
+            closeAboutPopup();
             return;
         }
 
@@ -2749,11 +2795,15 @@
                             applyPongPlaybackPreference(payload.enabled);
                         },
                     ),
+                    listen<ShowAboutModalEvent>("show-about-modal", () => {
+                        openAboutPopup();
+                    }),
                 ]);
             } catch (err) {
                 console.error("Failed to register Tauri event listeners:", err);
             }
 
+            await loadBuildInfo();
             const restoredContacts = await loadContactsFromStorage();
             contacts = restoredContacts.contacts;
             selectedContactId = restoredContacts.selectedContactId;
@@ -2800,7 +2850,7 @@
     <div class="background" style={selectedContactImageStyle}></div>
 
     {#if !calling}
-        <div class="model-tags" class:dimmed={showContactsPopup}>
+        <div class="model-tags" class:dimmed={showContactsPopup || showAboutPopup}>
             {#if showRuntimeSetupBanner}
                 <div
                     class="runtime-setup-banner"
@@ -3030,6 +3080,10 @@
             />
         {/if}
 
+        {#if showAboutPopup}
+            <AboutModal {buildInfo} {buildInfoError} {closeAboutPopup} />
+        {/if}
+
         <div class="control-bar">
             <div class="info">
                 <div class="username">{selectedContactName}</div>
@@ -3061,6 +3115,32 @@
                                 d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"
                             /><circle cx="12" cy="7" r="4" /></svg
                         >
+                    </button>
+                    <button
+                        type="button"
+                        class="icon-btn"
+                        class:active={showAboutPopup}
+                        onclick={toggleAboutPopup}
+                        aria-label="Show app info"
+                        aria-controls="about-popup"
+                        aria-expanded={showAboutPopup}
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="22"
+                            height="22"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            aria-hidden="true"
+                        >
+                            <circle cx="12" cy="12" r="9" />
+                            <path d="M12 10v6" />
+                            <path d="M12 7h.01" />
+                        </svg>
                     </button>
                 {/if}
                 {#if calling}

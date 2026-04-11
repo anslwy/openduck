@@ -75,6 +75,7 @@ export type TrayToggleMuteEvent = Record<string, never>;
 export type TrayPongPlaybackEvent = {
     enabled: boolean;
 };
+export type ShowAboutModalEvent = Record<string, never>;
 export type ConversationContextCommittedEvent = {
     request_id: number;
     user_entry_id: number;
@@ -147,6 +148,19 @@ export type StoredContactsPayload = {
 
 export type ContactExportResult = {
     savedPath: string;
+};
+
+export type BuildInfo = {
+    app_name: string;
+    version: string;
+    version_label?: string | null;
+    build_channel?: string | null;
+    build_number?: string | null;
+    git_sha?: string | null;
+    git_short_sha?: string | null;
+    build_id?: string | null;
+    is_dirty: boolean;
+    copy_text: string;
 };
 
 export type StoredModelPreferences = {

@@ -107,6 +107,9 @@ pub(crate) struct ConversationContextCommittedEvent {
 #[derive(Clone, Serialize)]
 pub(crate) struct ConversationImageHistoryClearedEvent {}
 
+#[derive(Clone, Serialize)]
+pub(crate) struct ShowAboutModalEvent {}
+
 pub(crate) fn emit_csm_error(app_handle: &AppHandle, payload: CsmErrorEvent) {
     if let Err(err) = app_handle.emit(CSM_ERROR_EVENT, payload) {
         error!("Failed to emit CSM error event: {}", err);
@@ -222,5 +225,11 @@ pub(crate) fn emit_conversation_image_history_cleared(app_handle: &AppHandle) {
             "Failed to emit conversation image history cleared event: {}",
             err
         );
+    }
+}
+
+pub(crate) fn emit_show_about_modal(app_handle: &AppHandle) {
+    if let Err(err) = app_handle.emit(SHOW_ABOUT_MODAL_EVENT, ShowAboutModalEvent {}) {
+        error!("Failed to emit show-about-modal event: {}", err);
     }
 }

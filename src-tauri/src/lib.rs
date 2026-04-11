@@ -16,9 +16,10 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::menu::Menu;
 #[cfg(target_os = "macos")]
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder},
+    menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
     tray::TrayIconBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -389,9 +390,114 @@ struct ContactExportResult {
     saved_path: String,
 }
 
+#[derive(Clone, Serialize)]
+struct BuildInfo {
+    app_name: String,
+    version: String,
+    version_label: Option<String>,
+    build_channel: Option<String>,
+    build_number: Option<String>,
+    git_sha: Option<String>,
+    git_short_sha: Option<String>,
+    build_id: Option<String>,
+    is_dirty: bool,
+    copy_text: String,
+}
+
+const BUILD_VERSION: &str = env!("OPEN_DUCK_BUILD_VERSION");
+const BUILD_LABEL: &str = env!("OPEN_DUCK_BUILD_LABEL");
+const BUILD_CHANNEL: &str = env!("OPEN_DUCK_BUILD_CHANNEL");
+const BUILD_NUMBER: &str = env!("OPEN_DUCK_BUILD_NUMBER");
+const BUILD_ID: &str = env!("OPEN_DUCK_BUILD_ID");
+const BUILD_GIT_SHA: &str = env!("OPEN_DUCK_GIT_SHA");
+const BUILD_GIT_DIRTY: &str = env!("OPEN_DUCK_GIT_DIRTY");
+
+fn compiled_build_value(raw_value: &'static str) -> Option<String> {
+    let trimmed = raw_value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn compiled_build_dirty() -> bool {
+    matches!(
+        BUILD_GIT_DIRTY.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn build_info_copy_text(build_info: &BuildInfo) -> String {
+    let mut lines = vec![build_info.app_name.clone()];
+
+    if let Some(label) = &build_info.version_label {
+        lines.push(format!("Version: {} ({label})", build_info.version));
+    } else {
+        lines.push(format!("Version: {}", build_info.version));
+    }
+
+    if let Some(channel) = &build_info.build_channel {
+        lines.push(format!("Channel: {channel}"));
+    }
+
+    if let Some(build_number) = &build_info.build_number {
+        lines.push(format!("Build Number: {build_number}"));
+    }
+
+    if let Some(git_sha) = &build_info.git_sha {
+        lines.push(format!("Commit: {git_sha}"));
+    }
+
+    if let Some(build_id) = &build_info.build_id {
+        lines.push(format!("Build ID: {build_id}"));
+    }
+
+    if build_info.is_dirty {
+        lines.push("Working Tree: Dirty".to_string());
+    }
+
+    lines.join("\n")
+}
+
+fn current_build_info() -> BuildInfo {
+    let app_name = "OpenDuck".to_string();
+    let version = compiled_build_value(BUILD_VERSION).unwrap_or_else(|| "0.0.0".to_string());
+    let version_label = compiled_build_value(BUILD_LABEL);
+    let build_channel = compiled_build_value(BUILD_CHANNEL);
+    let build_number = compiled_build_value(BUILD_NUMBER);
+    let git_sha = compiled_build_value(BUILD_GIT_SHA);
+    let build_id = compiled_build_value(BUILD_ID);
+    let is_dirty = compiled_build_dirty();
+    let git_short_sha = git_sha
+        .as_ref()
+        .map(|sha| sha.chars().take(12).collect::<String>())
+        .filter(|sha| !sha.is_empty());
+
+    let mut build_info = BuildInfo {
+        app_name,
+        version,
+        version_label,
+        build_channel,
+        build_number,
+        git_sha,
+        git_short_sha,
+        build_id,
+        is_dirty,
+        copy_text: String::new(),
+    };
+    build_info.copy_text = build_info_copy_text(&build_info);
+    build_info
+}
+
 #[tauri::command]
 fn ping() {
     info!("Backend: ping command received");
+}
+
+#[tauri::command]
+fn get_build_info() -> BuildInfo {
+    current_build_info()
 }
 
 #[tauri::command]
@@ -4280,6 +4386,61 @@ fn create_tray(_app_handle: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn build_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let app_menu = SubmenuBuilder::new(app_handle, "OpenDuck")
+        .text(APP_MENU_ABOUT_MENU_ID, "About OpenDuck")
+        .separator()
+        .item(&PredefinedMenuItem::services(app_handle, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::hide(app_handle, None)?)
+        .item(&PredefinedMenuItem::hide_others(app_handle, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::quit(app_handle, None)?)
+        .build()?;
+
+    let file_menu = SubmenuBuilder::new(app_handle, "File")
+        .item(&PredefinedMenuItem::close_window(app_handle, None)?)
+        .build()?;
+
+    let edit_menu = SubmenuBuilder::new(app_handle, "Edit")
+        .item(&PredefinedMenuItem::undo(app_handle, None)?)
+        .item(&PredefinedMenuItem::redo(app_handle, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::cut(app_handle, None)?)
+        .item(&PredefinedMenuItem::copy(app_handle, None)?)
+        .item(&PredefinedMenuItem::paste(app_handle, None)?)
+        .item(&PredefinedMenuItem::select_all(app_handle, None)?)
+        .build()?;
+
+    let window_menu = SubmenuBuilder::new(app_handle, "Window")
+        .item(&PredefinedMenuItem::minimize(app_handle, None)?)
+        .item(&PredefinedMenuItem::maximize(app_handle, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::close_window(app_handle, None)?)
+        .build()?;
+
+    Menu::with_items(app_handle, &[&app_menu, &file_menu, &edit_menu, &window_menu])
+}
+
+#[cfg(not(target_os = "macos"))]
+fn build_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    Menu::default(app_handle)
+}
+
+fn handle_app_menu_event(app_handle: &AppHandle, event_id: &str) {
+    if event_id != APP_MENU_ABOUT_MENU_ID {
+        return;
+    }
+
+    if let Err(err) = show_main_window(app_handle) {
+        error!("Failed to show OpenDuck before opening About: {}", err);
+        return;
+    }
+
+    emit_show_about_modal(app_handle);
+}
+
 async fn csm_stdout_task(
     app_handle: tauri::AppHandle,
     stdout: ChildStdout,
@@ -6502,6 +6663,10 @@ pub fn run() {
         .unwrap_or(true);
 
     tauri::Builder::default()
+        .menu(build_app_menu)
+        .on_menu_event(|app_handle, event| {
+            handle_app_menu_event(app_handle, event.id().as_ref());
+        })
         .setup(|app| {
             reap_stale_model_processes(app.handle());
             create_tray(app.handle())?;
@@ -6571,6 +6736,7 @@ pub fn run() {
             clear_pending_screen_capture,
             receive_audio_chunk,
             ping,
+            get_build_info,
             set_voice_system_prompt,
             export_contact_profile,
             reset_call_session,
