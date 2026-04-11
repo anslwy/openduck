@@ -24,7 +24,7 @@ If you want to use Whisper, Kokoro, or CosyVoice2 in a fresh checkout, run `scri
 
 ## Conversation Flow
 
-1. The user starts a call in `src/routes/+page.svelte`. The frontend resets the session, starts microphone capture, and sets the UI to `Listening`.
+1. The user starts a call in `src/routes/+page.svelte`. The page coordinates the call state, starts microphone capture, and sets the UI to `Listening`, while the extracted home components render the model cards and popups.
 2. Audio chunks are sent to `receive_audio_chunk` in `src-tauri/src/lib.rs`. The backend uses simple voice activity detection to buffer speech and treat a long enough silence as the end of a turn.
 3. The buffered audio is written to a temporary WAV file and sent to the selected STT backend. Empty or filler-only transcripts are ignored.
 4. A valid transcript interrupts any active reply, so the user can barge in while the assistant is speaking.
@@ -69,8 +69,21 @@ flowchart TD
 
 ## Key Files
 
-- `src/routes/+page.svelte`: call UI, microphone capture, Tauri event listeners, playback queue, and call-stage state.
-- `src-tauri/src/lib.rs`: voice activity detection, transcription, reply generation, conversation memory, and speech worker orchestration.
+- `src/routes/+page.svelte`: top-level page coordinator for call state, audio capture, Tauri event listeners, playback queue, and model actions.
+- `src/lib/components/home/*.svelte`: extracted UI sections for the model banners, contacts modal, and conversation popup.
+- `src/lib/openduck/*.ts`: shared frontend types, config, contacts storage helpers, model preference helpers, and formatting utilities.
+- `src/routes/home.css`: shared styles used by the page and extracted home components.
+- `src-tauri/src/lib.rs`: backend runtime coordinator for commands, call flow, transcription, reply generation, conversation memory, and worker orchestration.
+- `src-tauri/src/constants.rs`: shared backend constants for models, tray ids, event names, and runtime defaults.
+- `src-tauri/src/model_variants.rs`: backend enums and lookup helpers for Gemma, STT, speech model, and voice selection.
+- `src-tauri/src/frontend_events.rs`: serialized frontend event payloads plus emit helpers used by the Tauri backend.
 - `src-tauri/resources/csm_stream.py`: shared speech worker entrypoint for CSM Expressiva 1B, Kokoro-82M, and CosyVoice2-0.5B.
 - `src-tauri/resources/stt_stream.py`: dedicated Whisper STT worker entrypoint for `mlx-community/whisper-large-v3-turbo-asr-fp16`.
 - `scripts/setup_python_env.sh`: bootstraps the Gemma environment plus separate CSM, Kokoro, CosyVoice, and Whisper STT environments.
+
+## Project Structure
+
+The app is now split so the entry files stay focused on orchestration:
+
+- Frontend: `src/routes/+page.svelte` owns the page-level state machine, while `src/lib/components/home/` contains the repeated UI sections and `src/lib/openduck/` contains shared browser-side helpers.
+- Backend: `src-tauri/src/lib.rs` remains the main Tauri entry/coordinator, while reusable constants, model-selection enums, and frontend event payloads/helpers live in dedicated Rust modules.

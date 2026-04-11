@@ -1,0 +1,56 @@
+// Shared static configuration for contacts, model defaults, and selectable presets on the home page.
+import type {
+    CsmModelVariant,
+    GemmaVariant,
+    ModelPreset,
+    ModelSelection,
+    SttModelVariant,
+} from "./types";
+
+export const DEFAULT_VOICE_SYSTEM_PROMPT =
+    "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
+export const CONTACTS_STORAGE_KEY = "openduck.contacts.v1";
+export const CONTACT_ICONS_DB_NAME = "openduck.contacts";
+export const CONTACT_ICONS_STORE_NAME = "contact-icons";
+export const DEFAULT_CONTACT_ID = "contact-openduck";
+export const MODEL_PREFERENCES_STORAGE_KEY = "openduck.model-preferences.v1";
+export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
+export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
+export const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
+
+export const MODEL_PRESETS: Record<
+    Exclude<ModelPreset, "custom">,
+    {
+        label: string;
+        description: string;
+        selection: ModelSelection;
+    }
+> = {
+    lite: {
+        label: "Lite (~4GB)",
+        description: "Gemma 2B + STT Gemma + Kokoro",
+        selection: {
+            gemmaVariant: "e2b",
+            csmModel: "kokoro_82m",
+            sttModel: "gemma",
+        },
+    },
+    normal: {
+        label: "Normal (~10GB)",
+        description: "Gemma 4B + Whisper + Kokoro",
+        selection: {
+            gemmaVariant: "e4b",
+            csmModel: "kokoro_82m",
+            sttModel: "whisper_large_v3_turbo",
+        },
+    },
+    realistic: {
+        label: "Realistic (~12GB)",
+        description: "Gemma 4B + Whisper + CSM-1B",
+        selection: {
+            gemmaVariant: "e4b",
+            csmModel: "expressiva_1b",
+            sttModel: "whisper_large_v3_turbo",
+        },
+    },
+};
