@@ -1,8 +1,11 @@
 # OpenDuck
 
-OpenDuck is a local voice-call prototype built with a Svelte frontend and a Tauri/Rust backend.
+OpenDuck is a local voice-call prototype built with a Svelte frontend and a Tauri/Rust backend for Apple Silicon.
+
 The frontend captures microphone audio and plays streamed speech output.
 The backend uses Gemma for reply generation, a selectable STT backend for transcription, and a selectable speech backend for text-to-speech.
+
+<img width="689" height="745" alt="image" src="https://github.com/user-attachments/assets/dcf3b70b-5221-4139-8c98-0bd38557f17b" />
 
 ## STT Models
 
