@@ -52,7 +52,7 @@ VERSION=1.2.3 VERSION_LABEL="Beta" ./scripts/release.sh openduck-beta-1.2.3
 You can also attach channel/build metadata that gets folded into the custom About dialog and build id:
 
 ```bash
-VERSION=1.2.3 VERSION_LABEL="Beta" BUILD_CHANNEL=beta BUILD_NUMBER=221 ./scripts/release.sh openduck-beta-221
+VERSION=0.0.2 VERSION_LABEL="Beta" ./scripts/release.sh openduck-beta-v0.0.2
 ```
 
 Typical build id shape:
