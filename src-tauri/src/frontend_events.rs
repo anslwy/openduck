@@ -92,6 +92,18 @@ pub(crate) struct RuntimeSetupStatusEvent {
     pub(crate) message: String,
 }
 
+#[derive(Clone, Serialize)]
+pub(crate) struct TrayPongPlaybackEvent {
+    pub(crate) enabled: bool,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct ConversationContextCommittedEvent {
+    pub(crate) request_id: u64,
+    pub(crate) user_entry_id: u64,
+    pub(crate) assistant_entry_id: u64,
+}
+
 pub(crate) fn emit_csm_error(app_handle: &AppHandle, payload: CsmErrorEvent) {
     if let Err(err) = app_handle.emit(CSM_ERROR_EVENT, payload) {
         error!("Failed to emit CSM error event: {}", err);
@@ -177,5 +189,23 @@ pub(crate) fn emit_model_download_event(app_handle: &AppHandle, payload: ModelDo
 pub(crate) fn emit_runtime_setup_status(app_handle: &AppHandle, payload: RuntimeSetupStatusEvent) {
     if let Err(err) = app_handle.emit(RUNTIME_SETUP_EVENT, payload) {
         error!("Failed to emit runtime setup status event: {}", err);
+    }
+}
+
+pub(crate) fn emit_tray_pong_playback(app_handle: &AppHandle, enabled: bool) {
+    if let Err(err) = app_handle.emit(TRAY_PONG_PLAYBACK_EVENT, TrayPongPlaybackEvent { enabled }) {
+        error!("Failed to emit tray pong playback event: {}", err);
+    }
+}
+
+pub(crate) fn emit_conversation_context_committed(
+    app_handle: &AppHandle,
+    payload: ConversationContextCommittedEvent,
+) {
+    if let Err(err) = app_handle.emit(CONVERSATION_CONTEXT_COMMITTED_EVENT, payload) {
+        error!(
+            "Failed to emit conversation context committed event: {}",
+            err
+        );
     }
 }

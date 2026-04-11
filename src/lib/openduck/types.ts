@@ -72,6 +72,14 @@ export type ScreenCaptureEvent = {
 
 export type TrayEndCallEvent = Record<string, never>;
 export type TrayToggleMuteEvent = Record<string, never>;
+export type TrayPongPlaybackEvent = {
+    enabled: boolean;
+};
+export type ConversationContextCommittedEvent = {
+    request_id: number;
+    user_entry_id: number;
+    assistant_entry_id: number;
+};
 
 export type DownloadModelKey = "gemma" | "csm" | "stt";
 
@@ -116,6 +124,7 @@ export type ConversationLogEntry = {
     role: "user" | "assistant";
     text: string;
     imageUrl: string | null;
+    contextEntryId: number | null;
 };
 
 export type StoredContactProfile = {

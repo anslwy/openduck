@@ -14,6 +14,7 @@ export const CONTACT_ICONS_DB_NAME = "openduck.contacts";
 export const CONTACT_ICONS_STORE_NAME = "contact-icons";
 export const DEFAULT_CONTACT_ID = "contact-openduck";
 export const MODEL_PREFERENCES_STORAGE_KEY = "openduck.model-preferences.v1";
+export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
 export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
 export const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";

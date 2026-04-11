@@ -130,6 +130,8 @@ struct ModelMemoryUsageSnapshot {
 
 #[derive(Clone)]
 struct ConversationTurn {
+    user_entry_id: u64,
+    assistant_entry_id: u64,
     user_text: String,
     assistant_text: String,
     image_path: Option<PathBuf>,
@@ -275,6 +277,10 @@ struct AppState {
     call_in_progress: Mutex<bool>,
     call_muted: Mutex<bool>,
     tts_playback_active: Mutex<bool>,
+    tray_pong_playback_enabled: Mutex<bool>,
+    tray_pong_playback_hydrated: Mutex<bool>,
+    tray_pong_playback_modified_before_hydration: Mutex<bool>,
+    next_conversation_entry_id: AtomicU64,
     is_quitting: Mutex<bool>,
 }
 
@@ -464,6 +470,101 @@ async fn interrupt_tts(app_handle: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn set_tts_playback_active(app_handle: tauri::AppHandle, active: bool) {
     set_tts_playback_active_state(&app_handle, active);
+}
+
+#[tauri::command]
+fn initialize_pong_playback_preference(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> bool {
+    let mut tray_pong_playback_hydrated = state.tray_pong_playback_hydrated.lock().unwrap();
+    let mut tray_pong_playback_modified_before_hydration = state
+        .tray_pong_playback_modified_before_hydration
+        .lock()
+        .unwrap();
+    let mut tray_pong_playback_enabled = state.tray_pong_playback_enabled.lock().unwrap();
+    let mut changed = false;
+
+    if !*tray_pong_playback_hydrated {
+        if !*tray_pong_playback_modified_before_hydration && *tray_pong_playback_enabled != enabled
+        {
+            *tray_pong_playback_enabled = enabled;
+            changed = true;
+        }
+
+        *tray_pong_playback_hydrated = true;
+        *tray_pong_playback_modified_before_hydration = false;
+    }
+
+    let effective_enabled = *tray_pong_playback_enabled;
+    drop(tray_pong_playback_enabled);
+    drop(tray_pong_playback_modified_before_hydration);
+    drop(tray_pong_playback_hydrated);
+
+    if changed {
+        refresh_tray_menu(&app_handle);
+    }
+
+    effective_enabled
+}
+
+#[tauri::command]
+fn update_conversation_context_entry(
+    state: State<'_, AppState>,
+    entry_id: u64,
+    text: String,
+    clear_image: bool,
+) -> Result<(), String> {
+    let normalized_text = text.trim().to_string();
+    let mut removed_image_path = None;
+    let mut updated = false;
+
+    {
+        let mut conversation_turns = state.conversation_turns.lock().unwrap();
+
+        for turn in conversation_turns.iter_mut() {
+            if turn.user_entry_id == entry_id {
+                let keep_existing_image = turn.image_path.is_some() && !clear_image;
+                if normalized_text.is_empty() && !keep_existing_image {
+                    return Err(
+                        "Conversation user entries need text or an attached image.".to_string()
+                    );
+                }
+
+                turn.user_text = normalized_text.clone();
+                if clear_image {
+                    removed_image_path = turn.image_path.take();
+                }
+                updated = true;
+                break;
+            }
+
+            if turn.assistant_entry_id == entry_id {
+                if clear_image {
+                    return Err("Assistant entries do not contain removable images.".to_string());
+                }
+                if normalized_text.is_empty() {
+                    return Err("Conversation assistant entries cannot be empty.".to_string());
+                }
+
+                turn.assistant_text = normalized_text.clone();
+                updated = true;
+                break;
+            }
+        }
+    }
+
+    if !updated {
+        return Err("Conversation entry is no longer part of the active context.".to_string());
+    }
+
+    if let Some(image_path) = removed_image_path {
+        unregister_conversation_image_path(state.inner(), &image_path);
+        remove_temp_image_file(&image_path);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1870,7 +1971,7 @@ fn start_response_generation(
         )
         .await
         {
-            Ok(response_text) => {
+            Ok((response_id, response_text)) => {
                 if response_text.is_empty() {
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
@@ -1883,11 +1984,19 @@ fn start_response_generation(
                 }
 
                 let persisted_image_path = latest_image_file.take().map(TempImageFile::release);
-                append_conversation_turn(
+                let (user_entry_id, assistant_entry_id) = append_conversation_turn(
                     app_handle_for_task.state::<AppState>().inner(),
                     user_text,
                     response_text,
                     persisted_image_path,
+                );
+                emit_conversation_context_committed(
+                    &app_handle_for_task,
+                    ConversationContextCommittedEvent {
+                        request_id: response_id,
+                        user_entry_id,
+                        assistant_entry_id,
+                    },
                 );
             }
             Err(err) => {
@@ -2095,7 +2204,7 @@ async fn stream_gemma_response_to_csm(
     user_text: &str,
     latest_audio_path: Option<&Path>,
     latest_image_path: Option<&Path>,
-) -> Result<String, String> {
+) -> Result<(u64, String), String> {
     start_csm_server_inner(app_handle, app_handle.state::<AppState>().inner()).await?;
 
     let llm_started_at = Instant::now();
@@ -2319,7 +2428,7 @@ async fn stream_gemma_response_to_csm(
         );
     }
 
-    Ok(response_text)
+    Ok((response_id, response_text))
 }
 
 async fn emit_streamed_response_update(
@@ -3628,6 +3737,7 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     let call_in_progress = *state.call_in_progress.lock().unwrap();
     let call_muted = *state.call_muted.lock().unwrap();
     let tts_playback_active = *state.tts_playback_active.lock().unwrap();
+    let tray_pong_playback_enabled = *state.tray_pong_playback_enabled.lock().unwrap();
     let screen_capture_in_progress = *state.screen_capture_in_progress.lock().unwrap();
     let has_pending_screen_capture = has_pending_screen_capture(state.inner());
     let gemma_loaded = loaded_gemma_variant(state.inner()).is_some();
@@ -3796,6 +3906,15 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
         builder = builder.item(&unload_all_item);
     }
 
+    let pong_playback_label = if tray_pong_playback_enabled {
+        "Disable Pong Sound"
+    } else {
+        "Enable Pong Sound"
+    };
+    builder = builder
+        .separator()
+        .text(TRAY_TOGGLE_PONG_PLAYBACK_MENU_ID, pong_playback_label);
+
     let menu = match builder
         .separator()
         .text(TRAY_QUIT_MENU_ID, "Quit OpenDuck")
@@ -3870,6 +3989,25 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
                 if let Err(err) = app_handle.emit(TRAY_TOGGLE_MUTE_EVENT, ()) {
                     error!("Failed to emit tray mute toggle event: {}", err);
                 }
+            }
+            TRAY_TOGGLE_PONG_PLAYBACK_MENU_ID => {
+                let state = app_handle.state::<AppState>();
+                let enabled = {
+                    let mut tray_pong_playback_enabled =
+                        state.tray_pong_playback_enabled.lock().unwrap();
+                    *tray_pong_playback_enabled = !*tray_pong_playback_enabled;
+                    *tray_pong_playback_enabled
+                };
+
+                if !*state.tray_pong_playback_hydrated.lock().unwrap() {
+                    *state
+                        .tray_pong_playback_modified_before_hydration
+                        .lock()
+                        .unwrap() = true;
+                }
+
+                refresh_tray_menu(app_handle);
+                emit_tray_pong_playback(app_handle, enabled);
             }
             TRAY_UNLOAD_GEMMA_MENU_ID => {
                 let app_handle = app_handle.clone();
@@ -4394,12 +4532,22 @@ fn register_active_generation_if_newer(
     true
 }
 
+fn unregister_conversation_image_path(state: &AppState, image_path: &Path) {
+    let mut image_paths = state.conversation_image_paths.lock().unwrap();
+    if let Some(index) = image_paths
+        .iter()
+        .position(|candidate| candidate == image_path)
+    {
+        image_paths.remove(index);
+    }
+}
+
 fn append_conversation_turn(
     state: &AppState,
     user_text: String,
     assistant_text: String,
     image_path: Option<PathBuf>,
-) {
+) -> (u64, u64) {
     if let Some(image_path) = image_path.as_ref() {
         state
             .conversation_image_paths
@@ -4408,16 +4556,31 @@ fn append_conversation_turn(
             .push(image_path.clone());
     }
 
+    let user_entry_id = state
+        .next_conversation_entry_id
+        .fetch_add(1, Ordering::Relaxed);
+    let assistant_entry_id = state
+        .next_conversation_entry_id
+        .fetch_add(1, Ordering::Relaxed);
     let mut turns = state.conversation_turns.lock().unwrap();
     turns.push_back(ConversationTurn {
+        user_entry_id,
+        assistant_entry_id,
         user_text,
         assistant_text,
         image_path,
     });
 
     while turns.len() > MAX_CONVERSATION_TURNS {
-        turns.pop_front();
+        if let Some(removed_turn) = turns.pop_front() {
+            if let Some(removed_image_path) = removed_turn.image_path {
+                unregister_conversation_image_path(state, &removed_image_path);
+                remove_temp_image_file(&removed_image_path);
+            }
+        }
     }
+
+    (user_entry_id, assistant_entry_id)
 }
 
 fn has_pending_screen_capture(state: &AppState) -> bool {
@@ -4513,6 +4676,7 @@ fn reset_call_session_state(state: &AppState) {
             remove_temp_image_file(&image_path);
         }
     }
+    state.next_conversation_entry_id.store(1, Ordering::Relaxed);
 
     state
         .conversation_session_id
@@ -6229,6 +6393,10 @@ pub fn run() {
             call_in_progress: Mutex::new(false),
             call_muted: Mutex::new(false),
             tts_playback_active: Mutex::new(false),
+            tray_pong_playback_enabled: Mutex::new(true),
+            tray_pong_playback_hydrated: Mutex::new(false),
+            tray_pong_playback_modified_before_hydration: Mutex::new(false),
+            next_conversation_entry_id: AtomicU64::new(1),
             is_quitting: Mutex::new(false),
         })
         .plugin(tauri_plugin_dialog::init())
@@ -6247,6 +6415,7 @@ pub fn run() {
             stop_call_timer,
             set_call_muted,
             set_tts_playback_active,
+            initialize_pong_playback_preference,
             get_gemma_variant,
             set_gemma_variant,
             get_stt_model_variant,
@@ -6272,6 +6441,7 @@ pub fn run() {
             set_csm_model_variant,
             set_csm_quantize,
             set_csm_voice,
+            update_conversation_context_entry,
             stop_server,
             stop_csm_server,
             stop_stt_server

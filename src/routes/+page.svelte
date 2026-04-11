@@ -31,6 +31,7 @@
         DEFAULT_VOICE_SYSTEM_PROMPT,
         MODEL_PREFERENCES_STORAGE_KEY,
         MODEL_PRESETS,
+        PONG_PLAYBACK_STORAGE_KEY,
     } from "$lib/openduck/config";
     import {
         formatDownloadPercent,
@@ -49,6 +50,7 @@
         CallStagePhase,
         ContactExportResult,
         ContactProfile,
+        ConversationContextCommittedEvent,
         ConversationLogEntry,
         CsmAudioChunkEvent,
         CsmAudioDoneEvent,
@@ -71,8 +73,14 @@
         SttStatusEvent,
         TranscriptEvent,
         TrayEndCallEvent,
+        TrayPongPlaybackEvent,
         TrayToggleMuteEvent,
     } from "$lib/openduck/types";
+
+    type StoredPongPlaybackPreference = {
+        version: 1;
+        enabled: boolean;
+    };
 
     let calling = $state(false);
     let micMuted = $state(false);
@@ -153,14 +161,17 @@
     let cachedPongPlaybackSampleRate = $state<number | null>(null);
     let activePongSource = $state<AudioBufferSourceNode | null>(null);
     let activePongGainNode = $state<GainNode | null>(null);
+    let pongPlaybackEnabled = $state(true);
     let contacts = $state<ContactProfile[]>([createDefaultContact()]);
     let selectedContactId = $state(DEFAULT_CONTACT_ID);
     let showContactsPopup = $state(false);
     let showConversationPopup = $state(false);
     let conversationLogEntries = $state<ConversationLogEntry[]>([]);
     let nextConversationEntryId = 1;
+    let pendingConversationUserLogEntryId: number | null = null;
     let activeAssistantResponseId: number | null = null;
     let activeAssistantConversationEntryId: number | null = null;
+    let isSavingConversationLogEntryEdit = $state(false);
     let callStagePhase = $state<CallStagePhase>("idle");
     let callStageMessage = $state("");
     let screenCapturePhase = $state<ScreenCaptureEvent["phase"] | null>(null);
@@ -378,6 +389,7 @@
         isPreparingRuntime ? "Preparing Local Runtime" : "Runtime Setup Failed",
     );
     const PLAYBACK_PREBUFFER_SAMPLES = 2048;
+    const MAX_CONTEXT_BACKED_CONVERSATION_LOG_ENTRIES = 48;
     const PONG_VOLUME = 0.7;
     const pongUrl = "/pong.mp3";
     const screenCaptureTitle = $derived(
@@ -458,6 +470,7 @@
                 role,
                 text: normalizedText,
                 imageUrl: normalizedImageUrl,
+                contextEntryId: null,
             },
         ];
         nextConversationEntryId += 1;
@@ -494,9 +507,67 @@
         scrollConversationLogToBottom();
     }
 
+    function pruneConversationLogContextBackedEntries() {
+        const contextBackedEntries = conversationLogEntries.filter(
+            (entry) => entry.contextEntryId !== null,
+        );
+        const removableEntries = contextBackedEntries.slice(
+            0,
+            Math.max(
+                0,
+                contextBackedEntries.length -
+                    MAX_CONTEXT_BACKED_CONVERSATION_LOG_ENTRIES,
+            ),
+        );
+        if (removableEntries.length === 0) {
+            return;
+        }
+
+        const removableEntryIds = new Set(
+            removableEntries.map((entry) => entry.id),
+        );
+        conversationLogEntries = conversationLogEntries.map((entry) =>
+            removableEntryIds.has(entry.id)
+                ? { ...entry, contextEntryId: null }
+                : entry,
+        );
+    }
+
+    function markConversationTurnAsContextBacked(
+        payload: ConversationContextCommittedEvent,
+    ) {
+        if (
+            pendingConversationUserLogEntryId == null ||
+            activeAssistantConversationEntryId == null
+        ) {
+            return;
+        }
+
+        conversationLogEntries = conversationLogEntries.map((entry) => {
+            if (entry.id === pendingConversationUserLogEntryId) {
+                return {
+                    ...entry,
+                    contextEntryId: payload.user_entry_id,
+                };
+            }
+
+            if (entry.id === activeAssistantConversationEntryId) {
+                return {
+                    ...entry,
+                    contextEntryId: payload.assistant_entry_id,
+                };
+            }
+
+            return entry;
+        });
+        pendingConversationUserLogEntryId = null;
+        pruneConversationLogContextBackedEntries();
+    }
+
     function resetConversationLog() {
         conversationLogEntries = [];
         nextConversationEntryId = 1;
+        pendingConversationUserLogEntryId = null;
         activeAssistantResponseId = null;
         activeAssistantConversationEntryId = null;
     }
@@ -569,6 +640,130 @@
             MODEL_PREFERENCES_STORAGE_KEY,
             JSON.stringify(payload),
         );
+    }
+
+    function persistPongPlaybackPreference(enabled: boolean) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredPongPlaybackPreference = {
+            version: 1,
+            enabled,
+        };
+        window.localStorage.setItem(
+            PONG_PLAYBACK_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function loadPongPlaybackPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return true;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            PONG_PLAYBACK_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return true;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return true;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error("Failed to restore pong playback preference:", err);
+            return true;
+        }
+    }
+
+    function applyPongPlaybackPreference(enabled: boolean) {
+        pongPlaybackEnabled = enabled;
+        persistPongPlaybackPreference(enabled);
+
+        if (!enabled) {
+            pendingCompletionPongRequestId = null;
+            stopActivePongPlayback();
+            if (calling) {
+                updateStageAfterPlaybackStateChange();
+            }
+        }
+    }
+
+    async function initializePongPlaybackPreference() {
+        const storedEnabled = loadPongPlaybackPreferenceFromStorage();
+        let effectiveEnabled = storedEnabled;
+
+        try {
+            effectiveEnabled = await invoke<boolean>(
+                "initialize_pong_playback_preference",
+                { enabled: storedEnabled },
+            );
+        } catch (err) {
+            console.error("Failed to initialize pong playback preference:", err);
+        }
+
+        applyPongPlaybackPreference(effectiveEnabled);
+    }
+
+    async function saveConversationLogEntryEdit(
+        entryId: number,
+        nextText: string,
+        clearImage: boolean,
+    ) {
+        const entry = conversationLogEntries.find(
+            (candidate) => candidate.id === entryId,
+        );
+        if (!entry || entry.contextEntryId == null) {
+            alert("This message is no longer part of the active conversation context.");
+            return false;
+        }
+
+        const normalizedText = nextText.trim();
+        const nextImageUrl = clearImage ? null : entry.imageUrl;
+        if (!normalizedText && !nextImageUrl) {
+            alert("Conversation messages need text or an attached image.");
+            return false;
+        }
+
+        if (normalizedText === entry.text && nextImageUrl === entry.imageUrl) {
+            return true;
+        }
+
+        isSavingConversationLogEntryEdit = true;
+
+        try {
+            await invoke("update_conversation_context_entry", {
+                entryId: entry.contextEntryId,
+                text: normalizedText,
+                clearImage,
+            });
+            conversationLogEntries = conversationLogEntries.map(
+                (candidate) =>
+                    candidate.id === entryId
+                        ? {
+                              ...candidate,
+                              text: normalizedText,
+                              imageUrl: nextImageUrl,
+                          }
+                        : candidate,
+            );
+            return true;
+        } catch (err) {
+            console.error("Failed to update conversation entry:", err);
+            alert(`Failed to update the conversation entry.\n${String(err)}`);
+            return false;
+        } finally {
+            isSavingConversationLogEntryEdit = false;
+        }
     }
 
     function getCurrentModelSelection(): ModelSelection {
@@ -1724,7 +1919,7 @@
     }
 
     async function playCallStartPong() {
-        if (!calling || !captureContext) {
+        if (!pongPlaybackEnabled || !calling || !captureContext) {
             return false;
         }
 
@@ -1780,6 +1975,7 @@
             requestId == null ||
             requestId !== activeTtsRequestId ||
             requestId !== pendingCompletionPongRequestId ||
+            !pongPlaybackEnabled ||
             !calling ||
             !captureContext ||
             !playbackProcessor ||
@@ -2412,6 +2608,19 @@
                             );
                         },
                     ),
+                    listen<ConversationContextCommittedEvent>(
+                        "conversation-context-committed",
+                        ({ payload }) => {
+                            if (
+                                !calling ||
+                                payload.request_id !== activeAssistantResponseId
+                            ) {
+                                return;
+                            }
+
+                            markConversationTurnAsContextBacked(payload);
+                        },
+                    ),
                     listen<CallStageEvent>("call-stage", ({ payload }) => {
                         if (!calling) {
                             return;
@@ -2432,7 +2641,8 @@
                                 return;
                             }
 
-                            appendConversationLogEntry(
+                            pendingConversationUserLogEntryId =
+                                appendConversationLogEntry(
                                 "user",
                                 payload.text,
                                 payload.imageDataUrl ?? null,
@@ -2463,6 +2673,12 @@
                             toggleMic();
                         }
                     }),
+                    listen<TrayPongPlaybackEvent>(
+                        "tray-pong-playback",
+                        ({ payload }) => {
+                            applyPongPlaybackPreference(payload.enabled);
+                        },
+                    ),
                 ]);
             } catch (err) {
                 console.error("Failed to register Tauri event listeners:", err);
@@ -2474,6 +2690,7 @@
             persistContactsMetadata();
             await syncSelectedContactPrompt();
             await restoreModelPreferences();
+            await initializePongPlaybackPreference();
             await ensureRuntimeDependencies();
             await syncModelStatus();
         })();
@@ -2733,6 +2950,8 @@
             <ConversationPopup
                 {conversationLogEntries}
                 {closeConversationPopup}
+                {isSavingConversationLogEntryEdit}
+                {saveConversationLogEntryEdit}
                 setConversationLogViewport={(element) => {
                     conversationLogViewport = element;
                 }}
