@@ -1785,6 +1785,8 @@ fn receive_audio_chunk(
     if prepared_chunk.samples.is_empty() {
         return;
     }
+    let silence_chunks_required =
+        required_silence_chunks(capture_sample_rate, prepared_chunk.samples.len());
 
     let mut buffer = state.audio_buffer.lock().unwrap();
     let mut silent_count = state.silent_chunks_count.lock().unwrap();
@@ -1811,7 +1813,7 @@ fn receive_audio_chunk(
     if *is_speaking {
         buffer.extend_from_slice(&prepared_chunk.samples);
 
-        if *silent_count >= SILENCE_DURATION_CHUNKS {
+        if *silent_count >= silence_chunks_required {
             info!("Silence detected, preparing buffered audio for transcription...");
             emit_call_stage(&app_handle, "processing_audio", "Processing Audio");
             process_audio_turn(&buffer, capture_sample_rate, app_handle);
@@ -1821,6 +1823,14 @@ fn receive_audio_chunk(
             *speaking_count = 0;
         }
     }
+}
+
+fn required_silence_chunks(sample_rate: u32, chunk_sample_count: usize) -> usize {
+    let samples_per_chunk = chunk_sample_count.max(1) as u64;
+    let required_chunks = (u64::from(sample_rate) * u64::from(END_OF_UTTERANCE_SILENCE_MS))
+        .div_ceil(samples_per_chunk * 1000);
+
+    required_chunks.max(1) as usize
 }
 
 fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tauri::AppHandle) {
@@ -3398,10 +3408,10 @@ mod tests {
     use super::{
         build_latest_user_turn_message, build_llm_system_prompt, parse_gemma_stream_event,
         prepare_completed_spoken_response_segments_for_csm,
-        prepare_spoken_response_segments_for_csm, resolve_capture_sample_rate,
-        sanitize_for_voice_output, serialize_chat_messages_for_debug, suppress_playback_echo,
-        AudioPayload, ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE,
-        IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
+        prepare_spoken_response_segments_for_csm, required_silence_chunks,
+        resolve_capture_sample_rate, sanitize_for_voice_output, serialize_chat_messages_for_debug,
+        suppress_playback_echo, AudioPayload, ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT,
+        DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
     use std::path::Path;
 
@@ -3500,6 +3510,18 @@ mod tests {
             vec!["Letting everyone peek under the hood tinker improve.".to_string()]
         );
         assert_eq!(&response_text[consumed_len..], "Next bit");
+    }
+
+    #[test]
+    fn required_silence_chunks_scales_with_sample_rate() {
+        assert_eq!(required_silence_chunks(44_100, 128), 293);
+        assert_eq!(required_silence_chunks(48_000, 128), 319);
+    }
+
+    #[test]
+    fn required_silence_chunks_respects_chunk_size() {
+        assert_eq!(required_silence_chunks(48_000, 256), 160);
+        assert_eq!(required_silence_chunks(48_000, 1024), 40);
     }
 
     #[test]

@@ -9,8 +9,17 @@ const PLAYBACK_REFERENCE_CANDIDATE_DELAYS = [
 ];
 const MIN_REFERENCE_ENERGY = 1e-8;
 const MIN_MIC_ENERGY = 1e-8;
+const AUDIO_WORKLET_RENDER_QUANTUM_FRAMES = 128;
+const END_OF_UTTERANCE_SILENCE_MS = 850;
 // Slightly above the Rust silence window so a muted turn can still flush.
-const POST_MUTE_DRAIN_QUANTA = 160;
+const POST_MUTE_DRAIN_MS = END_OF_UTTERANCE_SILENCE_MS + 100;
+const POST_MUTE_DRAIN_QUANTA = Math.max(
+  1,
+  Math.ceil(
+    (POST_MUTE_DRAIN_MS / 1000 * sampleRate) /
+      AUDIO_WORKLET_RENDER_QUANTUM_FRAMES,
+  ),
+);
 
 function getPlaybackReferenceState() {
   if (!globalThis[PLAYBACK_REFERENCE_STATE_KEY]) {
