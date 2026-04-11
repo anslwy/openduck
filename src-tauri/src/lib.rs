@@ -230,6 +230,7 @@ struct AppState {
     silent_chunks_count: Mutex<usize>,
     speaking_chunks_count: Mutex<usize>,
     is_speaking: Mutex<bool>,
+    runtime_setup_lock: AsyncMutex<()>,
     selected_gemma_variant: Mutex<GemmaVariant>,
     loaded_gemma_variant: Mutex<Option<GemmaVariant>>,
     gemma_download_process: Mutex<Option<DownloadProcess>>,
@@ -773,11 +774,194 @@ fn set_stt_model_variant(state: State<'_, AppState>, variant: String) -> Result<
     Ok(())
 }
 
+async fn ensure_runtime_dependencies_inner(
+    app_handle: &tauri::AppHandle,
+    state: &AppState,
+) -> Result<(), String> {
+    if runtime_dependencies_available(app_handle) {
+        return Ok(());
+    }
+
+    let _guard = state.runtime_setup_lock.lock().await;
+    if runtime_dependencies_available(app_handle) {
+        return Ok(());
+    }
+
+    let runtime_root = resolve_runtime_root(app_handle)?;
+    let setup_script = resolve_setup_script(app_handle)?;
+    let patch_script = resolve_resource_file(app_handle, "patch_mlx_vlm.py")?;
+    let resource_files_dir = patch_script
+        .parent()
+        .map(PathBuf::from)
+        .ok_or_else(|| "Failed to resolve the bundled runtime resource directory".to_string())?;
+    let temp_dir = app_handle
+        .path()
+        .app_cache_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("openduck"))
+        .join("runtime-bootstrap");
+
+    std::fs::create_dir_all(&runtime_root).map_err(|err| {
+        format!(
+            "Failed to create the OpenDuck runtime directory at {}: {err}",
+            runtime_root.display()
+        )
+    })?;
+    std::fs::create_dir_all(&temp_dir).map_err(|err| {
+        format!(
+            "Failed to create the OpenDuck cache directory at {}: {err}",
+            temp_dir.display()
+        )
+    })?;
+
+    emit_runtime_setup_status(
+        app_handle,
+        RuntimeSetupStatusEvent {
+            phase: "starting".to_string(),
+            message:
+                "Preparing local Python runtime. This can take several minutes on first launch."
+                    .to_string(),
+        },
+    );
+
+    info!(
+        "Bootstrapping local runtime with {} into {}",
+        setup_script.display(),
+        runtime_root.display()
+    );
+
+    let mut command = Command::new("/bin/bash");
+    command
+        .arg(&setup_script)
+        .env("OPEN_DUCK_RUNTIME_ROOT", &runtime_root)
+        .env("OPEN_DUCK_RESOURCE_FILES_DIR", &resource_files_dir)
+        .env("OPEN_DUCK_PATCH_SERVER_SCRIPT", &patch_script)
+        .env("OPEN_DUCK_TEMP_DIR", &temp_dir)
+        .env("PYTHONUNBUFFERED", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|err| format!("Failed to start the OpenDuck runtime setup: {err}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture OpenDuck runtime setup stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture OpenDuck runtime setup stderr".to_string())?;
+
+    let app_handle_for_stdout = app_handle.clone();
+    let stdout_handle = tauri::async_runtime::spawn(async move {
+        let mut stdout_lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = stdout_lines.next_line().await {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if let Some(message) = trimmed.strip_prefix("OPEN_DUCK_STATUS:") {
+                let message = message.trim().to_string();
+                info!("Runtime setup: {}", message);
+                emit_runtime_setup_status(
+                    &app_handle_for_stdout,
+                    RuntimeSetupStatusEvent {
+                        phase: "progress".to_string(),
+                        message,
+                    },
+                );
+            } else {
+                info!("Runtime setup stdout: {}", trimmed);
+            }
+        }
+    });
+
+    let stderr_handle = tauri::async_runtime::spawn(async move {
+        let mut stderr_lines = BufReader::new(stderr).lines();
+        let mut collected = VecDeque::new();
+        while let Ok(Some(line)) = stderr_lines.next_line().await {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            collected.push_back(trimmed.to_string());
+            while collected.len() > 12 {
+                collected.pop_front();
+            }
+            warn!("Runtime setup stderr: {}", trimmed);
+        }
+
+        collected
+    });
+
+    let status = child
+        .wait()
+        .await
+        .map_err(|err| format!("Failed while waiting for the OpenDuck runtime setup: {err}"))?;
+
+    if let Err(err) = stdout_handle.await {
+        warn!("Failed to join the runtime setup stdout task: {}", err);
+    }
+    let stderr_tail = match stderr_handle.await {
+        Ok(lines) => lines,
+        Err(err) => {
+            warn!("Failed to join the runtime setup stderr task: {}", err);
+            VecDeque::new()
+        }
+    };
+
+    if status.success() && runtime_dependencies_available(app_handle) {
+        emit_runtime_setup_status(
+            app_handle,
+            RuntimeSetupStatusEvent {
+                phase: "completed".to_string(),
+                message: "Local Python runtime is ready.".to_string(),
+            },
+        );
+        info!("Local runtime setup completed successfully");
+        return Ok(());
+    }
+
+    let stderr_summary = stderr_tail
+        .iter()
+        .rev()
+        .find(|line| !line.is_empty())
+        .cloned();
+    let error_message = if status.success() {
+        "Runtime setup finished, but required Python dependencies are still missing.".to_string()
+    } else if let Some(summary) = stderr_summary {
+        format!("Runtime setup failed: {summary}")
+    } else {
+        format!("Runtime setup failed with status {status}")
+    };
+
+    emit_runtime_setup_status(
+        app_handle,
+        RuntimeSetupStatusEvent {
+            phase: "error".to_string(),
+            message: error_message.clone(),
+        },
+    );
+    Err(error_message)
+}
+
+#[tauri::command]
+async fn ensure_runtime_dependencies(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    ensure_runtime_dependencies_inner(&app_handle, state.inner()).await
+}
+
 #[tauri::command]
 async fn start_server(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    ensure_runtime_dependencies_inner(&app_handle, state.inner()).await?;
+
     let selected_variant = selected_gemma_variant(state.inner());
     let port;
     {
@@ -803,6 +987,11 @@ async fn start_server(
             .shell()
             .sidecar("mlx-handler")
             .map_err(|e| e.to_string())?
+            .env("OPEN_DUCK_RUNTIME_ROOT", resolve_runtime_root(&app_handle)?)
+            .env(
+                "OPEN_DUCK_PATCH_SERVER_SCRIPT",
+                resolve_resource_file(&app_handle, "patch_mlx_vlm.py")?,
+            )
             .args(&[
                 "--server",
                 "--model",
@@ -932,6 +1121,8 @@ async fn start_csm_server_inner(
     app_handle: &tauri::AppHandle,
     state: &AppState,
 ) -> Result<(), String> {
+    ensure_runtime_dependencies_inner(app_handle, state).await?;
+
     let selected_variant = selected_csm_model(state);
     if csm_process_is_ready(state).await {
         if loaded_csm_model(state) == Some(selected_variant) {
@@ -1090,6 +1281,8 @@ async fn start_stt_server_inner(
     app_handle: &tauri::AppHandle,
     state: &AppState,
 ) -> Result<(), String> {
+    ensure_runtime_dependencies_inner(app_handle, state).await?;
+
     let selected_variant = selected_stt_model(state);
     if !selected_variant.uses_worker() {
         return Ok(());
@@ -1453,7 +1646,14 @@ fn receive_audio_chunk(
 }
 
 fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tauri::AppHandle) {
-    let audio_path = create_temp_wav_path();
+    let audio_path = match create_temp_wav_path(&app_handle) {
+        Ok(path) => path,
+        Err(err) => {
+            error!("{}", err);
+            emit_audio_turn_processing_error(&app_handle, err);
+            return;
+        }
+    };
     let generation_id;
     let conversation_session_id;
     let gemma_model;
@@ -1473,6 +1673,10 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
 
     let Some(server_port) = server_port else {
         error!("Gemma server is not running, skipping audio request");
+        emit_audio_turn_processing_error(
+            &app_handle,
+            "Gemma is not loaded. Load Gemma before starting a call.".to_string(),
+        );
         return;
     };
 
@@ -1486,11 +1690,13 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
     let mut writer = match hound::WavWriter::create(&audio_path, spec) {
         Ok(writer) => writer,
         Err(e) => {
-            error!(
+            let message = format!(
                 "Failed to create temp WAV file at {}: {}",
                 audio_path.display(),
                 e
             );
+            error!("{}", message);
+            emit_audio_turn_processing_error(&app_handle, message);
             return;
         }
     };
@@ -1498,15 +1704,23 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
     for &sample in samples {
         let amplitude = (sample * i16::MAX as f32) as i16;
         if let Err(e) = writer.write_sample(amplitude) {
-            error!("Failed to write temp WAV sample: {}", e);
+            let message = format!("Failed to write temp WAV sample: {}", e);
+            error!("{}", message);
             let _ = std::fs::remove_file(&audio_path);
+            emit_audio_turn_processing_error(&app_handle, message);
             return;
         }
     }
 
     if let Err(e) = writer.finalize() {
-        error!("Failed to finalize temp WAV file: {}", e);
+        let message = format!(
+            "Failed to finalize temp WAV file at {}: {}",
+            audio_path.display(),
+            e
+        );
+        error!("{}", message);
         let _ = std::fs::remove_file(&audio_path);
+        emit_audio_turn_processing_error(&app_handle, message);
         return;
     }
 
@@ -4748,24 +4962,38 @@ fn stt_startup_failure_message(state: &AppState, base: &str) -> String {
     message
 }
 
-fn create_temp_wav_path() -> PathBuf {
+fn emit_audio_turn_processing_error(app_handle: &tauri::AppHandle, message: String) {
+    emit_csm_error(
+        app_handle,
+        CsmErrorEvent {
+            request_id: None,
+            message,
+        },
+    );
+    emit_call_stage(app_handle, "listening", "Listening");
+}
+
+fn create_temp_wav_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     let timestamp_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
 
-    let mut path = std::env::current_dir().unwrap_or_default();
-    if path.ends_with("src-tauri") {
-        path.pop();
-    }
+    let mut path = app_handle
+        .path()
+        .app_cache_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("openduck"));
+    path.push("audio-capture");
 
-    path.push("target");
-    path.push("audio_debug");
-
-    let _ = std::fs::create_dir_all(&path);
+    std::fs::create_dir_all(&path).map_err(|err| {
+        format!(
+            "Failed to create the audio capture directory at {}: {err}",
+            path.display()
+        )
+    })?;
 
     path.push(format!("openduck-audio-{}.wav", timestamp_ms));
-    path
+    Ok(path)
 }
 
 fn create_temp_screen_capture_path() -> PathBuf {
@@ -5159,6 +5387,56 @@ fn get_model_download_status(
     Ok(Some(poll_tracked_download_event(&tracked_state)))
 }
 
+fn resolve_runtime_root(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app_handle
+        .path()
+        .app_data_dir()
+        .map(|path| path.join("runtime"))
+        .map_err(|err| format!("Failed to resolve the OpenDuck app data directory: {err}"))
+}
+
+fn resolve_setup_script(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let mut candidates = Vec::new();
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir.join("scripts").join("setup_python_env.sh"));
+        if current_dir.ends_with("src-tauri") {
+            candidates.push(
+                current_dir
+                    .join("..")
+                    .join("scripts")
+                    .join("setup_python_env.sh"),
+            );
+        }
+    }
+
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        candidates.push(resource_dir.join("setup_python_env.sh"));
+        candidates.push(resource_dir.join("scripts").join("setup_python_env.sh"));
+        candidates.push(resource_dir.join("_up_").join("setup_python_env.sh"));
+        candidates.push(
+            resource_dir
+                .join("_up_")
+                .join("scripts")
+                .join("setup_python_env.sh"),
+        );
+        candidates.push(resource_dir.join("resources").join("setup_python_env.sh"));
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .ok_or_else(|| "Unable to locate setup_python_env.sh".to_string())
+}
+
+fn runtime_dependencies_available(app_handle: &tauri::AppHandle) -> bool {
+    resolve_gemma_python_executable(app_handle).is_ok()
+        && resolve_csm_site_packages(app_handle).is_ok()
+        && resolve_kokoro_site_packages(app_handle).is_ok()
+        && resolve_cosyvoice_site_packages(app_handle).is_ok()
+        && resolve_stt_site_packages(app_handle).is_ok()
+}
+
 fn resolve_gemma_python_executable(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     resolve_existing_path_dev_first(
         app_handle,
@@ -5174,7 +5452,7 @@ fn resolve_csm_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, S
         "bundled CSM site-packages",
     )
     .map_err(|_| {
-        "CSM dependencies are not installed. Run scripts/setup_python_env.sh to create src-tauri/resources/csm_env.".to_string()
+        "CSM dependencies are not installed yet. OpenDuck needs to finish preparing its local runtime first.".to_string()
     })
 }
 
@@ -5185,7 +5463,7 @@ fn resolve_kokoro_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf
         "bundled Kokoro site-packages",
     )
     .map_err(|_| {
-        "Kokoro dependencies are not installed. Run scripts/setup_python_env.sh to create src-tauri/resources/kokoro_env.".to_string()
+        "Kokoro dependencies are not installed yet. OpenDuck needs to finish preparing its local runtime first.".to_string()
     })
 }
 
@@ -5196,7 +5474,7 @@ fn resolve_cosyvoice_site_packages(app_handle: &tauri::AppHandle) -> Result<Path
         "bundled CosyVoice site-packages",
     )
     .map_err(|_| {
-        "CosyVoice dependencies are not installed. Run scripts/setup_python_env.sh to create src-tauri/resources/cosyvoice_env.".to_string()
+        "CosyVoice dependencies are not installed yet. OpenDuck needs to finish preparing its local runtime first.".to_string()
     })
 }
 
@@ -5207,7 +5485,7 @@ fn resolve_stt_site_packages(app_handle: &tauri::AppHandle) -> Result<PathBuf, S
         "bundled STT site-packages",
     )
     .map_err(|_| {
-        "Whisper STT dependencies are not installed. Run scripts/setup_python_env.sh to create src-tauri/resources/stt_env.".to_string()
+        "Whisper STT dependencies are not installed yet. OpenDuck needs to finish preparing its local runtime first.".to_string()
     })
 }
 
@@ -5256,6 +5534,13 @@ fn resolve_existing_path_dev_first(
         }
     }
 
+    if let Ok(runtime_root) = resolve_runtime_root(app_handle) {
+        candidates.push(runtime_root.join(relative_path));
+        if let Ok(stripped) = relative_path.strip_prefix("resources") {
+            candidates.push(runtime_root.join(stripped));
+        }
+    }
+
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
         candidates.push(resource_dir.join(relative_path));
         if let Ok(stripped) = relative_path.strip_prefix("resources") {
@@ -5292,6 +5577,7 @@ fn resolve_csm_context_audio_file(
 
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
         candidates.push(resource_dir.join(reference_audio_file));
+        candidates.push(resource_dir.join("_up_").join(reference_audio_file));
         candidates.push(resource_dir.join("resources").join(reference_audio_file));
     }
 
@@ -5467,6 +5753,8 @@ async fn download_model(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    ensure_runtime_dependencies_inner(&app_handle, state.inner()).await?;
+
     let selected_variant = selected_gemma_variant(state.inner());
     let python_executable = resolve_gemma_python_executable(&app_handle)?;
     let gemma_site_packages = resolve_gemma_site_packages(&app_handle)?;
@@ -5486,6 +5774,8 @@ async fn download_csm_model(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    ensure_runtime_dependencies_inner(&app_handle, state.inner()).await?;
+
     let selected_variant = selected_csm_model(state.inner());
     let python_executable = resolve_gemma_python_executable(&app_handle)?;
     let gemma_site_packages = resolve_gemma_site_packages(&app_handle)?;
@@ -5523,6 +5813,8 @@ async fn download_stt_model(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    ensure_runtime_dependencies_inner(&app_handle, state.inner()).await?;
+
     let selected_variant = selected_stt_model(state.inner());
     let model_repo_id = selected_variant.repo_id().ok_or_else(|| {
         format!(
@@ -5862,6 +6154,7 @@ pub fn run() {
             silent_chunks_count: Mutex::new(0),
             speaking_chunks_count: Mutex::new(0),
             is_speaking: Mutex::new(false),
+            runtime_setup_lock: AsyncMutex::new(()),
             selected_gemma_variant: Mutex::new(GemmaVariant::E4b),
             loaded_gemma_variant: Mutex::new(None),
             gemma_download_process: Mutex::new(None),
@@ -5918,6 +6211,7 @@ pub fn run() {
             set_voice_system_prompt,
             export_contact_profile,
             reset_call_session,
+            ensure_runtime_dependencies,
             interrupt_tts,
             start_call_timer,
             stop_call_timer,

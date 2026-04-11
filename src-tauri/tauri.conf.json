@@ -29,7 +29,8 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "resources/**/*",
+      "resources/*.py",
+      "../scripts/setup_python_env.sh",
       "../sample-male.mp3",
       "../sample-female.mp3"
     ],

@@ -63,6 +63,7 @@
         ModelMemoryUsageSnapshot,
         ModelPreset,
         ModelSelection,
+        RuntimeSetupStatusEvent,
         ScreenCaptureEvent,
         SelectOption,
         StoredModelPreferences,
@@ -118,6 +119,11 @@
     let sttDownloadIndeterminate = $state(true);
     let sttDownloadError = $state<string | null>(null);
     let sttLoadMessage = $state("Starting worker...");
+    let isPreparingRuntime = $state(false);
+    let runtimeSetupMessage = $state(
+        "Preparing local Python runtime. This can take several minutes on first launch.",
+    );
+    let runtimeSetupError = $state<string | null>(null);
     let isCsmQuantized = $state(true);
     let modelMemorySnapshot = $state<ModelMemoryUsageSnapshot | null>(null);
 
@@ -198,11 +204,15 @@
                 screenCapturePhase === "error" ||
                 screenCaptureHasPendingAttachment),
     );
+    const showRuntimeSetupBanner = $derived(
+        isPreparingRuntime || runtimeSetupError !== null,
+    );
     const modelsReady = $derived(
         isGemmaLoaded && isCsmLoaded && effectiveSttLoaded,
     );
     const gemmaVariantDisabled = $derived(
-        isGemmaLoaded ||
+        isPreparingRuntime ||
+            isGemmaLoaded ||
             isDownloadingGemma ||
             isClearingGemmaCache ||
             isCancellingGemmaDownload ||
@@ -210,7 +220,8 @@
             isUnloadingGemma,
     );
     const csmVariantDisabled = $derived(
-        isCsmLoaded ||
+        isPreparingRuntime ||
+            isCsmLoaded ||
             isDownloadingCsm ||
             isClearingCsmCache ||
             isCancellingCsmDownload ||
@@ -218,7 +229,8 @@
             isUnloadingCsm,
     );
     const sttVariantDisabled = $derived(
-        isDownloadingStt ||
+        isPreparingRuntime ||
+            isDownloadingStt ||
             isClearingSttCache ||
             isCancellingSttDownload ||
             isLoadingStt ||
@@ -305,7 +317,8 @@
             (selectedSttModel === "whisper_large_v3_turbo" && !isSttLoaded),
     );
     const loadAllBusy = $derived(
-        isLoadingAll ||
+        isPreparingRuntime ||
+            isLoadingAll ||
             isDownloadingGemma ||
             isClearingGemmaCache ||
             isCancellingGemmaDownload ||
@@ -356,6 +369,9 @@
     );
     const selectedContactImageStyle = $derived(
         `background-image: url('${selectedContactIconUrl}')`,
+    );
+    const runtimeSetupTitle = $derived(
+        isPreparingRuntime ? "Preparing Local Runtime" : "Runtime Setup Failed",
     );
     const PLAYBACK_PREBUFFER_SAMPLES = 2048;
     const PONG_VOLUME = 0.7;
@@ -1032,6 +1048,25 @@
         }
     }
 
+    function applyRuntimeSetupEvent(payload: RuntimeSetupStatusEvent) {
+        runtimeSetupMessage = payload.message.trim();
+
+        if (payload.phase === "error") {
+            isPreparingRuntime = false;
+            runtimeSetupError = payload.message.trim();
+            return;
+        }
+
+        if (payload.phase === "completed") {
+            isPreparingRuntime = false;
+            runtimeSetupError = null;
+            return;
+        }
+
+        isPreparingRuntime = true;
+        runtimeSetupError = null;
+    }
+
     function shouldApplyDownloadEvent(payload: ModelDownloadProgressEvent) {
         if (payload.phase !== "progress") {
             return true;
@@ -1293,6 +1328,34 @@
             }
         } catch (err) {
             console.error("Failed to sync model status:", err);
+        }
+    }
+
+    async function ensureRuntimeDependencies() {
+        isPreparingRuntime = true;
+        runtimeSetupError = null;
+        runtimeSetupMessage =
+            "Preparing local Python runtime. This can take several minutes on first launch.";
+
+        try {
+            await invoke("ensure_runtime_dependencies");
+            runtimeSetupMessage = "Local Python runtime is ready.";
+            return true;
+        } catch (err) {
+            const message = normalizeErrorMessage(err);
+            runtimeSetupError = message;
+            runtimeSetupMessage = message;
+            console.error("Failed to prepare the local runtime:", err);
+            return false;
+        } finally {
+            isPreparingRuntime = false;
+        }
+    }
+
+    async function handleRetryRuntimeSetup() {
+        const succeeded = await ensureRuntimeDependencies();
+        if (succeeded) {
+            await syncModelStatus();
         }
     }
 
@@ -2197,22 +2260,14 @@
 
     onMount(() => {
         void (async () => {
-            const restoredContacts = await loadContactsFromStorage();
-            contacts = restoredContacts.contacts;
-            selectedContactId = restoredContacts.selectedContactId;
-            persistContactsMetadata();
-            await syncSelectedContactPrompt();
-            await restoreModelPreferences();
-            await syncModelStatus();
-        })();
-
-        healthCheckInterval = window.setInterval(() => {
-            void syncModelStatus();
-        }, 5000);
-
-        void (async () => {
             try {
                 eventUnlisteners = await Promise.all([
+                    listen<RuntimeSetupStatusEvent>(
+                        "runtime-setup-status",
+                        ({ payload }) => {
+                            applyRuntimeSetupEvent(payload);
+                        },
+                    ),
                     listen<CsmAudioStartEvent>(
                         "csm-audio-start",
                         ({ payload }) => {
@@ -2276,7 +2331,8 @@
                         }
                     }),
                     listen<CsmErrorEvent>("csm-error", ({ payload }) => {
-                        console.error("CSM error:", payload.message);
+                        const message = normalizeErrorMessage(payload.message);
+                        console.error("CSM error:", message);
                         void syncModelStatus();
                         if (
                             payload.request_id == null ||
@@ -2287,6 +2343,9 @@
                             if (calling) {
                                 updateStageAfterPlaybackStateChange();
                             }
+                        }
+                        if (calling && payload.request_id == null) {
+                            alert(`OpenDuck error.\n${message}`);
                         }
                     }),
                     listen<CsmStatusEvent>("csm-status", ({ payload }) => {
@@ -2367,7 +2426,20 @@
             } catch (err) {
                 console.error("Failed to register Tauri event listeners:", err);
             }
+
+            const restoredContacts = await loadContactsFromStorage();
+            contacts = restoredContacts.contacts;
+            selectedContactId = restoredContacts.selectedContactId;
+            persistContactsMetadata();
+            await syncSelectedContactPrompt();
+            await restoreModelPreferences();
+            await ensureRuntimeDependencies();
+            await syncModelStatus();
         })();
+
+        healthCheckInterval = window.setInterval(() => {
+            void syncModelStatus();
+        }, 5000);
     });
 
     onDestroy(() => {
@@ -2401,6 +2473,30 @@
 
     {#if !calling}
         <div class="model-tags" class:dimmed={showContactsPopup}>
+            {#if showRuntimeSetupBanner}
+                <div
+                    class="runtime-setup-banner"
+                    class:error={!!runtimeSetupError}
+                >
+                    <div class="runtime-setup-copy">
+                        <span class="runtime-setup-title"
+                            >{runtimeSetupTitle}</span
+                        >
+                        <span class="runtime-setup-detail"
+                            >{runtimeSetupError ?? runtimeSetupMessage}</span
+                        >
+                    </div>
+                    {#if runtimeSetupError}
+                        <button
+                            type="button"
+                            class="utility-btn runtime-setup-action"
+                            onclick={handleRetryRuntimeSetup}
+                        >
+                            Retry
+                        </button>
+                    {/if}
+                </div>
+            {/if}
             <div class="model-actions">
                 <div
                     class="tooltip-shell variant-select-shell model-preset-shell"

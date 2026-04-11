@@ -4,6 +4,17 @@
 # Find the bundled python_env relative to the sidecar executable
 # sidecars can be in src-tauri/bin (dev) or src-tauri/target/debug (dev run) or .app/Contents/MacOS (bundle)
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+RUNTIME_ROOT="${OPEN_DUCK_RUNTIME_ROOT:-}"
+
+# 0. User runtime location provided by the app at startup.
+RUNTIME_PYTHON_HOME=""
+RUNTIME_PYTHON=""
+RUNTIME_GEMMA_SITE_PACKAGES=""
+if [ -n "$RUNTIME_ROOT" ]; then
+    RUNTIME_PYTHON_HOME="$RUNTIME_ROOT/python_env"
+    RUNTIME_PYTHON="$RUNTIME_PYTHON_HOME/bin/python3"
+    RUNTIME_GEMMA_SITE_PACKAGES="$RUNTIME_PYTHON_HOME/venv/lib/python3.11/site-packages"
+fi
 
 # 1. Bundled location (macOS .app)
 BUNDLED_PYTHON_HOME="$BASE_DIR/../Resources/resources/python_env"
@@ -25,7 +36,11 @@ DEV_PYTHON_HOME_3="/Users/waiyip/Documents/CS/openduck/src-tauri/resources/pytho
 DEV_PYTHON_3="$DEV_PYTHON_HOME_3/bin/python3"
 DEV_GEMMA_SITE_PACKAGES_3="$DEV_PYTHON_HOME_3/venv/lib/python3.11/site-packages"
 
-if [ -f "$BUNDLED_PYTHON" ]; then
+if [ -f "$RUNTIME_PYTHON" ]; then
+    PYTHON_EXE="$RUNTIME_PYTHON"
+    PYTHON_HOME="$RUNTIME_PYTHON_HOME"
+    GEMMA_SITE_PACKAGES="$RUNTIME_GEMMA_SITE_PACKAGES"
+elif [ -f "$BUNDLED_PYTHON" ]; then
     PYTHON_EXE="$BUNDLED_PYTHON"
     PYTHON_HOME="$BUNDLED_PYTHON_HOME"
     GEMMA_SITE_PACKAGES="$BUNDLED_GEMMA_SITE_PACKAGES"
@@ -60,12 +75,15 @@ if [ -d "$GEMMA_SITE_PACKAGES" ]; then
     fi
 fi
 
+PATCH_SCRIPT_ENV="${OPEN_DUCK_PATCH_SERVER_SCRIPT:-}"
 PATCH_SCRIPT_BUNDLED="$BASE_DIR/../Resources/resources/patch_mlx_vlm.py"
 PATCH_SCRIPT_DEV_1="$BASE_DIR/../resources/patch_mlx_vlm.py"
 PATCH_SCRIPT_DEV_2="$BASE_DIR/../../../resources/patch_mlx_vlm.py"
 PATCH_SCRIPT_DEV_3="/Users/waiyip/Documents/CS/openduck/src-tauri/resources/patch_mlx_vlm.py"
 
-if [ -f "$PATCH_SCRIPT_BUNDLED" ]; then
+if [ -n "$PATCH_SCRIPT_ENV" ] && [ -f "$PATCH_SCRIPT_ENV" ]; then
+    PATCH_SCRIPT="$PATCH_SCRIPT_ENV"
+elif [ -f "$PATCH_SCRIPT_BUNDLED" ]; then
     PATCH_SCRIPT="$PATCH_SCRIPT_BUNDLED"
 elif [ -f "$PATCH_SCRIPT_DEV_1" ]; then
     PATCH_SCRIPT="$PATCH_SCRIPT_DEV_1"

@@ -133,6 +133,57 @@ body {
         pointer-events: none;
     }
 
+    .runtime-setup-banner {
+        width: 100%;
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 12px;
+        padding: 14px 16px;
+        border-radius: 24px;
+        background: rgba(29, 32, 18, 0.92);
+        border: 1px solid rgba(255, 211, 107, 0.24);
+        box-shadow:
+            0 12px 30px rgba(0, 0, 0, 0.28),
+            0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+        backdrop-filter: blur(18px);
+    }
+
+    .runtime-setup-banner.error {
+        background: rgba(43, 21, 21, 0.92);
+        border-color: rgba(255, 127, 127, 0.28);
+    }
+
+    .runtime-setup-copy {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .runtime-setup-title {
+        color: rgba(255, 252, 240, 0.96);
+        font-size: 0.9rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+    }
+
+    .runtime-setup-detail {
+        color: rgba(255, 247, 223, 0.78);
+        font-size: 0.8rem;
+        line-height: 1.4;
+    }
+
+    .runtime-setup-banner.error .runtime-setup-detail {
+        color: rgba(255, 214, 214, 0.88);
+    }
+
+    .runtime-setup-action {
+        flex-shrink: 0;
+    }
+
     .model-actions {
         display: flex;
         align-items: center;

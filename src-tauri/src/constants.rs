@@ -53,6 +53,7 @@ pub(crate) const CALL_STAGE_EVENT: &str = "call-stage";
 pub(crate) const TRANSCRIPT_EVENT: &str = "transcript-ready";
 pub(crate) const ASSISTANT_RESPONSE_EVENT: &str = "assistant-response";
 pub(crate) const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";
+pub(crate) const RUNTIME_SETUP_EVENT: &str = "runtime-setup-status";
 pub(crate) const SCREEN_CAPTURE_EVENT: &str = "screen-capture";
 pub(crate) const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 pub(crate) const CSM_STDERR_TAIL_LIMIT: usize = 8;

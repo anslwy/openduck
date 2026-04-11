@@ -1,25 +1,39 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+STATUS_PREFIX="OPEN_DUCK_STATUS:"
+
+status() {
+    printf '%s %s\n' "$STATUS_PREFIX" "$1"
+}
+
+# Allow the packaged app to install its Python runtime into a writable
+# application data directory instead of the read-only app bundle.
+RESOURCE_FILES_DIR="${OPEN_DUCK_RESOURCE_FILES_DIR:-$REPO_ROOT/src-tauri/resources}"
+RUNTIME_ROOT_DIR="${OPEN_DUCK_RUNTIME_ROOT:-$REPO_ROOT/src-tauri/resources}"
+TEMP_DIR="${OPEN_DUCK_TEMP_DIR:-$REPO_ROOT}"
 
 # Define directories
-RESOURCES_DIR="$REPO_ROOT/src-tauri/resources"
-PYTHON_ENV_DIR="$RESOURCES_DIR/python_env"
-CSM_ENV_DIR="$RESOURCES_DIR/csm_env"
-KOKORO_ENV_DIR="$RESOURCES_DIR/kokoro_env"
-COSYVOICE_ENV_DIR="$RESOURCES_DIR/cosyvoice_env"
-STT_ENV_DIR="$RESOURCES_DIR/stt_env"
-PORTABLE_PYTHON_TAR="$REPO_ROOT/python-standalone.tar.gz"
+PYTHON_ENV_DIR="$RUNTIME_ROOT_DIR/python_env"
+CSM_ENV_DIR="$RUNTIME_ROOT_DIR/csm_env"
+KOKORO_ENV_DIR="$RUNTIME_ROOT_DIR/kokoro_env"
+COSYVOICE_ENV_DIR="$RUNTIME_ROOT_DIR/cosyvoice_env"
+STT_ENV_DIR="$RUNTIME_ROOT_DIR/stt_env"
+PORTABLE_PYTHON_TAR="$TEMP_DIR/python-standalone.tar.gz"
 MLX_VLM_REPO="https://github.com/Blaizzy/mlx-vlm.git"
 MLX_VLM_REF="${MLX_VLM_REF:-23e1dffd224488141a4f022b6d21d6a730f11507}"
 CSM_MLX_REPO="https://github.com/senstella/csm-mlx"
 MLX_AUDIO_VERSION="${MLX_AUDIO_VERSION:-0.2.5}"
 MLX_AUDIO_PLUS_VERSION="${MLX_AUDIO_PLUS_VERSION:-0.1.2}"
 MLX_AUDIO_STT_VERSION="${MLX_AUDIO_STT_VERSION:-0.3.1}"
-PATCH_SERVER_SCRIPT="$RESOURCES_DIR/patch_mlx_vlm.py"
+PATCH_SERVER_SCRIPT="${OPEN_DUCK_PATCH_SERVER_SCRIPT:-$RESOURCE_FILES_DIR/patch_mlx_vlm.py}"
 
-echo "Stopping existing MLX server processes..."
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PYTHONDONTWRITEBYTECODE=1
+
+status "Stopping existing MLX server processes..."
 SERVER_PIDS="$(pgrep -f "$PATCH_SERVER_SCRIPT" || true)"
 if [ -n "$SERVER_PIDS" ]; then
     for pid in $SERVER_PIDS; do
@@ -37,38 +51,39 @@ fi
 
 # Clean up existing environment if it exists to ensure a clean 3.11 install
 if [ -d "$PYTHON_ENV_DIR" ]; then
-    echo "Removing old Python environment..."
+    status "Removing old Python environment..."
     rm -rf "$PYTHON_ENV_DIR"
 fi
 if [ -d "$CSM_ENV_DIR" ]; then
-    echo "Removing old CSM environment..."
+    status "Removing old CSM environment..."
     rm -rf "$CSM_ENV_DIR"
 fi
 if [ -d "$KOKORO_ENV_DIR" ]; then
-    echo "Removing old Kokoro environment..."
+    status "Removing old Kokoro environment..."
     rm -rf "$KOKORO_ENV_DIR"
 fi
 if [ -d "$COSYVOICE_ENV_DIR" ]; then
-    echo "Removing old CosyVoice environment..."
+    status "Removing old CosyVoice environment..."
     rm -rf "$COSYVOICE_ENV_DIR"
 fi
 if [ -d "$STT_ENV_DIR" ]; then
-    echo "Removing old STT environment..."
+    status "Removing old STT environment..."
     rm -rf "$STT_ENV_DIR"
 fi
 
-mkdir -p "$RESOURCES_DIR"
+mkdir -p "$RUNTIME_ROOT_DIR"
+mkdir -p "$TEMP_DIR"
 
 # Download a portable Python 3.11 for macOS (M1/M2/M3)
 # Using indygreg's python-build-standalone
-echo "Downloading portable Python 3.11..."
+status "Downloading portable Python 3.11..."
 # Link for aarch64-apple-darwin
 PYTHON_URL="https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-aarch64-apple-darwin-install_only.tar.gz"
 
 curl -L "$PYTHON_URL" -o "$PORTABLE_PYTHON_TAR"
 
 # Extract Python
-echo "Extracting Python..."
+status "Extracting Python..."
 mkdir -p "$PYTHON_ENV_DIR"
 tar -xzf "$PORTABLE_PYTHON_TAR" -C "$PYTHON_ENV_DIR" --strip-components=1
 
@@ -76,44 +91,44 @@ tar -xzf "$PORTABLE_PYTHON_TAR" -C "$PYTHON_ENV_DIR" --strip-components=1
 rm "$PORTABLE_PYTHON_TAR"
 
 # Create isolated virtual environments for Gemma and speech backends.
-echo "Creating Gemma virtual environment..."
+status "Creating Gemma virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$PYTHON_ENV_DIR/venv"
-echo "Creating CSM virtual environment..."
+status "Creating CSM virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$CSM_ENV_DIR/venv"
-echo "Creating Kokoro virtual environment..."
+status "Creating Kokoro virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$KOKORO_ENV_DIR/venv"
-echo "Creating CosyVoice virtual environment..."
+status "Creating CosyVoice virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$COSYVOICE_ENV_DIR/venv"
-echo "Creating STT virtual environment..."
+status "Creating STT virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$STT_ENV_DIR/venv"
 
 # Install Gemma server dependencies into the Gemma venv.
-echo "Installing mlx-vlm into the Gemma environment..."
+status "Installing mlx-vlm into the Gemma environment..."
 "$PYTHON_ENV_DIR/venv/bin/pip" install -U pip
 "$PYTHON_ENV_DIR/venv/bin/pip" install soundfile
-echo "Installing mlx-vlm from $MLX_VLM_REPO @ $MLX_VLM_REF..."
+status "Installing mlx-vlm from $MLX_VLM_REPO @ $MLX_VLM_REF..."
 "$PYTHON_ENV_DIR/venv/bin/pip" install "git+$MLX_VLM_REPO@$MLX_VLM_REF"
 
 # Install speech backends into isolated venvs because the TTS stacks
 # have different MLX dependency ranges and package names.
-echo "Installing csm-mlx into the CSM environment..."
+status "Installing csm-mlx into the CSM environment..."
 "$CSM_ENV_DIR/venv/bin/pip" install -U pip
 "$CSM_ENV_DIR/venv/bin/pip" install "git+$CSM_MLX_REPO" --upgrade
-echo "Installing mlx-audio into the Kokoro environment..."
+status "Installing mlx-audio into the Kokoro environment..."
 "$KOKORO_ENV_DIR/venv/bin/pip" install -U pip
 "$KOKORO_ENV_DIR/venv/bin/pip" install "mlx-audio==$MLX_AUDIO_VERSION" soundfile
-echo "Installing Kokoro English G2P model..."
+status "Installing Kokoro English G2P model..."
 "$KOKORO_ENV_DIR/venv/bin/python3" -m spacy download en_core_web_sm
-echo "Installing mlx-audio-plus into the CosyVoice environment..."
+status "Installing mlx-audio-plus into the CosyVoice environment..."
 "$COSYVOICE_ENV_DIR/venv/bin/pip" install -U pip
 "$COSYVOICE_ENV_DIR/venv/bin/pip" install "mlx-audio-plus==$MLX_AUDIO_PLUS_VERSION" soundfile
-echo "Installing mlx-audio into the STT environment..."
+status "Installing mlx-audio into the STT environment..."
 "$STT_ENV_DIR/venv/bin/pip" install -U pip
 "$STT_ENV_DIR/venv/bin/pip" install "mlx-audio==$MLX_AUDIO_STT_VERSION" soundfile
 
-echo "Setup complete!"
-echo "Gemma environment: $PYTHON_ENV_DIR/venv"
-echo "CSM environment: $CSM_ENV_DIR/venv"
-echo "Kokoro environment: $KOKORO_ENV_DIR/venv"
-echo "CosyVoice environment: $COSYVOICE_ENV_DIR/venv"
-echo "STT environment: $STT_ENV_DIR/venv"
+status "Setup complete!"
+status "Gemma environment: $PYTHON_ENV_DIR/venv"
+status "CSM environment: $CSM_ENV_DIR/venv"
+status "Kokoro environment: $KOKORO_ENV_DIR/venv"
+status "CosyVoice environment: $COSYVOICE_ENV_DIR/venv"
+status "STT environment: $STT_ENV_DIR/venv"

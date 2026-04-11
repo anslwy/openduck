@@ -86,6 +86,12 @@ pub(crate) struct ModelDownloadEvent {
     pub(crate) indeterminate: bool,
 }
 
+#[derive(Clone, Serialize)]
+pub(crate) struct RuntimeSetupStatusEvent {
+    pub(crate) phase: String,
+    pub(crate) message: String,
+}
+
 pub(crate) fn emit_csm_error(app_handle: &AppHandle, payload: CsmErrorEvent) {
     if let Err(err) = app_handle.emit(CSM_ERROR_EVENT, payload) {
         error!("Failed to emit CSM error event: {}", err);
@@ -165,5 +171,11 @@ pub(crate) fn emit_screen_capture_event(app_handle: &AppHandle, phase: &str, mes
 pub(crate) fn emit_model_download_event(app_handle: &AppHandle, payload: ModelDownloadEvent) {
     if let Err(err) = app_handle.emit(MODEL_DOWNLOAD_EVENT, payload) {
         error!("Failed to emit model download event: {}", err);
+    }
+}
+
+pub(crate) fn emit_runtime_setup_status(app_handle: &AppHandle, payload: RuntimeSetupStatusEvent) {
+    if let Err(err) = app_handle.emit(RUNTIME_SETUP_EVENT, payload) {
+        error!("Failed to emit runtime setup status event: {}", err);
     }
 }

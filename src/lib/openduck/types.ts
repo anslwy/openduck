@@ -85,6 +85,11 @@ export type ModelDownloadProgressEvent = {
     indeterminate: boolean;
 };
 
+export type RuntimeSetupStatusEvent = {
+    phase: "starting" | "progress" | "completed" | "error";
+    message: string;
+};
+
 export type ModelMemoryUsageEntry = {
     key: DownloadModelKey;
     label: string;
