@@ -9,6 +9,8 @@ const PLAYBACK_REFERENCE_CANDIDATE_DELAYS = [
 ];
 const MIN_REFERENCE_ENERGY = 1e-8;
 const MIN_MIC_ENERGY = 1e-8;
+// Slightly above the Rust silence window so a muted turn can still flush.
+const POST_MUTE_DRAIN_QUANTA = 160;
 
 function getPlaybackReferenceState() {
   if (!globalThis[PLAYBACK_REFERENCE_STATE_KEY]) {
@@ -91,12 +93,43 @@ function selectPlaybackReference(inputSamples) {
 }
 
 class AudioProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.muted = false;
+    this.postMuteDrainQuantaRemaining = 0;
+
+    this.port.onmessage = (event) => {
+      if (event.data?.type !== "set-muted") {
+        return;
+      }
+
+      this.muted = Boolean(event.data.muted);
+      this.postMuteDrainQuantaRemaining = this.muted
+        ? POST_MUTE_DRAIN_QUANTA
+        : 0;
+    };
+  }
+
   process(inputs) {
     const input = inputs[0];
     if (input && input.length > 0) {
       const inputChannelData = input[0];
       if (inputChannelData.length > 0) {
-        const inputData = new Float32Array(inputChannelData);
+        if (this.muted && this.postMuteDrainQuantaRemaining <= 0) {
+          return true;
+        }
+
+        const inputData = this.muted
+          ? new Float32Array(inputChannelData.length)
+          : new Float32Array(inputChannelData);
+
+        if (this.muted) {
+          this.postMuteDrainQuantaRemaining = Math.max(
+            0,
+            this.postMuteDrainQuantaRemaining - 1,
+          );
+        }
+
         const { playbackActive, playbackReferenceData } =
           selectPlaybackReference(inputData);
         const message = {

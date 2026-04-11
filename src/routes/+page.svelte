@@ -288,6 +288,10 @@
     const modelPresetTooltip = $derived(
         getModelPresetDescription(activeModelPreset),
     );
+    const muteButtonLabel = $derived(
+        micMuted ? "Unmute microphone" : "Mute microphone",
+    );
+    const muteButtonTitle = $derived(`${muteButtonLabel} (Space)`);
     const csmQuantizeAvailable = $derived(selectedCsmModel === "expressiva_1b");
     const loadAllMissingDownloads = $derived(
         (() => {
@@ -396,6 +400,14 @@
     function setCallStage(phase: CallStagePhase, message: string) {
         callStagePhase = phase;
         callStageMessage = message;
+    }
+
+    function syncCaptureMutedState(muted: boolean) {
+        if (!captureProcessor) {
+            return;
+        }
+
+        captureProcessor.port.postMessage({ type: "set-muted", muted });
     }
 
     function syncTtsPlaybackState(active: boolean) {
@@ -891,7 +903,39 @@
         }
     }
 
+    function shouldIgnoreGlobalShortcutTarget(target: EventTarget | null) {
+        if (!(target instanceof HTMLElement)) {
+            return false;
+        }
+
+        return (
+            target.isContentEditable ||
+            target.closest(
+                "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
+            ) !== null
+        );
+    }
+
     function handleWindowKeydown(event: KeyboardEvent) {
+        if (event.defaultPrevented) {
+            return;
+        }
+
+        if (
+            calling &&
+            event.code === "Space" &&
+            !event.repeat &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey &&
+            !shouldIgnoreGlobalShortcutTarget(event.target)
+        ) {
+            event.preventDefault();
+            toggleMic();
+            return;
+        }
+
         if (event.key !== "Escape") {
             return;
         }
@@ -1388,9 +1432,10 @@
             );
             silentCaptureSink = captureContext.createGain();
             silentCaptureSink.gain.value = 0;
+            syncCaptureMutedState(micMuted);
 
             captureProcessor.port.onmessage = (event) => {
-                if (micMuted || !calling) {
+                if (!calling) {
                     return;
                 }
 
@@ -1860,6 +1905,7 @@
 
     function toggleMic() {
         micMuted = !micMuted;
+        syncCaptureMutedState(micMuted);
         void invoke("set_call_muted", { muted: micMuted }).catch((err) =>
             console.error("Failed to sync tray mute state", err),
         );
@@ -2751,59 +2797,76 @@
                             /></svg
                         >
                     </button>
-                    <button
-                        class="icon-btn"
-                        class:active={!micMuted}
-                        type="button"
-                        onclick={toggleMic}
-                        aria-label={micMuted
-                            ? "Unmute microphone"
-                            : "Mute microphone"}
-                    >
-                        {#if micMuted}
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                width="22"
-                                height="22"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2.5"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                ><line x1="1" y1="1" x2="23" y2="23" /><path
-                                    d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"
-                                /><path
-                                    d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"
-                                /><line x1="12" y1="19" x2="12" y2="23" /><line
-                                    x1="8"
-                                    y1="23"
-                                    x2="16"
-                                    y2="23"
-                                /></svg
-                            >
-                        {:else}
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                width="22"
-                                height="22"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2.5"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                ><path
-                                    d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"
-                                /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line
-                                    x1="12"
-                                    y1="19"
-                                    x2="12"
-                                    y2="23"
-                                /><line x1="8" y1="23" x2="16" y2="23" /></svg
-                            >
-                        {/if}
-                    </button>
+                    <div class="tooltip-shell control-tooltip-shell">
+                        <button
+                            class="icon-btn"
+                            class:active={!micMuted}
+                            class:muted={micMuted}
+                            type="button"
+                            onclick={toggleMic}
+                            aria-label={muteButtonLabel}
+                            aria-keyshortcuts="Space"
+                            title={muteButtonTitle}
+                        >
+                            {#if micMuted}
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="22"
+                                    height="22"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><line x1="1" y1="1" x2="23" y2="23" /><path
+                                        d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"
+                                    /><path
+                                        d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"
+                                    /><line
+                                        x1="12"
+                                        y1="19"
+                                        x2="12"
+                                        y2="23"
+                                    /><line
+                                        x1="8"
+                                        y1="23"
+                                        x2="16"
+                                        y2="23"
+                                    /></svg
+                                >
+                            {:else}
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="22"
+                                    height="22"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><path
+                                        d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"
+                                    /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line
+                                        x1="12"
+                                        y1="19"
+                                        x2="12"
+                                        y2="23"
+                                    /><line
+                                        x1="8"
+                                        y1="23"
+                                        x2="16"
+                                        y2="23"
+                                    /></svg
+                                >
+                            {/if}
+                        </button>
+                        <div class="tooltip-bubble control-tooltip">
+                            <span>{muteButtonLabel}</span>
+                            <span class="tooltip-shortcut">Space</span>
+                        </div>
+                    </div>
                     <button
                         type="button"
                         class="icon-btn interrupt-btn"
