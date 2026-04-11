@@ -130,6 +130,8 @@
         csmModel: CsmModelVariant;
         sttModel: SttModelVariant;
     };
+    type ModelSelection = Omit<StoredModelPreferences, "version">;
+    type ModelPreset = "lite" | "normal" | "realistic" | "custom";
 
     const DEFAULT_VOICE_SYSTEM_PROMPT =
         "You are in a live voice call. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Respond with short sentences and each sentence must contain less than 20 words";
@@ -141,6 +143,42 @@
     const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
     const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
     const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
+    const MODEL_PRESETS: Record<
+        Exclude<ModelPreset, "custom">,
+        {
+            label: string;
+            description: string;
+            selection: ModelSelection;
+        }
+    > = {
+        lite: {
+            label: "Lite (~4GB)",
+            description: "Gemma 2B + STT Gemma + Kokoro",
+            selection: {
+                gemmaVariant: "e2b",
+                csmModel: "kokoro_82m",
+                sttModel: "gemma",
+            },
+        },
+        normal: {
+            label: "Normal (~10GB)",
+            description: "Gemma 4B + Whisper + Kokoro",
+            selection: {
+                gemmaVariant: "e4b",
+                csmModel: "kokoro_82m",
+                sttModel: "whisper_large_v3_turbo",
+            },
+        },
+        realistic: {
+            label: "Realistic (~12GB)",
+            description: "Gemma 4B + Whisper + CSM-1B",
+            selection: {
+                gemmaVariant: "e4b",
+                csmModel: "expressiva_1b",
+                sttModel: "whisper_large_v3_turbo",
+            },
+        },
+    };
 
     let contactIconsDbPromise: Promise<IDBDatabase> | null = null;
 
@@ -208,6 +246,41 @@
 
     function isSttModelVariant(value: unknown): value is SttModelVariant {
         return value === "gemma" || value === "whisper_large_v3_turbo";
+    }
+
+    function selectionsMatch(
+        left: ModelSelection,
+        right: ModelSelection,
+    ): boolean {
+        return (
+            left.gemmaVariant === right.gemmaVariant &&
+            left.csmModel === right.csmModel &&
+            left.sttModel === right.sttModel
+        );
+    }
+
+    function resolveModelPreset(selection: ModelSelection): ModelPreset {
+        if (selectionsMatch(selection, MODEL_PRESETS.lite.selection)) {
+            return "lite";
+        }
+
+        if (selectionsMatch(selection, MODEL_PRESETS.normal.selection)) {
+            return "normal";
+        }
+
+        if (selectionsMatch(selection, MODEL_PRESETS.realistic.selection)) {
+            return "realistic";
+        }
+
+        return "custom";
+    }
+
+    function getModelPresetDescription(preset: ModelPreset) {
+        if (preset === "custom") {
+            return "Custom uses the current manual model combination.";
+        }
+
+        return MODEL_PRESETS[preset].description;
     }
 
     function loadModelPreferencesFromStorage(): StoredModelPreferences {
@@ -503,6 +576,7 @@
     let selectedGemmaVariant = $state<GemmaVariant>(DEFAULT_GEMMA_VARIANT);
     let selectedCsmModel = $state<CsmModelVariant>(DEFAULT_CSM_MODEL);
     let selectedSttModel = $state<SttModelVariant>(DEFAULT_STT_MODEL);
+    let pendingModelPreset = $state<ModelPreset | null>(null);
     let csmDownloadMessage = $state("Preparing download...");
     let csmDownloadProgress = $state<number | null>(null);
     let csmDownloadIndeterminate = $state(true);
@@ -575,6 +649,16 @@
             .padStart(2, "0")}:${(time % 60).toString().padStart(2, "0")}`,
     );
     const sttUsesGemma = $derived(selectedSttModel === "gemma");
+    const resolvedModelPreset = $derived(
+        resolveModelPreset({
+            gemmaVariant: selectedGemmaVariant,
+            csmModel: selectedCsmModel,
+            sttModel: selectedSttModel,
+        }),
+    );
+    const activeModelPreset = $derived(
+        pendingModelPreset ?? resolvedModelPreset,
+    );
     const effectiveSttLoaded = $derived(
         sttUsesGemma ? isGemmaLoaded : isSttLoaded,
     );
@@ -618,6 +702,15 @@
             (selectedSttModel === "whisper_large_v3_turbo" && isSttLoaded),
     );
     let conversationLogViewport = $state<HTMLDivElement | null>(null);
+    const modelPresetOptions: Array<{
+        value: ModelPreset;
+        label: string;
+    }> = [
+        { value: "lite", label: MODEL_PRESETS.lite.label },
+        { value: "normal", label: MODEL_PRESETS.normal.label },
+        { value: "realistic", label: MODEL_PRESETS.realistic.label },
+        { value: "custom", label: "Custom" },
+    ];
     const gemmaVariantOptions: Array<{
         value: GemmaVariant;
         label: string;
@@ -668,6 +761,9 @@
             ? "Use the loaded Gemma model for transcription. There is no separate STT model to load."
             : "Use mlx-audio with mlx-community/whisper-large-v3-turbo-asr-fp16 for transcription. Download and load it separately from Gemma.",
     );
+    const modelPresetTooltip = $derived(
+        getModelPresetDescription(activeModelPreset),
+    );
     const csmQuantizeAvailable = $derived(selectedCsmModel === "expressiva_1b");
     const loadAllMissingDownloads = $derived(
         (() => {
@@ -715,6 +811,9 @@
             isUnloadingStt,
     );
     const loadAllDisabled = $derived(loadAllBusy || !loadAllNeedsAction);
+    const presetSelectDisabled = $derived(
+        loadAllBusy || isUpdatingCsmQuantize || pendingModelPreset !== null,
+    );
     const loadAllButtonLabel = $derived(
         isLoadingAll
             ? "Loading All..."
@@ -941,6 +1040,30 @@
         );
     }
 
+    function getCurrentModelSelection(): ModelSelection {
+        return {
+            gemmaVariant: selectedGemmaVariant,
+            csmModel: selectedCsmModel,
+            sttModel: selectedSttModel,
+        };
+    }
+
+    async function setGemmaVariantSelection(nextVariant: GemmaVariant) {
+        await invoke("set_gemma_variant", { variant: nextVariant });
+    }
+
+    async function setCsmModelSelection(nextVariant: CsmModelVariant) {
+        await invoke("set_csm_model_variant", { variant: nextVariant });
+        resetDownloadState("csm");
+        csmLoadMessage = "Starting worker...";
+    }
+
+    async function setSttModelSelection(nextVariant: SttModelVariant) {
+        await invoke("set_stt_model_variant", { variant: nextVariant });
+        resetDownloadState("stt");
+        sttLoadMessage = "Starting worker...";
+    }
+
     async function restoreModelPreferences() {
         const restoredPreferences = loadModelPreferencesFromStorage();
 
@@ -949,25 +1072,19 @@
         selectedSttModel = restoredPreferences.sttModel;
 
         try {
-            await invoke("set_gemma_variant", {
-                variant: restoredPreferences.gemmaVariant,
-            });
+            await setGemmaVariantSelection(restoredPreferences.gemmaVariant);
         } catch (err) {
             console.error("Failed to restore Gemma variant:", err);
         }
 
         try {
-            await invoke("set_csm_model_variant", {
-                variant: restoredPreferences.csmModel,
-            });
+            await setCsmModelSelection(restoredPreferences.csmModel);
         } catch (err) {
             console.error("Failed to restore speech model:", err);
         }
 
         try {
-            await invoke("set_stt_model_variant", {
-                variant: restoredPreferences.sttModel,
-            });
+            await setSttModelSelection(restoredPreferences.sttModel);
         } catch (err) {
             console.error("Failed to restore STT model:", err);
         }
@@ -1577,7 +1694,7 @@
         selectedGemmaVariant = nextVariant;
 
         try {
-            await invoke("set_gemma_variant", { variant: nextVariant });
+            await setGemmaVariantSelection(nextVariant);
             await syncModelStatus();
         } catch (err) {
             selectedGemmaVariant = previousVariant;
@@ -1594,9 +1711,7 @@
         selectedCsmModel = nextVariant;
 
         try {
-            await invoke("set_csm_model_variant", { variant: nextVariant });
-            resetDownloadState("csm");
-            csmLoadMessage = "Starting worker...";
+            await setCsmModelSelection(nextVariant);
             await syncModelStatus();
         } catch (err) {
             selectedCsmModel = previousVariant;
@@ -1613,14 +1728,79 @@
         selectedSttModel = nextVariant;
 
         try {
-            await invoke("set_stt_model_variant", { variant: nextVariant });
-            resetDownloadState("stt");
-            sttLoadMessage = "Starting worker...";
+            await setSttModelSelection(nextVariant);
             await syncModelStatus();
         } catch (err) {
             selectedSttModel = previousVariant;
             console.error("Failed to update STT model:", err);
             alert(`Failed to update the STT model.\n${String(err)}`);
+        }
+    }
+
+    async function handleModelPresetChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        const nextPreset = target.value as ModelPreset;
+
+        if (nextPreset === "custom" || pendingModelPreset) {
+            return;
+        }
+
+        const nextSelection = MODEL_PRESETS[nextPreset].selection;
+        const previousSelection = getCurrentModelSelection();
+        pendingModelPreset = nextPreset;
+
+        try {
+            await syncModelStatus();
+
+            const currentSelection = getCurrentModelSelection();
+            const shouldUnloadStt =
+                isSttLoaded &&
+                (currentSelection.sttModel !== nextSelection.sttModel ||
+                    nextSelection.sttModel === "gemma");
+            const shouldUnloadCsm =
+                isCsmLoaded &&
+                currentSelection.csmModel !== nextSelection.csmModel;
+            const shouldUnloadGemma =
+                isGemmaLoaded &&
+                currentSelection.gemmaVariant !== nextSelection.gemmaVariant;
+
+            if (shouldUnloadStt) {
+                await handleUnloadStt({ suppressAlert: true });
+            }
+
+            if (shouldUnloadCsm) {
+                await handleUnloadCsm({ suppressAlert: true });
+            }
+
+            if (shouldUnloadGemma) {
+                await handleUnloadGemma({ suppressAlert: true });
+            }
+
+            if (currentSelection.gemmaVariant !== nextSelection.gemmaVariant) {
+                selectedGemmaVariant = nextSelection.gemmaVariant;
+                await setGemmaVariantSelection(nextSelection.gemmaVariant);
+            }
+
+            if (currentSelection.csmModel !== nextSelection.csmModel) {
+                selectedCsmModel = nextSelection.csmModel;
+                await setCsmModelSelection(nextSelection.csmModel);
+            }
+
+            if (currentSelection.sttModel !== nextSelection.sttModel) {
+                selectedSttModel = nextSelection.sttModel;
+                await setSttModelSelection(nextSelection.sttModel);
+            }
+        } catch (err) {
+            selectedGemmaVariant = previousSelection.gemmaVariant;
+            selectedCsmModel = previousSelection.csmModel;
+            selectedSttModel = previousSelection.sttModel;
+            console.error("Failed to apply model preset:", err);
+            alert(
+                `Failed to apply the ${MODEL_PRESETS[nextPreset].label} preset.\n${normalizeErrorMessage(err)}`,
+            );
+        } finally {
+            pendingModelPreset = null;
+            await syncModelStatus();
         }
     }
 
@@ -2352,7 +2532,9 @@
         } catch (err) {
             isCancellingCsmDownload = false;
             console.error("Failed to cancel speech model download:", err);
-            alert(`Failed to cancel ${selectedCsmModelLabel} download.\n${String(err)}`);
+            alert(
+                `Failed to cancel ${selectedCsmModelLabel} download.\n${String(err)}`,
+            );
         }
     }
 
@@ -2371,7 +2553,9 @@
         } catch (err) {
             isCancellingSttDownload = false;
             console.error("Failed to cancel STT model download:", err);
-            alert(`Failed to cancel ${selectedSttModelLabel} download.\n${String(err)}`);
+            alert(
+                `Failed to cancel ${selectedSttModelLabel} download.\n${String(err)}`,
+            );
         }
     }
 
@@ -2511,42 +2695,58 @@
         }
     }
 
-    async function handleUnloadGemma() {
+    async function handleUnloadGemma(options?: { suppressAlert?: boolean }) {
         isUnloadingGemma = true;
         try {
             await invoke("stop_server");
             isGemmaLoaded = false;
         } catch (err) {
             console.error("Unload Gemma failed:", err);
-            alert(`Failed to unload Gemma.\n${String(err)}`);
+            if (!options?.suppressAlert) {
+                alert(`Failed to unload Gemma.\n${String(err)}`);
+            } else {
+                throw err;
+            }
         } finally {
             isUnloadingGemma = false;
             await syncModelStatus();
         }
     }
 
-    async function handleUnloadCsm() {
+    async function handleUnloadCsm(options?: { suppressAlert?: boolean }) {
         isUnloadingCsm = true;
         try {
             await invoke("stop_csm_server");
             isCsmLoaded = false;
         } catch (err) {
             console.error("Unload speech model failed:", err);
-            alert(`Failed to unload ${selectedCsmModelLabel}.\n${String(err)}`);
+            if (!options?.suppressAlert) {
+                alert(
+                    `Failed to unload ${selectedCsmModelLabel}.\n${String(err)}`,
+                );
+            } else {
+                throw err;
+            }
         } finally {
             isUnloadingCsm = false;
             await syncModelStatus();
         }
     }
 
-    async function handleUnloadStt() {
+    async function handleUnloadStt(options?: { suppressAlert?: boolean }) {
         isUnloadingStt = true;
         try {
             await invoke("stop_stt_server");
             isSttLoaded = false;
         } catch (err) {
             console.error("Unload STT model failed:", err);
-            alert(`Failed to unload ${selectedSttModelLabel}.\n${String(err)}`);
+            if (!options?.suppressAlert) {
+                alert(
+                    `Failed to unload ${selectedSttModelLabel}.\n${String(err)}`,
+                );
+            } else {
+                throw err;
+            }
         } finally {
             isUnloadingStt = false;
             await syncModelStatus();
@@ -2705,9 +2905,12 @@
                             }
                         },
                     ),
-                    listen<ScreenCaptureEvent>("screen-capture", ({ payload }) => {
-                        applyScreenCaptureEvent(payload);
-                    }),
+                    listen<ScreenCaptureEvent>(
+                        "screen-capture",
+                        ({ payload }) => {
+                            applyScreenCaptureEvent(payload);
+                        },
+                    ),
                     listen<TrayEndCallEvent>("tray-end-call", () => {
                         if (calling) {
                             void handleEndCall();
@@ -2757,6 +2960,22 @@
     {#if !calling}
         <div class="model-tags" class:dimmed={showContactsPopup}>
             <div class="model-actions">
+                <div
+                    class="tooltip-shell variant-select-shell model-preset-shell"
+                >
+                    <select
+                        class="variant-select model-preset-select"
+                        value={activeModelPreset}
+                        aria-label="Model preset"
+                        title={modelPresetTooltip}
+                        disabled={presetSelectDisabled}
+                        onchange={handleModelPresetChange}
+                    >
+                        {#each modelPresetOptions as option}
+                            <option value={option.value}>{option.label}</option>
+                        {/each}
+                    </select>
+                </div>
                 <button
                     type="button"
                     class="utility-btn load-all-btn"
@@ -4043,7 +4262,9 @@
                             <path d="M6.5 11V6.5a1.5 1.5 0 0 1 3 0V11" />
                             <path d="M9.5 11V5a1.5 1.5 0 0 1 3 0v6" />
                             <path d="M12.5 11V4.5a1.5 1.5 0 0 1 3 0V11" />
-                            <path d="M15.5 11V6a1.5 1.5 0 0 1 3 0v7a6 6 0 0 1-6 6H11a5 5 0 0 1-4.64-3.14l-1.1-2.64a1.5 1.5 0 0 1 2.72-1.26L9.5 14V11" />
+                            <path
+                                d="M15.5 11V6a1.5 1.5 0 0 1 3 0v7a6 6 0 0 1-6 6H11a5 5 0 0 1-4.64-3.14l-1.1-2.64a1.5 1.5 0 0 1 2.72-1.26L9.5 14V11"
+                            />
                         </svg>
                     </button>
                 {/if}
@@ -4225,9 +4446,15 @@
 
     .model-actions {
         display: flex;
+        align-items: center;
         justify-content: flex-end;
+        gap: 10px;
         width: 100%;
         margin-bottom: 12px;
+    }
+
+    .model-preset-shell {
+        flex-shrink: 0;
     }
 
     .load-all-btn {
@@ -5203,6 +5430,10 @@
             background-color 0.2s ease,
             border-color 0.2s ease,
             color 0.2s ease;
+    }
+
+    .model-preset-select {
+        min-width: 170px;
     }
 
     .variant-select:hover:not(:disabled) {
