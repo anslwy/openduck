@@ -986,9 +986,10 @@
 
         void syncModelMemoryUsage();
         // Polling every 60 seconds
-        modelMemoryPollInterval = window.setInterval(() => {
-            void syncModelMemoryUsage();
-        }, 60000);
+        // Disable polling for now since it's not accurate
+        // modelMemoryPollInterval = window.setInterval(() => {
+        //     void syncModelMemoryUsage();
+        // }, 60000);
     }
 
     function applyDownloadEvent(payload: ModelDownloadProgressEvent) {
@@ -1942,13 +1943,7 @@
         isLoadingGemma = true;
         try {
             await invoke("start_server");
-            for (let i = 0; i < 30; i += 1) {
-                await new Promise((resolve) => setTimeout(resolve, 1000));
-                if (await invoke<boolean>("is_server_running")) {
-                    isGemmaLoaded = true;
-                    break;
-                }
-            }
+            isGemmaLoaded = true;
         } catch (err) {
             console.error("Load model failed:", err);
             alert(`Failed to load Gemma.\n${String(err)}`);

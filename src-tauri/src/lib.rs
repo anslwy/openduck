@@ -476,12 +476,7 @@ async fn is_server_running(state: State<'_, AppState>) -> Result<bool, String> {
         return Ok(false);
     };
 
-    let client = reqwest::Client::new();
-    let url = format!("{}/v1/models", server_base_url(port));
-    match client.get(url).send().await {
-        Ok(resp) => Ok(resp.status().is_success()),
-        Err(_) => Ok(false),
-    }
+    Ok(gemma_server_is_running_on_port(port).await)
 }
 
 #[tauri::command]
@@ -1035,8 +1030,13 @@ async fn start_server(
         *state.loaded_gemma_variant.lock().unwrap() = Some(selected_variant);
     }
 
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    if !wait_for_gemma_server_on_port(port, Duration::from_secs(GEMMA_STARTUP_TIMEOUT_SECS)).await {
+        let _ = stop_server_inner(state.inner());
+        return Err("Timed out while loading Gemma.".to_string());
+    }
+
     refresh_tray_presentation(&app_handle);
+    schedule_delayed_tray_refresh(app_handle.clone(), Duration::from_secs(10));
 
     Ok(())
 }
@@ -5028,6 +5028,36 @@ fn reserve_free_port() -> Result<u16, String> {
 
 fn server_base_url(port: u16) -> String {
     format!("http://127.0.0.1:{}", port)
+}
+
+async fn gemma_server_is_running_on_port(port: u16) -> bool {
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/models", server_base_url(port));
+    match client.get(url).send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+async fn wait_for_gemma_server_on_port(port: u16, timeout: Duration) -> bool {
+    tokio::time::timeout(timeout, async move {
+        loop {
+            if gemma_server_is_running_on_port(port).await {
+                return;
+            }
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+fn schedule_delayed_tray_refresh(app_handle: AppHandle, delay: Duration) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(delay).await;
+        refresh_tray_presentation(&app_handle);
+    });
 }
 
 fn normalize_contact_export_path(output_path: &str) -> Result<PathBuf, String> {

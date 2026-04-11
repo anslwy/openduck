@@ -57,6 +57,7 @@ pub(crate) const RUNTIME_SETUP_EVENT: &str = "runtime-setup-status";
 pub(crate) const SCREEN_CAPTURE_EVENT: &str = "screen-capture";
 pub(crate) const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 pub(crate) const CSM_STDERR_TAIL_LIMIT: usize = 8;
+pub(crate) const GEMMA_STARTUP_TIMEOUT_SECS: u64 = 180;
 pub(crate) const STT_STARTUP_TIMEOUT_SECS: u64 = 180;
 pub(crate) const STT_STDERR_TAIL_LIMIT: usize = 8;
 pub(crate) const CSM_MALE_REFERENCE_AUDIO_FILE: &str = "sample-male.mp3";
