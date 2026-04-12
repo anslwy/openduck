@@ -7,6 +7,17 @@ The backend uses Gemma for reply generation, a selectable STT backend for transc
 
 <img width="689" height="745" alt="image" src="https://github.com/user-attachments/assets/dcf3b70b-5221-4139-8c98-0bd38557f17b" />
 
+## Quick Start
+
+One-time installation for setting up the environment:
+```
+./scripts/setup_python_env.sh
+```
+Then execute the following the start the app:
+```
+./start.sh
+```
+
 ## STT Models
 
 The STT card in the app can switch between:
