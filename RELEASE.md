@@ -1,34 +1,80 @@
 # Release
 
-Build an Apple Silicon DMG from the repo root with:
+OpenDuck uses Tauri's signed updater flow for in-app update checks.
 
-```bash
-./scripts/release.sh openduck-beta-v0
+That means a release build is no longer just a DMG upload. Each GitHub Release needs four assets:
+
+- the DMG for manual installs
+- the macOS updater bundle: `OpenDuck.app.tar.gz`
+- the updater signature: `OpenDuck.app.tar.gz.sig`
+- `latest.json`, which tells the app which updater bundle to download
+
+The app checks GitHub at:
+
+```text
+https://github.com/anslwy/openduck/releases/latest/download/latest.json
 ```
 
-That writes the final artifact to:
+So whichever GitHub Release is marked as the latest release controls what the app updates to.
+
+## One-Time Setup
+
+Generate a Tauri updater signing key:
 
 ```bash
-dist/openduck-beta-v0.dmg
+npm run tauri signer generate -- -w ~/.tauri/openduck.key
 ```
+
+Then:
+
+1. Keep the private key outside the repo.
+2. Save the generated public key contents to `src-tauri/updater-public-key.pem`.
+
+The public key is safe to commit. The private key is not.
+
+Before building releases, export your signing key:
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/openduck.key"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+```
+
+Newer Tauri CLIs also support `TAURI_SIGNING_PRIVATE_KEY_PATH`.
+
+## Build
+
+Build a release bundle from the repo root with:
+
+```bash
+GITHUB_RELEASE_TAG=v1.2.3 ./scripts/release.sh openduck-1.2.3
+```
+
+That writes these files to `dist/`:
+
+- `openduck-1.2.3.dmg`
+- `OpenDuck.app.tar.gz`
+- `OpenDuck.app.tar.gz.sig`
+- `latest.json`
+
+Upload all four files to the GitHub Release whose tag matches `GITHUB_RELEASE_TAG`.
 
 By default, `release.sh` uses the app version already checked into the repo metadata.
 If the build runs inside a Git checkout, the app also stamps the current Git commit SHA into OpenDuck's custom About dialog.
 
 ## Versioning
 
-The DMG file name and the app version are separate values.
+The DMG file name, GitHub release tag, and app version are separate values.
 
 If you want a one-off release version without editing tracked files, pass the app version as the second argument:
 
 ```bash
-./scripts/release.sh openduck-1.2.3 1.2.3
+GITHUB_RELEASE_TAG=v1.2.3 ./scripts/release.sh openduck-1.2.3 1.2.3
 ```
 
 You can also provide it through `VERSION`:
 
 ```bash
-VERSION=1.2.3 ./scripts/release.sh openduck-1.2.3
+GITHUB_RELEASE_TAG=v1.2.3 VERSION=1.2.3 ./scripts/release.sh openduck-1.2.3
 ```
 
 That version override is applied only for the current Tauri build. It does not rewrite any repo files.
@@ -46,13 +92,13 @@ By default, the build metadata includes:
 You can add a human-readable release label such as `Beta`:
 
 ```bash
-VERSION=1.2.3 VERSION_LABEL="Beta" ./scripts/release.sh openduck-beta-1.2.3
+GITHUB_RELEASE_TAG=v1.2.3 VERSION=1.2.3 VERSION_LABEL="Beta" ./scripts/release.sh openduck-beta-1.2.3
 ```
 
 You can also attach channel/build metadata that gets folded into the custom About dialog and build id:
 
 ```bash
-VERSION=0.0.2 VERSION_LABEL="Beta" ./scripts/release.sh openduck-beta-v0.0.2
+GITHUB_RELEASE_TAG=v0.0.2 VERSION=0.0.2 VERSION_LABEL="Beta" ./scripts/release.sh openduck-beta-v0.0.2
 ```
 
 Typical build id shape:
@@ -80,52 +126,62 @@ Example persistent bump:
 2. Build the DMG with a matching file name:
 
 ```bash
-./scripts/release.sh openduck-1.2.3
+GITHUB_RELEASE_TAG=v1.2.3 ./scripts/release.sh openduck-1.2.3
 ```
 
 Current limitation:
 
 - Set the override with either the second argument or `VERSION`, not both.
 - If the build is not running from a Git checkout and `OPEN_DUCK_GIT_SHA` is not provided, the commit SHA will be unavailable.
+- The app only updates to the GitHub Release that serves `releases/latest/download/latest.json`.
+- `release.sh` requires a signing key and updater public key because updater artifacts must be signed.
 
 ## Useful Variants
 
 Skip code signing during the Tauri bundle step:
 
 ```bash
-TAURI_BUILD_ARGS="--no-sign" ./scripts/release.sh openduck-beta-v1
+GITHUB_RELEASE_TAG=v1.2.3 TAURI_BUILD_ARGS="--no-sign" ./scripts/release.sh openduck-beta-v1
 ```
 
 Skip signing and override the app version for a single build:
 
 ```bash
-TAURI_BUILD_ARGS="--no-sign" ./scripts/release.sh openduck-beta-v1 1.2.3
+GITHUB_RELEASE_TAG=v1.2.3 TAURI_BUILD_ARGS="--no-sign" ./scripts/release.sh openduck-beta-v1 1.2.3
 ```
 
 Skip signing while stamping a beta label and build number:
 
 ```bash
-TAURI_BUILD_ARGS="--no-sign" VERSION=1.2.3 VERSION_LABEL="Beta" BUILD_CHANNEL=beta BUILD_NUMBER=221 ./scripts/release.sh openduck-beta-v1
+GITHUB_RELEASE_TAG=v1.2.3 TAURI_BUILD_ARGS="--no-sign" VERSION=1.2.3 VERSION_LABEL="Beta" BUILD_CHANNEL=beta BUILD_NUMBER=221 ./scripts/release.sh openduck-beta-v1
 ```
 
 Write the DMG to a custom directory:
 
 ```bash
-OUTPUT_DIR="$HOME/Desktop/openduck-releases" ./scripts/release.sh openduck-beta-v2
+GITHUB_RELEASE_TAG=v1.2.3 OUTPUT_DIR="$HOME/Desktop/openduck-releases" ./scripts/release.sh openduck-beta-v2
 ```
 
 Override the build target triple:
 
 ```bash
-TARGET_TRIPLE=aarch64-apple-darwin ./scripts/release.sh openduck-beta-v3
+GITHUB_RELEASE_TAG=v1.2.3 TARGET_TRIPLE=aarch64-apple-darwin ./scripts/release.sh openduck-beta-v3
+```
+
+Add release notes to the updater manifest:
+
+```bash
+GITHUB_RELEASE_TAG=v1.2.3 RELEASE_NOTES_FILE=release-notes.md ./scripts/release.sh openduck-1.2.3
 ```
 
 ## Notes
 
 - Run the script on macOS on an Apple Silicon machine.
 - The script installs `node_modules` if needed.
-- Version overrides are passed to Tauri via a temporary config file created during the build and removed on exit.
+- Version overrides and `createUpdaterArtifacts` are passed to Tauri via a temporary config file created during the build and removed on exit.
 - Build metadata for the custom About dialog is passed to Rust through environment variables and finalized in `src-tauri/build.rs`.
+- The updater public key is embedded into the app at build time from `OPEN_DUCK_UPDATER_PUBLIC_KEY` or `src-tauri/updater-public-key.pem`.
+- `latest.json` is generated for `darwin-aarch64` and points at the exact GitHub Release tag you pass in via `GITHUB_RELEASE_TAG`.
 - The packaged app now prepares its Python runtime on first launch instead of bundling the generated venv directories into the DMG.
 - First launch still needs internet access, and it may need Apple Command Line Tools if `git` is not already available because the runtime setup installs a couple of GitHub-hosted Python packages.
-- The generated DMG is built by Tauri first, then copied to `dist/<name>.dmg`.
+- The generated DMG and updater artifacts are built by Tauri first, then copied to `dist/`.

@@ -64,6 +64,7 @@ pub(crate) const CSM_MALE_REFERENCE_AUDIO_FILE: &str = "sample-male.mp3";
 pub(crate) const CSM_FEMALE_REFERENCE_AUDIO_FILE: &str = "sample-female.mp3";
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 pub(crate) const APP_MENU_ABOUT_MENU_ID: &str = "app-about-openduck";
+pub(crate) const APP_MENU_CHECK_FOR_UPDATES_MENU_ID: &str = "app-check-for-updates";
 pub(crate) const TRAY_ICON_ID: &str = "openduck-tray";
 pub(crate) const TRAY_SHOW_MENU_ID: &str = "tray-show-openduck";
 pub(crate) const TRAY_LOOK_AT_SCREEN_MENU_ID: &str = "tray-look-at-screen";
@@ -88,6 +89,7 @@ pub(crate) const TRAY_END_CALL_EVENT: &str = "tray-end-call";
 pub(crate) const TRAY_TOGGLE_MUTE_EVENT: &str = "tray-toggle-mute";
 pub(crate) const TRAY_PONG_PLAYBACK_EVENT: &str = "tray-pong-playback";
 pub(crate) const SHOW_ABOUT_MODAL_EVENT: &str = "show-about-modal";
+pub(crate) const TRIGGER_APP_UPDATE_CHECK_EVENT: &str = "trigger-app-update-check";
 pub(crate) const CONVERSATION_CONTEXT_COMMITTED_EVENT: &str = "conversation-context-committed";
 pub(crate) const CONVERSATION_IMAGE_HISTORY_CLEARED_EVENT: &str =
     "conversation-image-history-cleared";

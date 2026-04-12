@@ -596,6 +596,96 @@ body {
         min-width: 96px;
     }
 
+    .about-update-card {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 18px;
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .about-update-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+    }
+
+    .about-update-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+    }
+
+    .about-update-title {
+        color: rgba(255, 246, 214, 0.96);
+        font-size: 0.98rem;
+        font-weight: 700;
+        letter-spacing: -0.015em;
+    }
+
+    .about-update-detail {
+        color: rgba(255, 255, 255, 0.64);
+        font-size: 0.88rem;
+        line-height: 1.45;
+        letter-spacing: -0.01em;
+    }
+
+    .about-update-check-btn,
+    .about-update-install-btn {
+        white-space: nowrap;
+    }
+
+    .about-update-metadata {
+        display: grid;
+        gap: 10px;
+    }
+
+    .about-update-row {
+        display: grid;
+        grid-template-columns: minmax(120px, 148px) minmax(0, 1fr);
+        gap: 14px;
+        align-items: center;
+    }
+
+    .about-update-label {
+        color: rgba(255, 255, 255, 0.52);
+        font-size: 0.78rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+    }
+
+    .about-update-value {
+        color: rgba(255, 255, 255, 0.9);
+        font-size: 0.92rem;
+        line-height: 1.45;
+        letter-spacing: -0.01em;
+        word-break: break-word;
+    }
+
+    .about-update-notes {
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.82);
+        font-size: 0.88rem;
+        line-height: 1.5;
+        letter-spacing: -0.01em;
+        white-space: pre-wrap;
+    }
+
+    .about-update-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
     .about-empty-state {
         display: flex;
         flex-direction: column;
@@ -1761,6 +1851,16 @@ body {
         }
 
         .about-metadata-row {
+            grid-template-columns: 1fr;
+            gap: 6px;
+        }
+
+        .about-update-header {
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .about-update-row {
             grid-template-columns: 1fr;
             gap: 6px;
         }

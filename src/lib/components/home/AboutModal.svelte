@@ -2,15 +2,31 @@
 <script lang="ts">
     import { onDestroy } from "svelte";
 
-    import type { BuildInfo } from "$lib/openduck/types";
+    import type {
+        AppUpdateInfo,
+        AppUpdateStatus,
+        BuildInfo,
+    } from "$lib/openduck/types";
 
     let {
         buildInfo,
         buildInfoError,
+        availableAppUpdate,
+        appUpdateStatus,
+        appUpdateError,
+        checkForUpdates,
+        installAvailableUpdate,
+        restartToApplyUpdate,
         closeAboutPopup,
     } = $props<{
         buildInfo: BuildInfo | null;
         buildInfoError: string | null;
+        availableAppUpdate: AppUpdateInfo | null;
+        appUpdateStatus: AppUpdateStatus;
+        appUpdateError: string | null;
+        checkForUpdates: () => void;
+        installAvailableUpdate: () => void;
+        restartToApplyUpdate: () => void;
         closeAboutPopup: () => void;
     }>();
 
@@ -54,6 +70,56 @@
             : copyState === "failed"
               ? "Copy Failed"
               : "Copy",
+    );
+    const checkButtonLabel = $derived(
+        appUpdateStatus === "checking"
+            ? "Checking..."
+            : appUpdateStatus === "installing"
+              ? "Installing..."
+              : "Check for Updates",
+    );
+    const formattedPublishedAt = $derived.by(() => {
+        const publishedAt = availableAppUpdate?.publishedAt;
+        if (!publishedAt) {
+            return null;
+        }
+
+        const parsedDate = new Date(publishedAt);
+        if (Number.isNaN(parsedDate.valueOf())) {
+            return publishedAt;
+        }
+
+        return parsedDate.toLocaleString(undefined, {
+            dateStyle: "medium",
+            timeStyle: "short",
+        });
+    });
+    const updateStatusDetail = $derived.by(() => {
+        switch (appUpdateStatus) {
+            case "checking":
+                return "Checking GitHub Releases for a newer build.";
+            case "available":
+                return availableAppUpdate
+                    ? `Version ${availableAppUpdate.version} is ready to download.`
+                    : "A newer build is available.";
+            case "up_to_date":
+                return "This build is already up to date.";
+            case "installing":
+                return availableAppUpdate
+                    ? `Installing version ${availableAppUpdate.version}.`
+                    : "Installing the latest update.";
+            case "installed":
+                return availableAppUpdate
+                    ? `Version ${availableAppUpdate.version} is installed and ready after restart.`
+                    : "The update is installed and ready after restart.";
+            case "error":
+                return appUpdateError ?? "The update check failed.";
+            default:
+                return "Check GitHub Releases for a newer build.";
+        }
+    });
+    const updateActionDisabled = $derived(
+        appUpdateStatus === "checking" || appUpdateStatus === "installing",
     );
 
     onDestroy(() => {
@@ -159,6 +225,85 @@
                     <span class="about-metadata-value about-metadata-warning"
                         >Dirty</span
                     >
+                </div>
+            {/if}
+        </div>
+
+        <div class="about-update-card">
+            <div class="about-update-header">
+                <div class="about-update-copy">
+                    <span class="about-update-title">Updates</span>
+                    <span class="about-update-detail">{updateStatusDetail}</span>
+                </div>
+                <button
+                    type="button"
+                    class="utility-btn about-update-check-btn"
+                    onclick={checkForUpdates}
+                    disabled={updateActionDisabled}
+                >
+                    {checkButtonLabel}
+                </button>
+            </div>
+
+            {#if availableAppUpdate}
+                <div class="about-update-metadata">
+                    <div class="about-update-row">
+                        <span class="about-update-label">Latest Version</span>
+                        <span class="about-update-value about-metadata-mono">
+                            {availableAppUpdate.version}
+                        </span>
+                    </div>
+                    <div class="about-update-row">
+                        <span class="about-update-label">Current Version</span>
+                        <span class="about-update-value about-metadata-mono">
+                            {availableAppUpdate.currentVersion}
+                        </span>
+                    </div>
+                    {#if formattedPublishedAt}
+                        <div class="about-update-row">
+                            <span class="about-update-label">Published</span>
+                            <span class="about-update-value"
+                                >{formattedPublishedAt}</span
+                            >
+                        </div>
+                    {/if}
+                    <div class="about-update-row">
+                        <span class="about-update-label">Target</span>
+                        <span class="about-update-value about-metadata-mono">
+                            {availableAppUpdate.target}
+                        </span>
+                    </div>
+                </div>
+
+                {#if availableAppUpdate.notes}
+                    <div class="about-update-notes">
+                        {availableAppUpdate.notes}
+                    </div>
+                {/if}
+
+                <div class="about-update-actions">
+                    {#if appUpdateStatus === "available"}
+                        <button
+                            type="button"
+                            class="utility-btn about-update-install-btn"
+                            onclick={installAvailableUpdate}
+                        >
+                            Download and Install
+                        </button>
+                    {:else if appUpdateStatus === "installed"}
+                        <button
+                            type="button"
+                            class="utility-btn about-update-install-btn"
+                            onclick={restartToApplyUpdate}
+                        >
+                            Restart to Apply
+                        </button>
+                    {/if}
+                </div>
+            {:else if appUpdateError}
+                <div class="about-empty-state error">
+                    <span class="about-empty-title">Update Check Failed</span>
+                    <span class="about-empty-detail">{appUpdateError}</span>
                 </div>
             {/if}
         </div>

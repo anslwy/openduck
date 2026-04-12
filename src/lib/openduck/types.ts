@@ -76,6 +76,7 @@ export type TrayPongPlaybackEvent = {
     enabled: boolean;
 };
 export type ShowAboutModalEvent = Record<string, never>;
+export type TriggerAppUpdateCheckEvent = Record<string, never>;
 export type ConversationContextCommittedEvent = {
     request_id: number;
     user_entry_id: number;
@@ -161,6 +162,23 @@ export type BuildInfo = {
     build_id?: string | null;
     is_dirty: boolean;
     copy_text: string;
+};
+
+export type AppUpdateStatus =
+    | "idle"
+    | "checking"
+    | "available"
+    | "up_to_date"
+    | "installing"
+    | "installed"
+    | "error";
+
+export type AppUpdateInfo = {
+    version: string;
+    currentVersion: string;
+    notes?: string | null;
+    publishedAt?: string | null;
+    target: string;
 };
 
 export type StoredModelPreferences = {

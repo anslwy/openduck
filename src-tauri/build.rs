@@ -12,6 +12,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_BUILD_ID");
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_GIT_SHA");
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_GIT_DIRTY");
+    println!("cargo:rerun-if-env-changed=OPEN_DUCK_UPDATER_PUBLIC_KEY");
+    println!("cargo:rerun-if-env-changed=OPEN_DUCK_UPDATER_ENDPOINT");
 
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
@@ -19,8 +21,13 @@ fn main() {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| manifest_dir.clone());
+    let updater_public_key_path = manifest_dir.join("updater-public-key.pem");
 
     register_git_rerun_paths(&repo_root);
+    println!(
+        "cargo:rerun-if-changed={}",
+        updater_public_key_path.display()
+    );
 
     let version =
         read_env_override("OPEN_DUCK_BUILD_VERSION").unwrap_or_else(|| cargo_package_version());
@@ -28,8 +35,8 @@ fn main() {
     let build_number = read_env_override("OPEN_DUCK_BUILD_NUMBER");
     let version_label = read_env_override("OPEN_DUCK_BUILD_LABEL")
         .or_else(|| default_label_for_channel(build_channel.as_deref()));
-    let git_sha =
-        read_env_override("OPEN_DUCK_GIT_SHA").or_else(|| git_output(&repo_root, &["rev-parse", "HEAD"]));
+    let git_sha = read_env_override("OPEN_DUCK_GIT_SHA")
+        .or_else(|| git_output(&repo_root, &["rev-parse", "HEAD"]));
     let is_dirty = read_env_override("OPEN_DUCK_GIT_DIRTY")
         .map(|value| parse_truthy_flag(&value))
         .unwrap_or_else(|| git_is_dirty(&repo_root));
@@ -43,6 +50,10 @@ fn main() {
             is_dirty,
         )
     });
+    let updater_public_key = read_env_override("OPEN_DUCK_UPDATER_PUBLIC_KEY")
+        .or_else(|| read_file_trimmed(&updater_public_key_path));
+    let updater_endpoint =
+        read_env_override("OPEN_DUCK_UPDATER_ENDPOINT").or_else(default_updater_endpoint);
 
     emit_build_env("OPEN_DUCK_BUILD_VERSION", Some(&version));
     emit_build_env("OPEN_DUCK_BUILD_LABEL", version_label.as_deref());
@@ -50,7 +61,15 @@ fn main() {
     emit_build_env("OPEN_DUCK_BUILD_NUMBER", build_number.as_deref());
     emit_build_env("OPEN_DUCK_BUILD_ID", build_id.as_deref());
     emit_build_env("OPEN_DUCK_GIT_SHA", git_sha.as_deref());
-    emit_build_env("OPEN_DUCK_GIT_DIRTY", Some(if is_dirty { "true" } else { "false" }));
+    emit_build_env(
+        "OPEN_DUCK_GIT_DIRTY",
+        Some(if is_dirty { "true" } else { "false" }),
+    );
+    emit_build_env(
+        "OPEN_DUCK_UPDATER_PUBLIC_KEY",
+        updater_public_key.as_deref(),
+    );
+    emit_build_env("OPEN_DUCK_UPDATER_ENDPOINT", updater_endpoint.as_deref());
 
     tauri_build::build()
 }
@@ -73,6 +92,21 @@ fn read_env_override(key: &str) -> Option<String> {
 fn emit_build_env(key: &str, value: Option<&str>) {
     let normalized = value.unwrap_or("");
     println!("cargo:rustc-env={key}={normalized}");
+}
+
+fn read_file_trimmed(path: &Path) -> Option<String> {
+    fs::read_to_string(path).ok().and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn default_updater_endpoint() -> Option<String> {
+    Some("https://github.com/anslwy/openduck/releases/latest/download/latest.json".to_string())
 }
 
 fn git_output(repo_root: &Path, args: &[&str]) -> Option<String> {

@@ -25,6 +25,7 @@ use tauri::{
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::oneshot;
@@ -404,6 +405,18 @@ struct BuildInfo {
     copy_text: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppUpdateInfo {
+    version: String,
+    current_version: String,
+    notes: Option<String>,
+    published_at: Option<String>,
+    target: String,
+}
+
+struct PendingAppUpdate(Mutex<Option<Update>>);
+
 const BUILD_VERSION: &str = env!("OPEN_DUCK_BUILD_VERSION");
 const BUILD_LABEL: &str = env!("OPEN_DUCK_BUILD_LABEL");
 const BUILD_CHANNEL: &str = env!("OPEN_DUCK_BUILD_CHANNEL");
@@ -411,6 +424,8 @@ const BUILD_NUMBER: &str = env!("OPEN_DUCK_BUILD_NUMBER");
 const BUILD_ID: &str = env!("OPEN_DUCK_BUILD_ID");
 const BUILD_GIT_SHA: &str = env!("OPEN_DUCK_GIT_SHA");
 const BUILD_GIT_DIRTY: &str = env!("OPEN_DUCK_GIT_DIRTY");
+const BUILD_UPDATER_PUBLIC_KEY: &str = env!("OPEN_DUCK_UPDATER_PUBLIC_KEY");
+const BUILD_UPDATER_ENDPOINT: &str = env!("OPEN_DUCK_UPDATER_ENDPOINT");
 
 fn compiled_build_value(raw_value: &'static str) -> Option<String> {
     let trimmed = raw_value.trim();
@@ -426,6 +441,14 @@ fn compiled_build_dirty() -> bool {
         BUILD_GIT_DIRTY.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+fn compiled_updater_public_key() -> Option<String> {
+    compiled_build_value(BUILD_UPDATER_PUBLIC_KEY)
+}
+
+fn compiled_updater_endpoint() -> Option<String> {
+    compiled_build_value(BUILD_UPDATER_ENDPOINT)
 }
 
 fn build_info_copy_text(build_info: &BuildInfo) -> String {
@@ -490,6 +513,38 @@ fn current_build_info() -> BuildInfo {
     build_info
 }
 
+fn build_app_updater(app_handle: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    let public_key = compiled_updater_public_key().ok_or_else(|| {
+        "Updater is not configured for this build. Add src-tauri/updater-public-key.pem or set OPEN_DUCK_UPDATER_PUBLIC_KEY before building the app.".to_string()
+    })?;
+    let endpoint = compiled_updater_endpoint()
+        .ok_or_else(|| "Updater endpoint is not configured for this build.".to_string())?;
+    let endpoint = reqwest::Url::parse(&endpoint)
+        .map_err(|err| format!("Updater endpoint is not a valid URL: {err}"))?;
+
+    app_handle
+        .updater_builder()
+        .pubkey(public_key)
+        .endpoints(vec![endpoint])
+        .map_err(|err| err.to_string())?
+        .build()
+        .map_err(|err| err.to_string())
+}
+
+fn app_update_info(update: &Update) -> AppUpdateInfo {
+    AppUpdateInfo {
+        version: update.version.clone(),
+        current_version: update.current_version.clone(),
+        notes: update.body.clone(),
+        published_at: update
+            .raw_json
+            .get("pub_date")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        target: update.target.clone(),
+    }
+}
+
 #[tauri::command]
 fn ping() {
     info!("Backend: ping command received");
@@ -498,6 +553,37 @@ fn ping() {
 #[tauri::command]
 fn get_build_info() -> BuildInfo {
     current_build_info()
+}
+
+#[tauri::command]
+async fn check_for_app_update(
+    app_handle: AppHandle,
+    pending_update: State<'_, PendingAppUpdate>,
+) -> Result<Option<AppUpdateInfo>, String> {
+    let update = build_app_updater(&app_handle)?
+        .check()
+        .await
+        .map_err(|err| err.to_string())?;
+    let metadata = update.as_ref().map(app_update_info);
+    *pending_update.0.lock().unwrap() = update;
+    Ok(metadata)
+}
+
+#[tauri::command]
+async fn install_app_update(pending_update: State<'_, PendingAppUpdate>) -> Result<(), String> {
+    let Some(update) = pending_update.0.lock().unwrap().take() else {
+        return Err("There is no pending app update to install.".to_string());
+    };
+
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn restart_app(app_handle: AppHandle) {
+    app_handle.restart();
 }
 
 #[tauri::command]
@@ -4390,6 +4476,7 @@ fn create_tray(_app_handle: &AppHandle) -> tauri::Result<()> {
 fn build_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_menu = SubmenuBuilder::new(app_handle, "OpenDuck")
         .text(APP_MENU_ABOUT_MENU_ID, "About OpenDuck")
+        .text(APP_MENU_CHECK_FOR_UPDATES_MENU_ID, "Check for Updates...")
         .separator()
         .item(&PredefinedMenuItem::services(app_handle, None)?)
         .separator()
@@ -4420,7 +4507,10 @@ fn build_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&PredefinedMenuItem::close_window(app_handle, None)?)
         .build()?;
 
-    Menu::with_items(app_handle, &[&app_menu, &file_menu, &edit_menu, &window_menu])
+    Menu::with_items(
+        app_handle,
+        &[&app_menu, &file_menu, &edit_menu, &window_menu],
+    )
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -4429,16 +4519,24 @@ fn build_app_menu(app_handle: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 }
 
 fn handle_app_menu_event(app_handle: &AppHandle, event_id: &str) {
-    if event_id != APP_MENU_ABOUT_MENU_ID {
+    if event_id != APP_MENU_ABOUT_MENU_ID && event_id != APP_MENU_CHECK_FOR_UPDATES_MENU_ID {
         return;
     }
 
     if let Err(err) = show_main_window(app_handle) {
-        error!("Failed to show OpenDuck before opening About: {}", err);
+        error!(
+            "Failed to show OpenDuck before handling app menu action: {}",
+            err
+        );
         return;
     }
 
-    emit_show_about_modal(app_handle);
+    if event_id == APP_MENU_ABOUT_MENU_ID {
+        emit_show_about_modal(app_handle);
+        return;
+    }
+
+    emit_trigger_app_update_check(app_handle);
 }
 
 async fn csm_stdout_task(
@@ -6667,11 +6765,13 @@ pub fn run() {
         .on_menu_event(|app_handle, event| {
             handle_app_menu_event(app_handle, event.id().as_ref());
         })
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             reap_stale_model_processes(app.handle());
             create_tray(app.handle())?;
             Ok(())
         })
+        .manage(PendingAppUpdate(Mutex::new(None)))
         .manage(AppState {
             audio_buffer: Mutex::new(Vec::new()),
             silent_chunks_count: Mutex::new(0),
@@ -6737,6 +6837,9 @@ pub fn run() {
             receive_audio_chunk,
             ping,
             get_build_info,
+            check_for_app_update,
+            install_app_update,
+            restart_app,
             set_voice_system_prompt,
             export_contact_profile,
             reset_call_session,

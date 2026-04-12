@@ -46,6 +46,8 @@
         resolveModelPreset,
     } from "$lib/openduck/model-preferences";
     import type {
+        AppUpdateInfo,
+        AppUpdateStatus,
         AssistantResponseEvent,
         BuildInfo,
         CallStageEvent,
@@ -73,6 +75,7 @@
         SelectOption,
         ShowAboutModalEvent,
         StoredModelPreferences,
+        TriggerAppUpdateCheckEvent,
         SttModelVariant,
         SttStatusEvent,
         TranscriptEvent,
@@ -174,6 +177,9 @@
     let conversationLogEntries = $state<ConversationLogEntry[]>([]);
     let buildInfo = $state<BuildInfo | null>(null);
     let buildInfoError = $state<string | null>(null);
+    let availableAppUpdate = $state<AppUpdateInfo | null>(null);
+    let appUpdateStatus = $state<AppUpdateStatus>("idle");
+    let appUpdateError = $state<string | null>(null);
     let nextConversationEntryId = 1;
     let pendingConversationUserLogEntryId: number | null = null;
     let activeAssistantResponseId: number | null = null;
@@ -938,6 +944,59 @@
         showAboutPopup = false;
     }
 
+    async function checkForAppUpdates() {
+        if (
+            appUpdateStatus === "checking" ||
+            appUpdateStatus === "installing"
+        ) {
+            return;
+        }
+
+        appUpdateStatus = "checking";
+        appUpdateError = null;
+        availableAppUpdate = null;
+
+        try {
+            availableAppUpdate = await invoke<AppUpdateInfo | null>(
+                "check_for_app_update",
+            );
+            appUpdateStatus = availableAppUpdate ? "available" : "up_to_date";
+        } catch (err) {
+            console.error("Failed to check for app updates:", err);
+            availableAppUpdate = null;
+            appUpdateStatus = "error";
+            appUpdateError = normalizeErrorMessage(err);
+        }
+    }
+
+    async function installAppUpdate() {
+        if (appUpdateStatus !== "available") {
+            return;
+        }
+
+        appUpdateStatus = "installing";
+        appUpdateError = null;
+
+        try {
+            await invoke("install_app_update");
+            appUpdateStatus = "installed";
+        } catch (err) {
+            console.error("Failed to install app update:", err);
+            availableAppUpdate = null;
+            appUpdateStatus = "error";
+            appUpdateError = normalizeErrorMessage(err);
+        }
+    }
+
+    async function restartToApplyUpdate() {
+        try {
+            await invoke("restart_app");
+        } catch (err) {
+            console.error("Failed to restart after installing update:", err);
+            appUpdateError = normalizeErrorMessage(err);
+        }
+    }
+
     async function loadBuildInfo() {
         try {
             buildInfo = await invoke<BuildInfo>("get_build_info");
@@ -948,13 +1007,17 @@
         }
     }
 
-    function openAboutPopup() {
+    function openAboutPopup(options: { checkForUpdates?: boolean } = {}) {
         showAboutPopup = true;
         closeContactsPopup();
         closeConversationPopup();
 
         if (!buildInfo) {
             void loadBuildInfo();
+        }
+
+        if (options.checkForUpdates) {
+            void checkForAppUpdates();
         }
     }
 
@@ -2798,6 +2861,12 @@
                     listen<ShowAboutModalEvent>("show-about-modal", () => {
                         openAboutPopup();
                     }),
+                    listen<TriggerAppUpdateCheckEvent>(
+                        "trigger-app-update-check",
+                        () => {
+                            openAboutPopup({ checkForUpdates: true });
+                        },
+                    ),
                 ]);
             } catch (err) {
                 console.error("Failed to register Tauri event listeners:", err);
@@ -3081,7 +3150,17 @@
         {/if}
 
         {#if showAboutPopup}
-            <AboutModal {buildInfo} {buildInfoError} {closeAboutPopup} />
+            <AboutModal
+                {buildInfo}
+                {buildInfoError}
+                {closeAboutPopup}
+                {availableAppUpdate}
+                {appUpdateStatus}
+                {appUpdateError}
+                checkForUpdates={checkForAppUpdates}
+                installAvailableUpdate={installAppUpdate}
+                restartToApplyUpdate={restartToApplyUpdate}
+            />
         {/if}
 
         <div class="control-bar">
