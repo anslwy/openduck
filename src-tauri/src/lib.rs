@@ -233,6 +233,9 @@ struct ChatCompletionStreamDelta {
 enum TrayIconVariant {
     Default,
     Muted,
+    Listening,
+    Processing,
+    Thinking,
     ImagePasted,
 }
 
@@ -279,6 +282,7 @@ struct AppState {
     screen_capture_in_progress: Mutex<bool>,
     transient_tray_title: Mutex<Option<String>>,
     transient_tray_icon: Mutex<Option<TrayIconVariant>>,
+    call_stage_phase: Mutex<String>,
     voice_system_prompt: Mutex<String>,
     conversation_session_id: AtomicU64,
     call_started_at: Mutex<Option<Instant>>,
@@ -5069,6 +5073,15 @@ fn tray_icon_image(variant: TrayIconVariant) -> tauri::Result<tauri::image::Imag
     let bytes = match variant {
         TrayIconVariant::Muted => include_bytes!("../icons/tray-template-muted.png").as_slice(),
         TrayIconVariant::Default => include_bytes!("../icons/tray-template.png").as_slice(),
+        TrayIconVariant::Listening => {
+            include_bytes!("../icons/tray-template-listening.png").as_slice()
+        }
+        TrayIconVariant::Processing => {
+            include_bytes!("../icons/tray-template-processing.png").as_slice()
+        }
+        TrayIconVariant::Thinking => {
+            include_bytes!("../icons/tray-template-thinking.png").as_slice()
+        }
         TrayIconVariant::ImagePasted => {
             include_bytes!("../icons/tray-template-image-pasted.png").as_slice()
         }
@@ -5136,7 +5149,13 @@ fn refresh_tray_icon(app_handle: &AppHandle) {
         } else if *state.call_muted.lock().unwrap() {
             TrayIconVariant::Muted
         } else {
-            TrayIconVariant::Default
+            let phase = state.call_stage_phase.lock().unwrap();
+            match phase.as_str() {
+                "listening" => TrayIconVariant::Listening,
+                "processing_audio" => TrayIconVariant::Processing,
+                "thinking" => TrayIconVariant::Thinking,
+                _ => TrayIconVariant::Default,
+            }
         }
     };
 
@@ -5159,7 +5178,7 @@ fn refresh_tray_icon(app_handle: &AppHandle) {
 #[cfg(not(target_os = "macos"))]
 fn refresh_tray_icon(_app_handle: &AppHandle) {}
 
-fn refresh_tray_presentation(app_handle: &AppHandle) {
+pub(crate) fn refresh_tray_presentation(app_handle: &AppHandle) {
     refresh_tray_menu(app_handle);
     refresh_tray_icon(app_handle);
     refresh_tray_title(app_handle);
@@ -6807,6 +6826,7 @@ pub fn run() {
             screen_capture_in_progress: Mutex::new(false),
             transient_tray_title: Mutex::new(None),
             transient_tray_icon: Mutex::new(None),
+            call_stage_phase: Mutex::new("idle".to_string()),
             voice_system_prompt: Mutex::new(DEFAULT_VOICE_SYSTEM_PROMPT.to_string()),
             conversation_session_id: AtomicU64::new(1),
             call_started_at: Mutex::new(None),

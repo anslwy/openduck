@@ -150,6 +150,13 @@ pub(crate) fn emit_stt_status(app_handle: &AppHandle, payload: SttStatusEvent) {
 }
 
 pub(crate) fn emit_call_stage(app_handle: &AppHandle, phase: &str, message: &str) {
+    {
+        let state = app_handle.state::<crate::AppState>();
+        let mut phase_guard = state.call_stage_phase.lock().unwrap();
+        *phase_guard = phase.to_string();
+    }
+    crate::refresh_tray_presentation(app_handle);
+
     if let Err(err) = app_handle.emit(
         CALL_STAGE_EVENT,
         CallStageEvent {
