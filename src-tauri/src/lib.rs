@@ -5175,9 +5175,6 @@ fn current_tray_title(app_handle: &AppHandle) -> Option<String> {
     }
 
     match loaded_model_memory_snapshot(state.inner()) {
-        Ok(snapshot) if snapshot.total_bytes > 0 => {
-            Some(format!(" {}", format_memory_bytes(snapshot.total_bytes)))
-        }
         Ok(_) => None,
         Err(err) => {
             error!("Failed to build tray title memory summary: {}", err);
