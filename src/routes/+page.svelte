@@ -274,8 +274,8 @@
         { value: "custom", label: "Custom" },
     ];
     const gemmaVariantOptions: Array<SelectOption<GemmaVariant>> = [
-        { value: "e4b", label: "E4B" },
-        { value: "e2b", label: "E2B" },
+        { value: "e4b", label: "Gemma-4-E4B" },
+        { value: "e2b", label: "Gemma-4-E2B" },
     ];
     const csmModelOptions: Array<SelectOption<CsmModelVariant>> = [
         { value: "expressiva_1b", label: "CSM Expressiva 1B" },
@@ -3421,7 +3421,7 @@
                             id="start-call-tooltip"
                             class="tooltip-bubble start-call-tooltip"
                         >
-                            Gemma, STT, and Speech models must be all loaded to
+                            LLM, STT, and TTS models must be all loaded to
                             start the call.
                         </div>
                     {/if}

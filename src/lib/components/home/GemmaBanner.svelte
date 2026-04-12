@@ -55,12 +55,12 @@
     {#if isDownloadingGemma}
         <div class="download-content">
             <div class="banner-heading-row">
-                <span class="banner-title">Gemma</span>
+                <span class="banner-title">LLM</span>
                 <div class="tooltip-shell variant-select-shell">
                     <select
                         class="variant-select"
                         value={selectedGemmaVariant}
-                        aria-label="Gemma variant"
+                        aria-label="LLM variant"
                         disabled={gemmaVariantDisabled}
                         onchange={handleGemmaVariantChange}
                     >
@@ -131,12 +131,12 @@
                 <div class="banner-status">
                     <div class="banner-copy">
                         <div class="banner-heading-row">
-                            <span class="banner-title">Gemma</span>
+                            <span class="banner-title">LLM</span>
                             <div class="tooltip-shell variant-select-shell">
                                 <select
                                     class="variant-select"
                                     value={selectedGemmaVariant}
-                                    aria-label="Gemma variant"
+                                    aria-label="LLM variant"
                                     disabled={gemmaVariantDisabled}
                                     onchange={handleGemmaVariantChange}
                                 >
@@ -180,12 +180,12 @@
             {:else}
                 <div class="banner-copy">
                     <div class="banner-heading-row">
-                        <span class="banner-title">Gemma</span>
+                        <span class="banner-title">LLM</span>
                         <div class="tooltip-shell variant-select-shell">
                             <select
                                 class="variant-select"
                                 value={selectedGemmaVariant}
-                                aria-label="Gemma variant"
+                                aria-label="LLM variant"
                                 disabled={gemmaVariantDisabled}
                                 onchange={handleGemmaVariantChange}
                             >
@@ -229,12 +229,12 @@
         <div class="banner-row">
             <div class="banner-copy">
                 <div class="banner-heading-row">
-                    <span class="banner-title">Gemma</span>
+                    <span class="banner-title">LLM</span>
                     <div class="tooltip-shell variant-select-shell">
                         <select
                             class="variant-select"
                             value={selectedGemmaVariant}
-                            aria-label="Gemma variant"
+                            aria-label="LLM variant"
                             disabled={gemmaVariantDisabled}
                             onchange={handleGemmaVariantChange}
                         >

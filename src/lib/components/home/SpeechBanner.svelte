@@ -70,12 +70,12 @@
     {#if isDownloadingCsm}
         <div class="download-content">
             <div class="banner-heading-row">
-                <span class="banner-title">Speech</span>
+                <span class="banner-title">TTS</span>
                 <div class="tooltip-shell variant-select-shell">
                     <select
                         class="variant-select"
                         value={selectedCsmModel}
-                        aria-label="Speech model"
+                        aria-label="TTS model"
                         disabled={csmVariantDisabled}
                         onchange={handleCsmModelChange}
                     >
@@ -105,7 +105,7 @@
                     type="button"
                     class="progress-cancel-btn"
                     disabled={isCancellingCsmDownload}
-                    aria-label="Cancel speech model download"
+                    aria-label="Cancel TTS model download"
                     title={isCancellingCsmDownload
                         ? "Cancelling download..."
                         : "Cancel download"}
@@ -147,12 +147,12 @@
                 <div class="banner-status">
                     <div class="banner-copy">
                         <div class="banner-heading-row">
-                            <span class="banner-title">Speech</span>
+                            <span class="banner-title">TTS</span>
                             <div class="tooltip-shell variant-select-shell">
                                 <select
                                     class="variant-select"
                                     value={selectedCsmModel}
-                                    aria-label="Speech model"
+                                    aria-label="TTS model"
                                     disabled={csmVariantDisabled}
                                     onchange={handleCsmModelChange}
                                 >
@@ -196,12 +196,12 @@
             {:else}
                 <div class="banner-copy">
                     <div class="banner-heading-row">
-                        <span class="banner-title">Speech</span>
+                        <span class="banner-title">TTS</span>
                         <div class="tooltip-shell variant-select-shell">
                             <select
                                 class="variant-select"
                                 value={selectedCsmModel}
-                                aria-label="Speech model"
+                                aria-label="TTS model"
                                 disabled={csmVariantDisabled}
                                 onchange={handleCsmModelChange}
                             >
@@ -270,12 +270,12 @@
         <div class="banner-row">
             <div class="banner-copy">
                 <div class="banner-heading-row">
-                    <span class="banner-title">Speech</span>
+                    <span class="banner-title">TTS</span>
                     <div class="tooltip-shell variant-select-shell">
                         <select
                             class="variant-select"
                             value={selectedCsmModel}
-                            aria-label="Speech model"
+                            aria-label="TTS model"
                             disabled={csmVariantDisabled}
                             onchange={handleCsmModelChange}
                         >
