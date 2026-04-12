@@ -1793,10 +1793,11 @@
             selectedCsmModel = csmModelVariant;
             selectedSttModel = sttModelVariant;
             isGemmaDownloaded = gemmaDownloaded;
+            const previousOllamaSupported = isOllamaSupported;
             isOllamaSupported = ollamaSupported;
             isGemmaLoaded = gemmaLoaded;
 
-            if (ollamaSupported && ollamaModels.length === 0) {
+            if (ollamaSupported && (!previousOllamaSupported || ollamaModels.length === 0)) {
                 void syncOllamaModels();
             }
 
@@ -1887,8 +1888,8 @@
             });
             ollamaBaseUrl = url;
             ollamaApiKey = key;
-            await syncOllamaModels();
             await syncModelStatus();
+            await syncOllamaModels();
         } catch (err) {
             console.error("Failed to save Ollama config:", err);
             throw err;
@@ -2568,6 +2569,9 @@
     async function handleLoadGemma() {
         isLoadingGemma = true;
         try {
+            if (selectedGemmaVariant === "ollama") {
+                await syncOllamaModels();
+            }
             await invoke("start_server");
             isGemmaLoaded = true;
         } catch (err) {
@@ -3097,6 +3101,7 @@
             await initializePongPlaybackPreference();
             await ensureRuntimeDependencies();
             await syncModelStatus();
+            await syncOllamaModels();
         })();
 
         healthCheckInterval = window.setInterval(() => {
