@@ -4115,6 +4115,13 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     let stt_loaded = loaded_stt_model(state.inner()).is_some();
     let csm_loaded = loaded_csm_model(state.inner()).is_some();
     let any_models_loaded = gemma_loaded || stt_loaded || csm_loaded;
+    let memory_snapshot = match loaded_model_memory_snapshot(state.inner()) {
+        Ok(snapshot) => Some(snapshot),
+        Err(err) => {
+            error!("Failed to build tray memory snapshot: {}", err);
+            None
+        }
+    };
 
     let mut builder = MenuBuilder::new(app_handle).text(TRAY_SHOW_MENU_ID, "Show OpenDuck");
     if call_in_progress {
@@ -4179,8 +4186,62 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     }
     builder = builder.separator();
 
-    if call_in_progress {
+    let summary_text = if let Some(snapshot) = memory_snapshot.as_ref() {
+        if snapshot.total_bytes > 0 {
+            format!("Memory Used: {}", format_memory_bytes(snapshot.total_bytes))
+        } else if any_models_loaded {
+            "Memory Used: unavailable".to_string()
+        } else {
+            "No models loaded".to_string()
+        }
+    } else if any_models_loaded {
+        "Memory Used: unavailable".to_string()
+    } else {
+        "No models loaded".to_string()
+    };
 
+    let summary_item = match MenuItemBuilder::with_id(TRAY_MEMORY_SUMMARY_MENU_ID, summary_text)
+        .enabled(false)
+        .build(app_handle)
+    {
+        Ok(item) => item,
+        Err(err) => {
+            error!("Failed to build tray memory summary item: {}", err);
+            return;
+        }
+    };
+    builder = builder.item(&summary_item);
+
+    if let Some(snapshot) = memory_snapshot.as_ref() {
+        for model in &snapshot.models {
+            let item_id = match model.key.as_str() {
+                "gemma" => TRAY_MEMORY_GEMMA_MENU_ID,
+                "stt" => TRAY_MEMORY_STT_MENU_ID,
+                "csm" => TRAY_MEMORY_CSM_MENU_ID,
+                _ => continue,
+            };
+
+            let mut item_text = model.label.clone();
+            if let Some(detail) = &model.detail {
+                item_text.push_str(&format!(" ({detail})"));
+            }
+            item_text.push_str(&format!(": {}", format_memory_bytes(model.bytes)));
+
+            let memory_item = match MenuItemBuilder::with_id(item_id, item_text)
+                .enabled(false)
+                .build(app_handle)
+            {
+                Ok(item) => item,
+                Err(err) => {
+                    error!("Failed to build tray memory item: {}", err);
+                    return;
+                }
+            };
+            builder = builder.item(&memory_item);
+        }
+    }
+
+    if call_in_progress {
         let mute_label = if call_muted { "Unmute" } else { "Mute" };
         let clear_image_history_item =
             match MenuItemBuilder::with_id(TRAY_CLEAR_IMAGE_HISTORY_MENU_ID, "Clear Image History")
@@ -5109,7 +5170,20 @@ fn current_tray_title(app_handle: &AppHandle) -> Option<String> {
         return Some(title);
     }
 
-    None
+    if state.call_started_at.lock().unwrap().is_some() {
+        return None;
+    }
+
+    match loaded_model_memory_snapshot(state.inner()) {
+        Ok(snapshot) if snapshot.total_bytes > 0 => {
+            Some(format!(" {}", format_memory_bytes(snapshot.total_bytes)))
+        }
+        Ok(_) => None,
+        Err(err) => {
+            error!("Failed to build tray title memory summary: {}", err);
+            None
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
