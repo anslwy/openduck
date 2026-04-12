@@ -13,9 +13,27 @@ import traceback
 import wave
 from pathlib import Path
 
-import numpy as np
-from huggingface_hub import hf_hub_download
-from tqdm.auto import tqdm
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+
+# Lazy imports for heavy dependencies.
+def import_numpy():
+    if np is None:
+        import numpy as np_import
+        return np_import
+    return np
+
+
+def import_huggingface():
+    from huggingface_hub import hf_hub_download
+    return hf_hub_download
+
+def import_tqdm():
+    from tqdm.auto import tqdm
+    return tqdm
 
 sys.dont_write_bytecode = True
 
@@ -59,43 +77,50 @@ def emit_status(message: str) -> None:
 def redirect_library_stdout():
     # Third-party TTS libraries sometimes print warnings/progress to stdout.
     # The Rust side treats stdout as a JSON event stream, so route that noise
-    # to stderr to keep the worker protocol intact.
+    # to stderr to keep the protocol intact.
     with contextlib.redirect_stdout(sys.stderr):
         yield
 
 
-class CheckpointProgressTqdm(tqdm):
+class CheckpointProgressTqdm:
     progress_label = "checkpoint"
 
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("file", DEVNULL)
-        kwargs.setdefault("leave", False)
-        kwargs.setdefault("mininterval", 0.25)
-        super().__init__(*args, **kwargs)
-        self._emit_progress()
+    def __new__(cls, *args, **kwargs):
+        tqdm = import_tqdm()
+        
+        class CheckpointProgressTqdmImpl(tqdm):
+            def __init__(self, *args, **kwargs):
+                kwargs.setdefault("file", DEVNULL)
+                kwargs.setdefault("leave", False)
+                kwargs.setdefault("mininterval", 0.25)
+                super().__init__(*args, **kwargs)
+                self._emit_progress()
 
-    def update(self, n=1):
-        result = super().update(n)
-        self._emit_progress()
-        return result
+            def update(self, n=1):
+                result = super().update(n)
+                self._emit_progress()
+                return result
 
-    def close(self):
-        self._emit_progress(force=True)
-        return super().close()
+            def close(self):
+                self._emit_progress(force=True)
+                return super().close()
 
-    def _emit_progress(self, force: bool = False) -> None:
-        if self.total:
-            progress = max(0.0, min(100.0, float(self.n) / float(self.total) * 100.0))
-            emit_status(
-                f"Downloading {self.progress_label}... {progress:.0f}%"
-            )
-        elif force:
-            emit_status(f"Download complete. Initializing {self.progress_label}...")
-        else:
-            emit_status(f"Downloading {self.progress_label}...")
+            def _emit_progress(self, force: bool = False) -> None:
+                if self.total:
+                    progress = max(0.0, min(100.0, float(self.n) / float(self.total) * 100.0))
+                    emit_status(
+                        f"Downloading {CheckpointProgressTqdm.progress_label}... {progress:.0f}%"
+                    )
+                elif force:
+                    emit_status(f"Download complete. Initializing {CheckpointProgressTqdm.progress_label}...")
+                else:
+                    emit_status(f"Downloading {CheckpointProgressTqdm.progress_label}...")
+        
+        return CheckpointProgressTqdmImpl(*args, **kwargs)
 
 
 def download_hf_file(repo_id: str, filename: str, label: str) -> str:
+    hf_hub_download = import_huggingface()
     emit_status(f"Resolving {label}...")
     try:
         return hf_hub_download(
@@ -161,7 +186,8 @@ def download_cosyvoice2_assets() -> list[str]:
     ]
 
 
-def encode_wav_base64(audio: np.ndarray, sample_rate: int) -> str:
+def encode_wav_base64(audio, sample_rate: int) -> str:
+    np = import_numpy()
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
     if audio.size == 0:
         return ""
@@ -179,7 +205,8 @@ def encode_wav_base64(audio: np.ndarray, sample_rate: int) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def normalize_audio_array(audio) -> np.ndarray:
+def normalize_audio_array(audio):
+    np = import_numpy()
     if hasattr(audio, "detach"):
         audio = audio.detach()
     if hasattr(audio, "cpu"):
@@ -303,7 +330,7 @@ def supported_generate_kwargs(model, **candidate_kwargs):
     }
 
 
-def load_reference_audio(context_audio: Path | None, read_audio) -> np.ndarray | None:
+def load_reference_audio(context_audio: Path | None, read_audio):
     if context_audio is None:
         return None
 
@@ -663,7 +690,7 @@ def run_cosyvoice2_server(_quantize: bool, context_audio: Path | None = None) ->
     sample_rate = resolve_model_sample_rate(model)
     reference_audio = None
 
-    def load_reference_audio() -> np.ndarray | None:
+    def load_reference_audio():
         nonlocal reference_audio
         if context_audio is None:
             reference_audio = None

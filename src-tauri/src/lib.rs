@@ -6047,6 +6047,14 @@ fn resolve_setup_script(app_handle: &tauri::AppHandle) -> Result<PathBuf, String
 }
 
 fn runtime_dependencies_available(app_handle: &tauri::AppHandle) -> bool {
+    // If we have an installed runtime in the app data directory, it must be complete.
+    if let Ok(runtime_root) = resolve_runtime_root(app_handle) {
+        if runtime_root.exists() {
+            return runtime_root.join(".complete").exists();
+        }
+    }
+
+    // Fallback for development where dependencies are pre-installed in the source tree.
     resolve_gemma_python_executable(app_handle).is_ok()
         && resolve_csm_site_packages(app_handle).is_ok()
         && resolve_kokoro_site_packages(app_handle).is_ok()

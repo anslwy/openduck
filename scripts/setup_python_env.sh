@@ -49,26 +49,10 @@ if [ -n "$SERVER_PIDS" ]; then
     fi
 fi
 
-# Clean up existing environment if it exists to ensure a clean 3.11 install
-if [ -d "$PYTHON_ENV_DIR" ]; then
-    status "Removing old Python environment..."
+# Clean up existing environment only if it is missing the core interpreter
+if [ -d "$PYTHON_ENV_DIR" ] && [ ! -f "$PYTHON_ENV_DIR/bin/python3" ]; then
+    status "Removing broken Python environment..."
     rm -rf "$PYTHON_ENV_DIR"
-fi
-if [ -d "$CSM_ENV_DIR" ]; then
-    status "Removing old CSM environment..."
-    rm -rf "$CSM_ENV_DIR"
-fi
-if [ -d "$KOKORO_ENV_DIR" ]; then
-    status "Removing old Kokoro environment..."
-    rm -rf "$KOKORO_ENV_DIR"
-fi
-if [ -d "$COSYVOICE_ENV_DIR" ]; then
-    status "Removing old CosyVoice environment..."
-    rm -rf "$COSYVOICE_ENV_DIR"
-fi
-if [ -d "$STT_ENV_DIR" ]; then
-    status "Removing old STT environment..."
-    rm -rf "$STT_ENV_DIR"
 fi
 
 mkdir -p "$RUNTIME_ROOT_DIR"
@@ -76,36 +60,41 @@ mkdir -p "$TEMP_DIR"
 
 # Download a portable Python 3.11 for macOS (M1/M2/M3)
 # Using indygreg's python-build-standalone
-status "Downloading portable Python 3.11..."
-# Link for aarch64-apple-darwin
-PYTHON_URL="https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-aarch64-apple-darwin-install_only.tar.gz"
+if [ ! -f "$PYTHON_ENV_DIR/bin/python3" ]; then
+    status "Downloading portable Python 3.11..."
+    # Link for aarch64-apple-darwin
+    PYTHON_URL="https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-aarch64-apple-darwin-install_only.tar.gz"
 
-curl -L "$PYTHON_URL" -o "$PORTABLE_PYTHON_TAR"
+    curl -L "$PYTHON_URL" -o "$PORTABLE_PYTHON_TAR"
 
-# Extract Python
-status "Extracting Python..."
-mkdir -p "$PYTHON_ENV_DIR"
-tar -xzf "$PORTABLE_PYTHON_TAR" -C "$PYTHON_ENV_DIR" --strip-components=1
+    # Extract Python
+    status "Extracting Python..."
+    mkdir -p "$PYTHON_ENV_DIR"
+    tar -xzf "$PORTABLE_PYTHON_TAR" -C "$PYTHON_ENV_DIR" --strip-components=1
 
-# Clean up tarball
-rm "$PORTABLE_PYTHON_TAR"
+    # Clean up tarball
+    rm "$PORTABLE_PYTHON_TAR"
+else
+    status "Portable Python 3.11 already installed."
+fi
 
 # Create isolated virtual environments for Gemma and speech backends.
-status "Creating Gemma virtual environment..."
+# venv creation is fast if they already exist.
+status "Ensuring Gemma virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$PYTHON_ENV_DIR/venv"
-status "Creating CSM virtual environment..."
+status "Ensuring CSM virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$CSM_ENV_DIR/venv"
-status "Creating Kokoro virtual environment..."
+status "Ensuring Kokoro virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$KOKORO_ENV_DIR/venv"
-status "Creating CosyVoice virtual environment..."
+status "Ensuring CosyVoice virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$COSYVOICE_ENV_DIR/venv"
-status "Creating STT virtual environment..."
+status "Ensuring STT virtual environment..."
 "$PYTHON_ENV_DIR/bin/python3" -m venv "$STT_ENV_DIR/venv"
 
 # Install Gemma server dependencies into the Gemma venv.
 status "Installing mlx-vlm into the Gemma environment..."
 "$PYTHON_ENV_DIR/venv/bin/pip" install -U pip
-"$PYTHON_ENV_DIR/venv/bin/pip" install mlx-lm soundfile
+"$PYTHON_ENV_DIR/venv/bin/pip" install numpy huggingface_hub tqdm mlx-lm soundfile
 status "Installing mlx-vlm from tarball @ $MLX_VLM_REF..."
 "$PYTHON_ENV_DIR/venv/bin/pip" install "mlx-vlm @ https://github.com/Blaizzy/mlx-vlm/archive/$MLX_VLM_REF.tar.gz"
 
@@ -113,20 +102,21 @@ status "Installing mlx-vlm from tarball @ $MLX_VLM_REF..."
 # have different MLX dependency ranges and package names.
 status "Installing csm-mlx into the CSM environment..."
 "$CSM_ENV_DIR/venv/bin/pip" install -U pip
-"$CSM_ENV_DIR/venv/bin/pip" install "csm-mlx @ https://github.com/senstella/csm-mlx/archive/master.tar.gz" --upgrade
+"$CSM_ENV_DIR/venv/bin/pip" install numpy huggingface_hub tqdm "csm-mlx @ https://github.com/senstella/csm-mlx/archive/master.tar.gz" --upgrade
 status "Installing mlx-audio into the Kokoro environment..."
 "$KOKORO_ENV_DIR/venv/bin/pip" install -U pip
-"$KOKORO_ENV_DIR/venv/bin/pip" install "mlx-audio==$MLX_AUDIO_VERSION" soundfile
+"$KOKORO_ENV_DIR/venv/bin/pip" install numpy huggingface_hub tqdm spacy "mlx-audio==$MLX_AUDIO_VERSION" soundfile
 status "Installing Kokoro English G2P model..."
 "$KOKORO_ENV_DIR/venv/bin/python3" -m spacy download en_core_web_sm
 status "Installing mlx-audio-plus into the CosyVoice environment..."
 "$COSYVOICE_ENV_DIR/venv/bin/pip" install -U pip
-"$COSYVOICE_ENV_DIR/venv/bin/pip" install "mlx-audio-plus==$MLX_AUDIO_PLUS_VERSION" soundfile
+"$COSYVOICE_ENV_DIR/venv/bin/pip" install numpy huggingface_hub tqdm "mlx-audio-plus==$MLX_AUDIO_PLUS_VERSION" soundfile
 status "Installing mlx-audio into the STT environment..."
 "$STT_ENV_DIR/venv/bin/pip" install -U pip
-"$STT_ENV_DIR/venv/bin/pip" install "mlx-audio==$MLX_AUDIO_STT_VERSION" soundfile
+"$STT_ENV_DIR/venv/bin/pip" install numpy huggingface_hub tqdm "mlx-audio==$MLX_AUDIO_STT_VERSION" soundfile
 
 status "Setup complete!"
+touch "$RUNTIME_ROOT_DIR/.complete"
 status "Gemma environment: $PYTHON_ENV_DIR/venv"
 status "CSM environment: $CSM_ENV_DIR/venv"
 status "Kokoro environment: $KOKORO_ENV_DIR/venv"

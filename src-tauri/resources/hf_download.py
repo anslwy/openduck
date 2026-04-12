@@ -8,12 +8,24 @@ import sys
 import traceback
 from pathlib import Path
 
-from huggingface_hub import constants, hf_hub_download, snapshot_download
-from huggingface_hub.file_download import (
-    _get_metadata_or_catch_error,
-    repo_folder_name,
-)
-from tqdm.auto import tqdm
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+
+# Lazy imports for heavy dependencies.
+def import_huggingface_hub():
+    from huggingface_hub import constants, hf_hub_download, snapshot_download
+    from huggingface_hub.file_download import (
+        _get_metadata_or_catch_error,
+        repo_folder_name,
+    )
+    return constants, hf_hub_download, snapshot_download, _get_metadata_or_catch_error, repo_folder_name
+
+def import_tqdm():
+    from tqdm.auto import tqdm
+    return tqdm
 
 DEVNULL = open(os.devnull, "w")
 
@@ -23,59 +35,65 @@ def emit(payload: dict) -> None:
     sys.stdout.flush()
 
 
-class SingleFileProgressTqdm(tqdm):
+class SingleFileProgressTqdm:
     model = ""
     message = "Downloading model files..."
 
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("file", DEVNULL)
-        kwargs.setdefault("leave", False)
-        kwargs.setdefault("mininterval", 0.1)
-        self._last_signature: tuple[int, int | None] | None = None
-        super().__init__(*args, **kwargs)
-        self._emit_progress(force=True)
+    def __new__(cls, *args, **kwargs):
+        tqdm = import_tqdm()
 
-    def update(self, n=1):
-        result = super().update(n)
-        self._emit_progress()
-        return result
+        class SingleFileProgressTqdmImpl(tqdm):
+            def __init__(self, *args, **kwargs):
+                kwargs.setdefault("file", DEVNULL)
+                kwargs.setdefault("leave", False)
+                kwargs.setdefault("mininterval", 0.1)
+                self._last_signature: tuple[int, int | None] | None = None
+                super().__init__(*args, **kwargs)
+                self._emit_progress(force=True)
 
-    def refresh(self, *args, **kwargs):
-        result = super().refresh(*args, **kwargs)
-        self._emit_progress()
-        return result
+            def update(self, n=1):
+                result = super().update(n)
+                self._emit_progress()
+                return result
 
-    def close(self):
-        self._emit_progress(force=True)
-        return super().close()
+            def refresh(self, *args, **kwargs):
+                result = super().refresh(*args, **kwargs)
+                self._emit_progress()
+                return result
 
-    def _emit_progress(self, force: bool = False) -> None:
-        total_bytes = int(self.total) if self.total else None
-        downloaded_bytes = int(self.n)
-        signature = (downloaded_bytes, total_bytes)
+            def close(self):
+                self._emit_progress(force=True)
+                return super().close()
 
-        if not force and signature == self._last_signature:
-            return
+            def _emit_progress(self, force: bool = False) -> None:
+                total_bytes = int(self.total) if self.total else None
+                downloaded_bytes = int(self.n)
+                signature = (downloaded_bytes, total_bytes)
 
-        self._last_signature = signature
-        progress = None
-        if total_bytes:
-            progress = max(
-                0.0,
-                min(100.0, float(downloaded_bytes) / float(total_bytes) * 100.0),
-            )
+                if not force and signature == self._last_signature:
+                    return
 
-        emit(
-            {
-                "type": "progress",
-                "model": self.model,
-                "message": self.message,
-                "progress": progress,
-                "downloaded_bytes": downloaded_bytes,
-                "total_bytes": total_bytes,
-                "indeterminate": progress is None and not force,
-            }
-        )
+                self._last_signature = signature
+                progress = None
+                if total_bytes:
+                    progress = max(
+                        0.0,
+                        min(100.0, float(downloaded_bytes) / float(total_bytes) * 100.0),
+                    )
+
+                emit(
+                    {
+                        "type": "progress",
+                        "model": SingleFileProgressTqdm.model,
+                        "message": SingleFileProgressTqdm.message,
+                        "progress": progress,
+                        "downloaded_bytes": downloaded_bytes,
+                        "total_bytes": total_bytes,
+                        "indeterminate": progress is None and not force,
+                    }
+                )
+        
+        return SingleFileProgressTqdmImpl(*args, **kwargs)
 
 
 def split_filename(filename: str) -> tuple[str | None, str]:
@@ -89,6 +107,7 @@ def build_download_manifest(
     model: str,
     allow_patterns: list[str] | None,
 ) -> tuple[list[object], dict]:
+    constants, _, snapshot_download, _get_metadata_or_catch_error, repo_folder_name = import_huggingface_hub()
     dry_run_items = snapshot_download(
         repo_id,
         allow_patterns=allow_patterns,
@@ -158,6 +177,7 @@ def build_download_manifest(
 
 
 def download_with_progress(repo_id: str, model: str, allow_patterns: list[str] | None) -> str:
+    constants, hf_hub_download, snapshot_download, _, repo_folder_name = import_huggingface_hub()
     dry_run_items, manifest = build_download_manifest(repo_id, model, allow_patterns)
     emit(manifest)
     files_to_download = [item for item in dry_run_items if getattr(item, "will_download", True)]
@@ -208,63 +228,69 @@ def download_with_progress(repo_id: str, model: str, allow_patterns: list[str] |
             }
         )
 
-    class GlobalProgressTqdm(tqdm):
+    class GlobalProgressTqdm:
         current_file = ""
         current_offset = 0
         total_for_all_files = total_bytes
         model_name = model
 
-        def __init__(self, *args, **kwargs):
-            kwargs.setdefault("file", DEVNULL)
-            kwargs.setdefault("leave", False)
-            kwargs.setdefault("mininterval", 0.1)
-            self._last_signature: tuple[str, int, int | None] | None = None
-            super().__init__(*args, **kwargs)
-            self._emit_progress(force=True)
+        def __new__(cls, *args, **kwargs):
+            tqdm = import_tqdm()
 
-        def update(self, n=1):
-            result = super().update(n)
-            self._emit_progress()
-            return result
+            class GlobalProgressTqdmImpl(tqdm):
+                def __init__(self, *args, **kwargs):
+                    kwargs.setdefault("file", DEVNULL)
+                    kwargs.setdefault("leave", False)
+                    kwargs.setdefault("mininterval", 0.1)
+                    self._last_signature: tuple[str, int, int | None] | None = None
+                    super().__init__(*args, **kwargs)
+                    self._emit_progress(force=True)
 
-        def close(self):
-            self._emit_progress(force=True)
-            return super().close()
+                def update(self, n=1):
+                    result = super().update(n)
+                    self._emit_progress()
+                    return result
 
-        def _emit_progress(self, force: bool = False) -> None:
-            total_for_all_files = (
-                int(self.total_for_all_files) if self.total_for_all_files > 0 else None
-            )
-            downloaded_bytes = self.current_offset + int(self.n)
-            signature = (self.current_file, downloaded_bytes, total_for_all_files)
+                def close(self):
+                    self._emit_progress(force=True)
+                    return super().close()
 
-            if not force and signature == self._last_signature:
-                return
+                def _emit_progress(self, force: bool = False) -> None:
+                    total_for_all_files = (
+                        int(GlobalProgressTqdm.total_for_all_files) if GlobalProgressTqdm.total_for_all_files > 0 else None
+                    )
+                    downloaded_bytes = GlobalProgressTqdm.current_offset + int(self.n)
+                    signature = (GlobalProgressTqdm.current_file, downloaded_bytes, total_for_all_files)
 
-            self._last_signature = signature
-            progress = None
-            if total_for_all_files:
-                progress = max(
-                    0.0,
-                    min(
-                        100.0,
-                        float(downloaded_bytes)
-                        / float(total_for_all_files)
-                        * 100.0,
-                    ),
-                )
+                    if not force and signature == self._last_signature:
+                        return
 
-            emit(
-                {
-                    "type": "progress",
-                    "model": self.model_name,
-                    "message": f"Downloading {self.current_file}...",
-                    "progress": progress,
-                    "downloaded_bytes": downloaded_bytes,
-                    "total_bytes": total_for_all_files,
-                    "indeterminate": progress is None and not force,
-                }
-            )
+                    self._last_signature = signature
+                    progress = None
+                    if total_for_all_files:
+                        progress = max(
+                            0.0,
+                            min(
+                                100.0,
+                                float(downloaded_bytes)
+                                / float(total_for_all_files)
+                                * 100.0,
+                            ),
+                        )
+
+                    emit(
+                        {
+                            "type": "progress",
+                            "model": GlobalProgressTqdm.model_name,
+                            "message": f"Downloading {GlobalProgressTqdm.current_file}...",
+                            "progress": progress,
+                            "downloaded_bytes": downloaded_bytes,
+                            "total_bytes": total_for_all_files,
+                            "indeterminate": progress is None and not force,
+                        }
+                    )
+            
+            return GlobalProgressTqdmImpl(*args, **kwargs)
 
     for item in files_to_download:
         subfolder, filename = split_filename(item.filename)
@@ -307,6 +333,8 @@ def download_with_progress(repo_id: str, model: str, allow_patterns: list[str] |
 
 
 def download_with_snapshot_progress(repo_id: str, model: str, allow_patterns: list[str] | None) -> str:
+    _, _, snapshot_download, _, _ = import_huggingface_hub()
+    
     class SnapshotProgressTqdm(SingleFileProgressTqdm):
         pass
 
@@ -410,6 +438,7 @@ def main() -> int:
     )
 
     try:
+        _, hf_hub_download, snapshot_download, _, _ = import_huggingface_hub()
         supports_dry_run = "dry_run" in inspect.signature(snapshot_download).parameters
         supports_hf_tqdm = "tqdm_class" in inspect.signature(hf_hub_download).parameters
 

@@ -6,7 +6,16 @@ import sys
 import traceback
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+
+# Lazy imports for heavy dependencies.
+def import_huggingface():
+    from huggingface_hub import snapshot_download
+    return snapshot_download
 
 sys.dont_write_bytecode = True
 
@@ -28,6 +37,7 @@ def redirect_library_stdout():
 
 
 def resolve_local_model_path(repo_id: str) -> Path:
+    snapshot_download = import_huggingface()
     emit_status("Resolving Whisper model files...")
     try:
         with redirect_library_stdout():
