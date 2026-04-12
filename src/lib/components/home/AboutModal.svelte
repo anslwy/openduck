@@ -1,6 +1,7 @@
 <!-- Custom About modal that shows build metadata such as version labels and commit hashes. -->
 <script lang="ts">
     import { onDestroy } from "svelte";
+    import { invoke } from "@tauri-apps/api/core";
 
     import type {
         AppUpdateInfo,
@@ -64,6 +65,16 @@
         queueCopyFeedbackReset();
     }
 
+    async function handleDownloadFromGithub() {
+        try {
+            await invoke("plugin:shell|open", {
+                path: "https://github.com/anslwy/openduck/releases",
+            });
+        } catch (error) {
+            console.error("Failed to open GitHub releases:", error);
+        }
+    }
+
     const copyButtonLabel = $derived(
         copyState === "copied"
             ? "Copied"
@@ -115,7 +126,7 @@
             case "error":
                 return appUpdateError ?? "The update check failed.";
             default:
-                return "Check GitHub Releases for a newer build.";
+                return "Check GitHub for a newer build.";
         }
     });
     const updateActionDisabled = $derived(
@@ -144,9 +155,7 @@
     <div class="about-modal-header">
         <div class="about-modal-copy">
             <span class="about-modal-title" id="about-modal-title">About</span>
-            <span class="about-modal-subtitle"
-                >Build and release metadata</span
-            >
+            <span class="about-modal-subtitle">Build and release metadata</span>
         </div>
         <button
             type="button"
@@ -191,12 +200,14 @@
         </div>
 
         <div class="about-metadata-card">
-            <div class="about-metadata-row">
-                <span class="about-metadata-label">Commit</span>
-                <span class="about-metadata-value about-metadata-mono">
-                    {buildInfo.git_sha ?? "Unavailable"}
-                </span>
-            </div>
+            {#if buildInfo.git_sha}
+                <div class="about-metadata-row">
+                    <span class="about-metadata-label">Commit</span>
+                    <span class="about-metadata-value about-metadata-mono">
+                        {buildInfo.git_sha}
+                    </span>
+                </div>
+            {/if}
             <div class="about-metadata-row">
                 <span class="about-metadata-label">Build ID</span>
                 <span class="about-metadata-value about-metadata-mono">
@@ -222,9 +233,18 @@
             {#if buildInfo.is_dirty}
                 <div class="about-metadata-row">
                     <span class="about-metadata-label">Working Tree</span>
-                    <span class="about-metadata-value about-metadata-warning"
-                        >Dirty</span
-                    >
+                    <div class="about-metadata-value-stack">
+                        <span class="about-metadata-value about-metadata-warning"
+                            >Local Changes</span
+                        >
+                        {#if buildInfo.dirty_files && buildInfo.dirty_files.length > 0}
+                            <div class="about-metadata-files">
+                                {#each buildInfo.dirty_files as file}
+                                    <div class="about-metadata-file">{file}</div>
+                                {/each}
+                            </div>
+                        {/if}
+                    </div>
                 </div>
             {/if}
         </div>
@@ -233,7 +253,8 @@
             <div class="about-update-header">
                 <div class="about-update-copy">
                     <span class="about-update-title">Updates</span>
-                    <span class="about-update-detail">{updateStatusDetail}</span>
+                    <span class="about-update-detail">{updateStatusDetail}</span
+                    >
                 </div>
                 <button
                     type="button"
@@ -286,9 +307,9 @@
                         <button
                             type="button"
                             class="utility-btn about-update-install-btn"
-                            onclick={installAvailableUpdate}
+                            onclick={handleDownloadFromGithub}
                         >
-                            Download and Install
+                            Download from Github
                         </button>
                     {:else if appUpdateStatus === "installed"}
                         <button

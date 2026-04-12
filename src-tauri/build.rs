@@ -5,6 +5,8 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/");
+    println!("cargo:rerun-if-changed=../src/");
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_BUILD_VERSION");
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_BUILD_LABEL");
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_BUILD_CHANNEL");
@@ -35,11 +37,26 @@ fn main() {
     let build_number = read_env_override("OPEN_DUCK_BUILD_NUMBER");
     let version_label = read_env_override("OPEN_DUCK_BUILD_LABEL")
         .or_else(|| default_label_for_channel(build_channel.as_deref()));
-    let git_sha = read_env_override("OPEN_DUCK_GIT_SHA")
-        .or_else(|| git_output(&repo_root, &["rev-parse", "HEAD"]));
+    let has_git = resolve_git_dir(&repo_root).is_some();
+
+    let git_sha = read_env_override("OPEN_DUCK_GIT_SHA").or_else(|| {
+        if has_git {
+            git_output(&repo_root, &["rev-parse", "HEAD"])
+        } else {
+            None
+        }
+    });
     let is_dirty = read_env_override("OPEN_DUCK_GIT_DIRTY")
         .map(|value| parse_truthy_flag(&value))
-        .unwrap_or_else(|| git_is_dirty(&repo_root));
+        .unwrap_or_else(|| has_git && git_is_dirty(&repo_root));
+    let dirty_files = read_env_override("OPEN_DUCK_GIT_DIRTY_FILES").or_else(|| {
+        if has_git {
+            git_output(&repo_root, &["status", "--porcelain"])
+        } else {
+            None
+        }
+    });
+
     let build_id = read_env_override("OPEN_DUCK_BUILD_ID").or_else(|| {
         compose_build_id(
             &version,
@@ -65,6 +82,7 @@ fn main() {
         "OPEN_DUCK_GIT_DIRTY",
         Some(if is_dirty { "true" } else { "false" }),
     );
+    emit_build_env("OPEN_DUCK_GIT_DIRTY_FILES", dirty_files.as_deref());
     emit_build_env(
         "OPEN_DUCK_UPDATER_PUBLIC_KEY",
         updater_public_key.as_deref(),

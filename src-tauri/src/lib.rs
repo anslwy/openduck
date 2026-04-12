@@ -404,6 +404,7 @@ struct ContactExportResult {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BuildInfo {
     app_name: String,
     version: String,
@@ -414,6 +415,7 @@ struct BuildInfo {
     git_short_sha: Option<String>,
     build_id: Option<String>,
     is_dirty: bool,
+    dirty_files: Option<Vec<String>>,
     copy_text: String,
 }
 
@@ -436,6 +438,7 @@ const BUILD_NUMBER: &str = env!("OPEN_DUCK_BUILD_NUMBER");
 const BUILD_ID: &str = env!("OPEN_DUCK_BUILD_ID");
 const BUILD_GIT_SHA: &str = env!("OPEN_DUCK_GIT_SHA");
 const BUILD_GIT_DIRTY: &str = env!("OPEN_DUCK_GIT_DIRTY");
+const BUILD_GIT_DIRTY_FILES: Option<&str> = option_env!("OPEN_DUCK_GIT_DIRTY_FILES");
 const BUILD_UPDATER_PUBLIC_KEY: &str = env!("OPEN_DUCK_UPDATER_PUBLIC_KEY");
 const BUILD_UPDATER_ENDPOINT: &str = env!("OPEN_DUCK_UPDATER_ENDPOINT");
 
@@ -489,7 +492,12 @@ fn build_info_copy_text(build_info: &BuildInfo) -> String {
     }
 
     if build_info.is_dirty {
-        lines.push("Working Tree: Dirty".to_string());
+        lines.push("Working Tree: Local Changes".to_string());
+        if let Some(files) = &build_info.dirty_files {
+            for file in files {
+                lines.push(format!("  - {file}"));
+            }
+        }
     }
 
     lines.join("\n")
@@ -509,6 +517,21 @@ fn current_build_info() -> BuildInfo {
         .map(|sha| sha.chars().take(12).collect::<String>())
         .filter(|sha| !sha.is_empty());
 
+    let mut dirty_files = None;
+    if is_dirty {
+        if let Some(files_raw) = BUILD_GIT_DIRTY_FILES {
+            let parsed: Vec<String> = files_raw
+                .split('\n')
+                .map(|line| line.trim())
+                .filter(|line| line.len() > 3)
+                .map(|line| line[3..].trim().to_string())
+                .collect();
+            if !parsed.is_empty() {
+                dirty_files = Some(parsed);
+            }
+        }
+    }
+
     let mut build_info = BuildInfo {
         app_name,
         version,
@@ -519,6 +542,7 @@ fn current_build_info() -> BuildInfo {
         git_short_sha,
         build_id,
         is_dirty,
+        dirty_files,
         copy_text: String::new(),
     };
     build_info.copy_text = build_info_copy_text(&build_info);

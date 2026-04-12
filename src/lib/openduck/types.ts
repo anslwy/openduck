@@ -161,6 +161,7 @@ export type BuildInfo = {
     git_short_sha?: string | null;
     build_id?: string | null;
     is_dirty: boolean;
+    dirty_files?: string[] | null;
     copy_text: string;
 };
 
