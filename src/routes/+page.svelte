@@ -2944,115 +2944,117 @@
                     {/if}
                 </div>
             {/if}
-            <div class="model-actions">
-                <div
-                    class="tooltip-shell variant-select-shell model-preset-shell"
-                >
-                    <select
-                        class="variant-select model-preset-select"
-                        value={activeModelPreset}
-                        aria-label="Model preset"
-                        title={modelPresetTooltip}
-                        disabled={presetSelectDisabled}
-                        onchange={handleModelPresetChange}
+            {#if !isPreparingRuntime}
+                <div class="model-actions">
+                    <div
+                        class="tooltip-shell variant-select-shell model-preset-shell"
                     >
-                        {#each modelPresetOptions as option}
-                            <option value={option.value}>{option.label}</option>
-                        {/each}
-                    </select>
+                        <select
+                            class="variant-select model-preset-select"
+                            value={activeModelPreset}
+                            aria-label="Model preset"
+                            title={modelPresetTooltip}
+                            disabled={presetSelectDisabled}
+                            onchange={handleModelPresetChange}
+                        >
+                            {#each modelPresetOptions as option}
+                                <option value={option.value}>{option.label}</option>
+                            {/each}
+                        </select>
+                    </div>
+                    <button
+                        type="button"
+                        class="utility-btn load-all-btn"
+                        disabled={loadAllDisabled}
+                        title={loadAllButtonTitle}
+                        onclick={handleLoadAll}
+                    >
+                        {loadAllButtonLabel}
+                    </button>
                 </div>
-                <button
-                    type="button"
-                    class="utility-btn load-all-btn"
-                    disabled={loadAllDisabled}
-                    title={loadAllButtonTitle}
-                    onclick={handleLoadAll}
-                >
-                    {loadAllButtonLabel}
-                </button>
-            </div>
-            <GemmaBanner
-                {isDownloadingGemma}
-                {isGemmaDownloaded}
-                {isGemmaLoaded}
-                {selectedGemmaVariant}
-                {gemmaVariantOptions}
-                {gemmaVariantDisabled}
-                {gemmaVariantTooltip}
-                {gemmaDownloadError}
-                {gemmaDownloadMessage}
-                {gemmaDownloadProgress}
-                {gemmaDownloadIndeterminate}
-                {isCancellingGemmaDownload}
-                {isUnloadingGemma}
-                {isLoadingGemma}
-                {isClearingGemmaCache}
-                {formatDownloadPercent}
-                {handleGemmaVariantChange}
-                {handleCancelGemmaDownload}
-                {handleUnloadGemma}
-                {handleClearGemmaCache}
-                {handleDownloadGemma}
-                {handleLoadGemma}
-            />
-            <SttBanner
-                {sttUsesGemma}
-                {isGemmaLoaded}
-                {isDownloadingStt}
-                {isSttDownloaded}
-                {isSttLoaded}
-                {selectedSttModel}
-                {sttModelOptions}
-                {sttVariantDisabled}
-                {sttModelTooltip}
-                {selectedSttModelLabel}
-                {sttDownloadError}
-                {sttDownloadMessage}
-                {sttDownloadProgress}
-                {sttDownloadIndeterminate}
-                {sttLoadMessage}
-                {isCancellingSttDownload}
-                {isUnloadingStt}
-                {isLoadingStt}
-                {isClearingSttCache}
-                {formatDownloadPercent}
-                {handleSttModelChange}
-                {handleCancelSttDownload}
-                {handleUnloadStt}
-                {handleClearSttCache}
-                {handleDownloadStt}
-                {handleLoadStt}
-            />
-            <SpeechBanner
-                {isDownloadingCsm}
-                {isCsmDownloaded}
-                {isCsmLoaded}
-                {selectedCsmModel}
-                {csmModelOptions}
-                {csmVariantDisabled}
-                {csmModelTooltip}
-                {csmQuantizeAvailable}
-                {isCsmQuantized}
-                {isUpdatingCsmQuantize}
-                {selectedCsmModelLabel}
-                {csmDownloadError}
-                {csmDownloadMessage}
-                {csmDownloadProgress}
-                {csmDownloadIndeterminate}
-                {csmLoadMessage}
-                {isCancellingCsmDownload}
-                {isUnloadingCsm}
-                {isLoadingCsm}
-                {isClearingCsmCache}
-                {formatDownloadPercent}
-                {handleCsmModelChange}
-                {handleCancelCsmDownload}
-                {handleUnloadCsm}
-                {handleClearCsmCache}
-                {handleDownloadCsm}
-                {handleLoadCsm}
-                {handleCsmQuantizeToggle}
-            />
+                <GemmaBanner
+                    {isDownloadingGemma}
+                    {isGemmaDownloaded}
+                    {isGemmaLoaded}
+                    {selectedGemmaVariant}
+                    {gemmaVariantOptions}
+                    {gemmaVariantDisabled}
+                    {gemmaVariantTooltip}
+                    {gemmaDownloadError}
+                    {gemmaDownloadMessage}
+                    {gemmaDownloadProgress}
+                    {gemmaDownloadIndeterminate}
+                    {isCancellingGemmaDownload}
+                    {isUnloadingGemma}
+                    {isLoadingGemma}
+                    {isClearingGemmaCache}
+                    {formatDownloadPercent}
+                    {handleGemmaVariantChange}
+                    {handleCancelGemmaDownload}
+                    {handleUnloadGemma}
+                    {handleClearGemmaCache}
+                    {handleDownloadGemma}
+                    {handleLoadGemma}
+                />
+                <SttBanner
+                    {sttUsesGemma}
+                    {isGemmaLoaded}
+                    {isDownloadingStt}
+                    {isSttDownloaded}
+                    {isSttLoaded}
+                    {selectedSttModel}
+                    {sttModelOptions}
+                    {sttVariantDisabled}
+                    {sttModelTooltip}
+                    {selectedSttModelLabel}
+                    {sttDownloadError}
+                    {sttDownloadMessage}
+                    {sttDownloadProgress}
+                    {sttDownloadIndeterminate}
+                    {sttLoadMessage}
+                    {isCancellingSttDownload}
+                    {isUnloadingStt}
+                    {isLoadingStt}
+                    {isClearingSttCache}
+                    {formatDownloadPercent}
+                    {handleSttModelChange}
+                    {handleCancelSttDownload}
+                    {handleUnloadStt}
+                    {handleClearSttCache}
+                    {handleDownloadStt}
+                    {handleLoadStt}
+                />
+                <SpeechBanner
+                    {isDownloadingCsm}
+                    {isCsmDownloaded}
+                    {isCsmLoaded}
+                    {selectedCsmModel}
+                    {csmModelOptions}
+                    {csmVariantDisabled}
+                    {csmModelTooltip}
+                    {csmQuantizeAvailable}
+                    {isCsmQuantized}
+                    {isUpdatingCsmQuantize}
+                    {selectedCsmModelLabel}
+                    {csmDownloadError}
+                    {csmDownloadMessage}
+                    {csmDownloadProgress}
+                    {csmDownloadIndeterminate}
+                    {csmLoadMessage}
+                    {isCancellingCsmDownload}
+                    {isUnloadingCsm}
+                    {isLoadingCsm}
+                    {isClearingCsmCache}
+                    {formatDownloadPercent}
+                    {handleCsmModelChange}
+                    {handleCancelCsmDownload}
+                    {handleUnloadCsm}
+                    {handleClearCsmCache}
+                    {handleDownloadCsm}
+                    {handleLoadCsm}
+                    {handleCsmQuantizeToggle}
+                />
+            {/if}
         </div>
     {/if}
 
