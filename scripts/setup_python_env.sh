@@ -105,15 +105,15 @@ status "Creating STT virtual environment..."
 # Install Gemma server dependencies into the Gemma venv.
 status "Installing mlx-vlm into the Gemma environment..."
 "$PYTHON_ENV_DIR/venv/bin/pip" install -U pip
-"$PYTHON_ENV_DIR/venv/bin/pip" install soundfile
-status "Installing mlx-vlm from $MLX_VLM_REPO @ $MLX_VLM_REF..."
-"$PYTHON_ENV_DIR/venv/bin/pip" install "git+$MLX_VLM_REPO@$MLX_VLM_REF"
+"$PYTHON_ENV_DIR/venv/bin/pip" install mlx-lm soundfile
+status "Installing mlx-vlm from tarball @ $MLX_VLM_REF..."
+"$PYTHON_ENV_DIR/venv/bin/pip" install "mlx-vlm @ https://github.com/Blaizzy/mlx-vlm/archive/$MLX_VLM_REF.tar.gz"
 
 # Install speech backends into isolated venvs because the TTS stacks
 # have different MLX dependency ranges and package names.
 status "Installing csm-mlx into the CSM environment..."
 "$CSM_ENV_DIR/venv/bin/pip" install -U pip
-"$CSM_ENV_DIR/venv/bin/pip" install "git+$CSM_MLX_REPO" --upgrade
+"$CSM_ENV_DIR/venv/bin/pip" install "csm-mlx @ https://github.com/senstella/csm-mlx/archive/master.tar.gz" --upgrade
 status "Installing mlx-audio into the Kokoro environment..."
 "$KOKORO_ENV_DIR/venv/bin/pip" install -U pip
 "$KOKORO_ENV_DIR/venv/bin/pip" install "mlx-audio==$MLX_AUDIO_VERSION" soundfile

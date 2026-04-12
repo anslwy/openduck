@@ -183,5 +183,5 @@ GITHUB_RELEASE_TAG=v1.2.3 RELEASE_NOTES_FILE=release-notes.md ./scripts/release.
 - The updater public key is embedded into the app at build time from `OPEN_DUCK_UPDATER_PUBLIC_KEY` or `src-tauri/updater-public-key.pem`.
 - `latest.json` is generated for `darwin-aarch64` and points at the exact GitHub Release tag you pass in via `GITHUB_RELEASE_TAG`.
 - The packaged app now prepares its Python runtime on first launch instead of bundling the generated venv directories into the DMG.
-- First launch still needs internet access, and it may need Apple Command Line Tools if `git` is not already available because the runtime setup installs a couple of GitHub-hosted Python packages.
+- First launch still needs internet access to download the local Python runtime and models (this can take several minutes). Once setup is complete, the app can be used offline.
 - The generated DMG and updater artifacts are built by Tauri first, then copied to `dist/`.
