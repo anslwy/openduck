@@ -49,22 +49,6 @@
         }, 1800);
     }
 
-    async function handleCopyBuildInfo() {
-        if (!buildInfo?.copy_text) {
-            return;
-        }
-
-        try {
-            await navigator.clipboard.writeText(buildInfo.copy_text);
-            copyState = "copied";
-        } catch (error) {
-            console.error("Failed to copy build info:", error);
-            copyState = "failed";
-        }
-
-        queueCopyFeedbackReset();
-    }
-
     async function handleDownloadFromGithub() {
         try {
             await invoke("plugin:shell|open", {
@@ -234,13 +218,16 @@
                 <div class="about-metadata-row">
                     <span class="about-metadata-label">Working Tree</span>
                     <div class="about-metadata-value-stack">
-                        <span class="about-metadata-value about-metadata-warning"
+                        <span
+                            class="about-metadata-value about-metadata-warning"
                             >Local Changes</span
                         >
                         {#if buildInfo.dirty_files && buildInfo.dirty_files.length > 0}
                             <div class="about-metadata-files">
                                 {#each buildInfo.dirty_files as file}
-                                    <div class="about-metadata-file">{file}</div>
+                                    <div class="about-metadata-file">
+                                        {file}
+                                    </div>
                                 {/each}
                             </div>
                         {/if}
@@ -327,16 +314,6 @@
                     <span class="about-empty-detail">{appUpdateError}</span>
                 </div>
             {/if}
-        </div>
-
-        <div class="about-modal-actions">
-            <button
-                type="button"
-                class="utility-btn about-copy-btn"
-                onclick={handleCopyBuildInfo}
-            >
-                {copyButtonLabel}
-            </button>
         </div>
     {:else if buildInfoError}
         <div class="about-empty-state error">

@@ -3,6 +3,7 @@
     import type { SelectOption, SttModelVariant } from "$lib/openduck/types";
 
     let {
+        selectedGemmaVariant,
         sttUsesGemma,
         isGemmaLoaded,
         isDownloadingStt,
@@ -45,6 +46,7 @@
         sttDownloadProgress: number | null;
         sttDownloadIndeterminate: boolean;
         sttLoadMessage: string;
+        selectedGemmaVariant: string;
         isCancellingSttDownload: boolean;
         isUnloadingStt: boolean;
         isLoadingStt: boolean;
@@ -77,7 +79,9 @@
                             onchange={handleSttModelChange}
                         >
                             {#each sttModelOptions as option}
-                                <option value={option.value}>{option.label}</option>
+                                <option value={option.value} disabled={option.disabled}
+                                    >{option.label}</option
+                                >
                             {/each}
                         </select>
                         <div class="tooltip-bubble variant-tooltip">
@@ -86,9 +90,11 @@
                     </div>
                 </div>
                 <span class="banner-subtitle"
-                    >{isGemmaLoaded
-                        ? "Using the loaded Gemma model"
-                        : "Loads with the Gemma model above"}</span
+                    >{selectedGemmaVariant === "ollama"
+                        ? "Not supported with Ollama"
+                        : isGemmaLoaded
+                          ? "Using the loaded Gemma model"
+                          : "Loads with the Gemma model above"}</span
                 >
             </div>
         </div>
@@ -284,7 +290,9 @@
                             onchange={handleSttModelChange}
                         >
                             {#each sttModelOptions as option}
-                                <option value={option.value}>{option.label}</option>
+                                <option value={option.value} disabled={option.disabled}
+                                    >{option.label}</option
+                                >
                             {/each}
                         </select>
                         <div class="tooltip-bubble variant-tooltip">

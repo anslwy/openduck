@@ -10,6 +10,7 @@
     import ContactsModal from "$lib/components/home/ContactsModal.svelte";
     import ConversationPopup from "$lib/components/home/ConversationPopup.svelte";
     import GemmaBanner from "$lib/components/home/GemmaBanner.svelte";
+    import OllamaConfigModal from "$lib/components/home/OllamaConfigModal.svelte";
     import SpeechBanner from "$lib/components/home/SpeechBanner.svelte";
     import SttBanner from "$lib/components/home/SttBanner.svelte";
     import {
@@ -95,6 +96,9 @@
     let callStartedAtMs = $state<number | null>(null);
     let isGemmaDownloaded = $state(false);
     let isGemmaLoaded = $state(false);
+    let isOllamaSupported = $state(false);
+    let ollamaModels = $state<string[]>([]);
+    let selectedOllamaModel = $state<string>("");
     let isCsmDownloaded = $state(false);
     let isCsmLoaded = $state(false);
     let isSttDownloaded = $state(false);
@@ -172,6 +176,9 @@
     let contacts = $state<ContactProfile[]>([createDefaultContact()]);
     let selectedContactId = $state(DEFAULT_CONTACT_ID);
     let showContactsPopup = $state(false);
+    let showOllamaConfig = $state(false);
+    let ollamaBaseUrl = $state("http://127.0.0.1:11434");
+    let ollamaApiKey = $state("");
     let showConversationPopup = $state(false);
     let showAboutPopup = $state(false);
     let conversationLogEntries = $state<ConversationLogEntry[]>([]);
@@ -248,6 +255,9 @@
             isLoadingGemma ||
             isUnloadingGemma,
     );
+    const ollamaModelDisabled = $derived(
+        isPreparingRuntime || isLoadingGemma || isUnloadingGemma,
+    );
     const csmVariantDisabled = $derived(
         isPreparingRuntime ||
             isCsmLoaded ||
@@ -267,32 +277,47 @@
             (selectedSttModel === "whisper_large_v3_turbo" && isSttLoaded),
     );
     let conversationLogViewport = $state<HTMLDivElement | null>(null);
+
+    function setConversationLogViewport(element: HTMLDivElement | null) {
+        conversationLogViewport = element;
+    }
     const modelPresetOptions: Array<SelectOption<ModelPreset>> = [
         { value: "lite", label: MODEL_PRESETS.lite.label },
         { value: "normal", label: MODEL_PRESETS.normal.label },
         { value: "realistic", label: MODEL_PRESETS.realistic.label },
         { value: "custom", label: "Custom" },
     ];
-    const gemmaVariantOptions: Array<SelectOption<GemmaVariant>> = [
+    const gemmaVariantOptions: Array<SelectOption<GemmaVariant>> = $derived([
         { value: "e4b", label: "Gemma-4-E4B" },
         { value: "e2b", label: "Gemma-4-E2B" },
-    ];
+        {
+            value: "ollama",
+            label: isOllamaSupported ? "Ollama" : "Ollama (Not Supported)",
+            disabled: !isOllamaSupported,
+        },
+    ]);
     const csmModelOptions: Array<SelectOption<CsmModelVariant>> = [
         { value: "expressiva_1b", label: "CSM Expressiva 1B" },
         { value: "kokoro_82m", label: "Kokoro-82M" },
         { value: "cosyvoice2_0_5b", label: "CosyVoice2-0.5B" },
     ];
-    const sttModelOptions: Array<SelectOption<SttModelVariant>> = [
-        { value: "gemma", label: "Gemma" },
+    const sttModelOptions: Array<SelectOption<SttModelVariant>> = $derived([
+        {
+            value: "gemma",
+            label: "Gemma",
+            disabled: selectedGemmaVariant === "ollama",
+        },
         {
             value: "whisper_large_v3_turbo",
             label: "Whisper Large V3 Turbo",
         },
-    ];
+    ]);
     const gemmaVariantTooltip = $derived(
         selectedGemmaVariant === "e4b"
             ? "E4B uses more RAM but is generally more capable. Recommended for Macs with 24 GB+ of unified memory."
-            : "E2B uses less RAM but is generally less capable. Recommended for Macs with 16 GB+ of unified memory.",
+            : selectedGemmaVariant === "e2b"
+              ? "E2B uses less RAM but is generally less capable. Recommended for Macs with 16 GB+ of unified memory."
+              : 'Gemma STT is not supported with Ollama. If your model does not show, run "ollama run {your_model}" in Terminal (One-time only)',
     );
     const selectedCsmModelLabel = $derived(
         csmModelOptions.find((option) => option.value === selectedCsmModel)
@@ -311,7 +336,9 @@
     );
     const sttModelTooltip = $derived(
         selectedSttModel === "gemma"
-            ? "Use the loaded Gemma model for transcription. There is no separate STT model to load."
+            ? selectedGemmaVariant === "ollama"
+                ? "Gemma STT is not supported when using Ollama."
+                : "Use the loaded Gemma model for transcription. There is no separate STT model to load."
             : "Use mlx-audio with mlx-community/whisper-large-v3-turbo-asr-fp16 for transcription. Download and load it separately from Gemma.",
     );
     const modelPresetTooltip = $derived(
@@ -327,7 +354,7 @@
             const missingModels: string[] = [];
 
             if (!isGemmaDownloaded) {
-                missingModels.push("Gemma");
+                missingModels.push("LLM");
             }
 
             if (!isCsmDownloaded) {
@@ -653,6 +680,7 @@
             gemmaVariant: selectedGemmaVariant,
             csmModel: selectedCsmModel,
             sttModel: selectedSttModel,
+            ollamaModel: selectedOllamaModel,
         };
         window.localStorage.setItem(
             MODEL_PREFERENCES_STORAGE_KEY,
@@ -726,7 +754,10 @@
                 { enabled: storedEnabled },
             );
         } catch (err) {
-            console.error("Failed to initialize pong playback preference:", err);
+            console.error(
+                "Failed to initialize pong playback preference:",
+                err,
+            );
         }
 
         applyPongPlaybackPreference(effectiveEnabled);
@@ -741,7 +772,9 @@
             (candidate) => candidate.id === entryId,
         );
         if (!entry || entry.contextEntryId == null) {
-            alert("This message is no longer part of the active conversation context.");
+            alert(
+                "This message is no longer part of the active conversation context.",
+            );
             return false;
         }
 
@@ -764,15 +797,14 @@
                 text: normalizedText,
                 clearImage,
             });
-            conversationLogEntries = conversationLogEntries.map(
-                (candidate) =>
-                    candidate.id === entryId
-                        ? {
-                              ...candidate,
-                              text: normalizedText,
-                              imageUrl: nextImageUrl,
-                          }
-                        : candidate,
+            conversationLogEntries = conversationLogEntries.map((candidate) =>
+                candidate.id === entryId
+                    ? {
+                          ...candidate,
+                          text: normalizedText,
+                          imageUrl: nextImageUrl,
+                      }
+                    : candidate,
             );
             return true;
         } catch (err) {
@@ -830,8 +862,7 @@
             return;
         }
 
-        syncedConversationLogHasVisibleImages =
-            conversationLogHasVisibleImages;
+        syncedConversationLogHasVisibleImages = conversationLogHasVisibleImages;
         void invoke("sync_conversation_log_has_visible_images", {
             visible: conversationLogHasVisibleImages,
         }).catch((err) =>
@@ -847,6 +878,7 @@
             gemmaVariant: selectedGemmaVariant,
             csmModel: selectedCsmModel,
             sttModel: selectedSttModel,
+            ollamaModel: selectedOllamaModel,
         };
     }
 
@@ -872,11 +904,24 @@
         selectedGemmaVariant = restoredPreferences.gemmaVariant;
         selectedCsmModel = restoredPreferences.csmModel;
         selectedSttModel = restoredPreferences.sttModel;
+        if (restoredPreferences.ollamaModel) {
+            selectedOllamaModel = restoredPreferences.ollamaModel;
+        }
 
         try {
             await setGemmaVariantSelection(restoredPreferences.gemmaVariant);
         } catch (err) {
             console.error("Failed to restore Gemma variant:", err);
+        }
+
+        if (restoredPreferences.ollamaModel) {
+            try {
+                await invoke("set_ollama_model", {
+                    model: restoredPreferences.ollamaModel,
+                });
+            } catch (err) {
+                console.error("Failed to restore Ollama model:", err);
+            }
         }
 
         try {
@@ -889,6 +934,10 @@
             await setSttModelSelection(restoredPreferences.sttModel);
         } catch (err) {
             console.error("Failed to restore STT model:", err);
+        }
+
+        if (isOllamaSupported) {
+            await syncOllamaModels();
         }
     }
 
@@ -1579,9 +1628,27 @@
     async function handleGemmaVariantChange(event: Event) {
         const target = event.currentTarget as HTMLSelectElement;
         const nextVariant = target.value as GemmaVariant;
+
+        if (nextVariant === "ollama" && !isOllamaSupported) {
+            target.value = selectedGemmaVariant;
+            return;
+        }
+
         const previousVariant = selectedGemmaVariant;
 
         selectedGemmaVariant = nextVariant;
+
+        if (nextVariant === "ollama") {
+            void syncOllamaModels();
+        }
+
+        if (nextVariant === "ollama" && selectedSttModel === "gemma") {
+            try {
+                await setSttModelSelection("whisper_large_v3_turbo");
+            } catch (err) {
+                console.error("Failed to auto-switch STT model:", err);
+            }
+        }
 
         try {
             await setGemmaVariantSelection(nextVariant);
@@ -1701,6 +1768,7 @@
                 csmModelVariant,
                 sttModelVariant,
                 gemmaDownloaded,
+                ollamaSupported,
                 gemmaLoaded,
                 csmDownloaded,
                 csmLoaded,
@@ -1712,6 +1780,7 @@
                 invoke<CsmModelVariant>("get_csm_model_variant"),
                 invoke<SttModelVariant>("get_stt_model_variant"),
                 invoke<boolean>("check_model_status"),
+                invoke<boolean>("check_ollama_status"),
                 invoke<boolean>("is_server_running"),
                 invoke<boolean>("check_csm_status"),
                 invoke<boolean>("is_csm_running"),
@@ -1724,7 +1793,13 @@
             selectedCsmModel = csmModelVariant;
             selectedSttModel = sttModelVariant;
             isGemmaDownloaded = gemmaDownloaded;
+            isOllamaSupported = ollamaSupported;
             isGemmaLoaded = gemmaLoaded;
+
+            if (ollamaSupported && ollamaModels.length === 0) {
+                void syncOllamaModels();
+            }
+
             isCsmDownloaded = csmDownloaded;
             isCsmLoaded = csmLoaded;
             isSttDownloaded = sttDownloaded;
@@ -1742,6 +1817,90 @@
         } catch (err) {
             console.error("Failed to sync model status:", err);
         }
+    }
+
+    async function syncOllamaModels() {
+        if (!isOllamaSupported) {
+            ollamaModels = [];
+            return;
+        }
+        try {
+            const models = await invoke<string[]>("get_ollama_models");
+            ollamaModels = models;
+            const current = await invoke<string>("get_ollama_model");
+
+            if (selectedOllamaModel === "") {
+                selectedOllamaModel = current;
+            }
+
+            if (
+                ollamaModels.length > 0 &&
+                selectedOllamaModel !== "" &&
+                !ollamaModels.includes(selectedOllamaModel)
+            ) {
+                // If the selected model is not in the list, but there's a match without tag, use it
+                const matchWithoutTag = ollamaModels.find(
+                    (m) =>
+                        m.split(":")[0] === selectedOllamaModel.split(":")[0],
+                );
+                if (matchWithoutTag) {
+                    selectedOllamaModel = matchWithoutTag;
+                    await invoke("set_ollama_model", {
+                        model: selectedOllamaModel,
+                    });
+                }
+            } else if (ollamaModels.length > 0 && selectedOllamaModel === "") {
+                selectedOllamaModel = ollamaModels[0];
+                await invoke("set_ollama_model", {
+                    model: selectedOllamaModel,
+                });
+            }
+        } catch (err) {
+            console.error("Failed to fetch Ollama models:", err);
+        }
+    }
+
+    async function handleOllamaModelChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        const nextModel = target.value;
+        selectedOllamaModel = nextModel;
+        await invoke("set_ollama_model", { model: nextModel });
+        persistModelPreferences();
+    }
+
+    async function syncOllamaConfig() {
+        try {
+            const [url, key] =
+                await invoke<[string, string | null]>("get_ollama_config");
+            ollamaBaseUrl = url;
+            ollamaApiKey = key ?? "";
+        } catch (err) {
+            console.error("Failed to sync Ollama config:", err);
+        }
+    }
+
+    async function saveOllamaConfig(url: string, key: string) {
+        try {
+            await invoke("set_ollama_config", {
+                url,
+                key: key.trim() || null,
+            });
+            ollamaBaseUrl = url;
+            ollamaApiKey = key;
+            await syncOllamaModels();
+            await syncModelStatus();
+        } catch (err) {
+            console.error("Failed to save Ollama config:", err);
+            throw err;
+        }
+    }
+
+    function openOllamaConfig() {
+        showOllamaConfig = true;
+    }
+
+    function closeOllamaConfig() {
+        showOllamaConfig = false;
     }
 
     async function ensureRuntimeDependencies() {
@@ -2413,7 +2572,7 @@
             isGemmaLoaded = true;
         } catch (err) {
             console.error("Load model failed:", err);
-            alert(`Failed to load Gemma.\n${String(err)}`);
+            alert(`Failed to load LLM.\n${String(err)}`);
         } finally {
             isLoadingGemma = false;
             await syncModelStatus();
@@ -2874,10 +3033,10 @@
 
                             pendingConversationUserLogEntryId =
                                 appendConversationLogEntry(
-                                "user",
-                                payload.text,
-                                payload.imageDataUrl ?? null,
-                            );
+                                    "user",
+                                    payload.text,
+                                    payload.imageDataUrl ?? null,
+                                );
                         },
                     ),
                     listen<ModelDownloadProgressEvent>(
@@ -2934,6 +3093,7 @@
             persistContactsMetadata();
             await syncSelectedContactPrompt();
             await restoreModelPreferences();
+            await syncOllamaConfig();
             await initializePongPlaybackPreference();
             await ensureRuntimeDependencies();
             await syncModelStatus();
@@ -2974,7 +3134,10 @@
     <div class="background" style={selectedContactImageStyle}></div>
 
     {#if !calling}
-        <div class="model-tags" class:dimmed={showContactsPopup || showAboutPopup}>
+        <div
+            class="model-tags"
+            class:dimmed={showContactsPopup || showAboutPopup}
+        >
             {#if showRuntimeSetupBanner}
                 <div
                     class="runtime-setup-banner"
@@ -3013,7 +3176,9 @@
                             onchange={handleModelPresetChange}
                         >
                             {#each modelPresetOptions as option}
-                                <option value={option.value}>{option.label}</option>
+                                <option value={option.value}
+                                    >{option.label}</option
+                                >
                             {/each}
                         </select>
                     </div>
@@ -3050,8 +3215,14 @@
                     {handleClearGemmaCache}
                     {handleDownloadGemma}
                     {handleLoadGemma}
+                    {ollamaModels}
+                    {selectedOllamaModel}
+                    {handleOllamaModelChange}
+                    {ollamaModelDisabled}
+                    {openOllamaConfig}
                 />
                 <SttBanner
+                    {selectedGemmaVariant}
                     {sttUsesGemma}
                     {isGemmaLoaded}
                     {isDownloadingStt}
@@ -3192,17 +3363,24 @@
             />
         {/if}
 
-        {#if calling && showConversationPopup}
+        {#if showOllamaConfig}
+            <OllamaConfigModal
+                {ollamaBaseUrl}
+                {ollamaApiKey}
+                onSave={saveOllamaConfig}
+                onClose={closeOllamaConfig}
+            />
+        {/if}
+
+        {#if showConversationPopup}
             <ConversationPopup
                 {conversationLogEntries}
                 {closeConversationPopup}
+                {clearConversationLogImages}
                 {isClearingConversationLogImages}
                 {isSavingConversationLogEntryEdit}
-                {clearConversationLogImages}
                 {saveConversationLogEntryEdit}
-                setConversationLogViewport={(element) => {
-                    conversationLogViewport = element;
-                }}
+                {setConversationLogViewport}
             />
         {/if}
 
@@ -3210,20 +3388,29 @@
             <AboutModal
                 {buildInfo}
                 {buildInfoError}
-                {closeAboutPopup}
                 {availableAppUpdate}
                 {appUpdateStatus}
                 {appUpdateError}
                 checkForUpdates={checkForAppUpdates}
                 installAvailableUpdate={installAppUpdate}
-                restartToApplyUpdate={restartToApplyUpdate}
+                {restartToApplyUpdate}
+                {closeAboutPopup}
             />
         {/if}
 
-        <div class="control-bar">
+        <div
+            class="control-bar"
+            class:dimmed={showContactsPopup || showAboutPopup}
+        >
             <div class="info">
-                <div class="username">{selectedContactName}</div>
-                <div class="timer">{calling ? formattedTime : "Ready"}</div>
+                <span class="username">OpenDuck</span>
+                <span class="timer"
+                    >{calling
+                        ? formattedTime
+                        : modelsReady
+                          ? "Ready"
+                          : "Models loading..."}</span
+                >
             </div>
 
             <div class="actions">
@@ -3355,7 +3542,9 @@
                                     stroke-linejoin="round"
                                     ><path
                                         d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"
-                                    /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line
+                                    /><path
+                                        d="M19 10v2a7 7 0 0 1-14 0v-2"
+                                    /><line
                                         x1="12"
                                         y1="19"
                                         x2="12"
@@ -3421,8 +3610,8 @@
                             id="start-call-tooltip"
                             class="tooltip-bubble start-call-tooltip"
                         >
-                            LLM, STT, and TTS models must be all loaded to
-                            start the call.
+                            LLM, STT, and TTS models must be all loaded to start
+                            the call.
                         </div>
                     {/if}
                 </div>

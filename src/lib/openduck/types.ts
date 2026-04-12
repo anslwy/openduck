@@ -115,7 +115,7 @@ export type ModelMemoryUsageSnapshot = {
     models: ModelMemoryUsageEntry[];
 };
 
-export type GemmaVariant = "e4b" | "e2b";
+export type GemmaVariant = "e4b" | "e2b" | "ollama";
 export type CsmModelVariant =
     | "expressiva_1b"
     | "kokoro_82m"
@@ -187,6 +187,7 @@ export type StoredModelPreferences = {
     gemmaVariant: GemmaVariant;
     csmModel: CsmModelVariant;
     sttModel: SttModelVariant;
+    ollamaModel?: string | null;
 };
 
 export type ModelSelection = Omit<StoredModelPreferences, "version">;
@@ -195,4 +196,5 @@ export type ModelPreset = "lite" | "normal" | "realistic" | "custom";
 export type SelectOption<T extends string> = {
     value: T;
     label: string;
+    disabled?: boolean;
 };

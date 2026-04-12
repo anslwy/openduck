@@ -229,6 +229,16 @@ struct ChatCompletionStreamDelta {
     content: Option<serde_json::Value>,
 }
 
+#[derive(Deserialize)]
+struct OllamaTagsResponse {
+    models: Vec<OllamaModel>,
+}
+
+#[derive(Deserialize)]
+struct OllamaModel {
+    name: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TrayIconVariant {
     Default,
@@ -295,6 +305,9 @@ struct AppState {
     tray_pong_playback_hydrated: Mutex<bool>,
     tray_pong_playback_modified_before_hydration: Mutex<bool>,
     conversation_log_has_visible_images: Mutex<bool>,
+    selected_ollama_model: Mutex<String>,
+    ollama_base_url: Mutex<String>,
+    ollama_api_key: Mutex<Option<String>>,
     next_conversation_entry_id: AtomicU64,
     is_quitting: Mutex<bool>,
 }
@@ -874,6 +887,16 @@ fn set_conversation_log_has_visible_images_state(
 
 #[tauri::command]
 async fn is_server_running(state: State<'_, AppState>) -> Result<bool, String> {
+    let selected_variant = selected_gemma_variant(state.inner());
+    let loaded_variant = loaded_gemma_variant(state.inner());
+
+    if selected_variant == GemmaVariant::Ollama {
+        if loaded_variant != Some(GemmaVariant::Ollama) {
+            return Ok(false);
+        }
+        return Ok(ollama_service_is_running(state.inner()).await);
+    }
+
     let port = {
         let port_guard = state.server_port.lock().unwrap();
         *port_guard
@@ -883,6 +906,89 @@ async fn is_server_running(state: State<'_, AppState>) -> Result<bool, String> {
     };
 
     Ok(gemma_server_is_running_on_port(port).await)
+}
+
+async fn ollama_service_is_running(state: &AppState) -> bool {
+    let client = reqwest::Client::new();
+    let base_url = state.ollama_base_url.lock().unwrap().clone();
+    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
+    let mut request = client.get(url);
+
+    if let Some(api_key) = state.ollama_api_key.lock().unwrap().as_ref() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    match request.send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+#[tauri::command]
+async fn check_ollama_status(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(ollama_service_is_running(state.inner()).await)
+}
+
+#[tauri::command]
+async fn get_ollama_models(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::new();
+    let base_url = state.ollama_base_url.lock().unwrap().clone();
+    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
+    let mut request = client.get(url);
+
+    if let Some(api_key) = state.ollama_api_key.lock().unwrap().as_ref() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let resp = request
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to Ollama: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Ollama returned error: {}", resp.status()));
+    }
+
+    let payload = resp
+        .json::<OllamaTagsResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse Ollama models: {e}"))?;
+
+    Ok(payload.models.into_iter().map(|m| m.name).collect())
+}
+
+#[tauri::command]
+fn get_ollama_model(state: State<'_, AppState>) -> String {
+    state.selected_ollama_model.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_ollama_model(state: State<'_, AppState>, model: String) {
+    let mut model_guard = state.selected_ollama_model.lock().unwrap();
+    *model_guard = model;
+}
+
+#[tauri::command]
+fn get_ollama_config(state: State<'_, AppState>) -> (String, Option<String>) {
+    let url = state.ollama_base_url.lock().unwrap().clone();
+    let key = state.ollama_api_key.lock().unwrap().clone();
+    (url, key)
+}
+
+#[tauri::command]
+fn set_ollama_config(state: State<'_, AppState>, url: String, key: Option<String>) {
+    let mut url_guard = state.ollama_base_url.lock().unwrap();
+    *url_guard = url;
+    let mut key_guard = state.ollama_api_key.lock().unwrap();
+    *key_guard = if let Some(k) = key {
+        if k.trim().is_empty() {
+            None
+        } else {
+            Some(k)
+        }
+    } else {
+        None
+    };
 }
 
 #[tauri::command]
@@ -1057,15 +1163,30 @@ fn loaded_stt_root_pid(state: &AppState) -> Option<u32> {
 
 fn loaded_model_memory_snapshot(state: &AppState) -> Result<ModelMemoryUsageSnapshot, String> {
     let mut targets: Vec<(String, String, Option<String>, u32)> = Vec::new();
+    let mut models = Vec::new();
 
     if let Some(loaded_variant) = loaded_gemma_variant(state) {
+        let (label, detail) = if loaded_variant == GemmaVariant::Ollama {
+            (
+                "Ollama".to_string(),
+                Some(state.selected_ollama_model.lock().unwrap().clone()),
+            )
+        } else {
+            ("LLM".to_string(), Some(loaded_variant.label().to_string()))
+        };
+
         if let Some(root_pid) = loaded_gemma_root_pid(state) {
-            targets.push((
-                "gemma".to_string(),
-                "Gemma".to_string(),
-                Some(loaded_variant.label().to_string()),
-                root_pid,
-            ));
+            targets.push(("gemma".to_string(), label, detail, root_pid));
+        } else if loaded_variant == GemmaVariant::Ollama {
+            // Special case for Ollama which doesn't have a PID we track
+            models.push(ModelMemoryUsageEntry {
+                key: "gemma".to_string(),
+                label,
+                detail,
+                bytes: 0,
+                root_pid: 0,
+                process_count: 0,
+            });
         }
     }
 
@@ -1084,20 +1205,23 @@ fn loaded_model_memory_snapshot(state: &AppState) -> Result<ModelMemoryUsageSnap
         if let Some(root_pid) = loaded_csm_root_pid(state) {
             targets.push((
                 "csm".to_string(),
-                "Speech".to_string(),
+                "TTS".to_string(),
                 Some(loaded_variant.label().to_string()),
                 root_pid,
             ));
         }
     }
 
-    if targets.is_empty() {
+    if targets.is_empty() && models.is_empty() {
         return Ok(ModelMemoryUsageSnapshot::default());
     }
 
-    let process_snapshots = snapshot_process_memory()?;
+    let process_snapshots = if !targets.is_empty() {
+        snapshot_process_memory()?
+    } else {
+        std::collections::HashMap::new()
+    };
     let mut total_bytes = 0_u64;
-    let mut models = Vec::new();
 
     for (key, label, detail, root_pid) in targets {
         let Some((bytes, process_count)) =
@@ -1135,7 +1259,7 @@ fn set_gemma_variant(state: State<'_, AppState>, variant: String) -> Result<(), 
     if let Some(loaded_variant) = loaded_gemma_variant(state.inner()) {
         if loaded_variant != selected_variant {
             return Err(format!(
-                "Gemma {} is already loaded. Unload it before switching to {}.",
+                "LLM {} is already loaded. Unload it before switching to {}.",
                 loaded_variant.label(),
                 selected_variant.label()
             ));
@@ -1364,6 +1488,18 @@ async fn start_server(
     ensure_runtime_dependencies_inner(&app_handle, state.inner()).await?;
 
     let selected_variant = selected_gemma_variant(state.inner());
+
+    if selected_variant == GemmaVariant::Ollama {
+        if !ollama_service_is_running(state.inner()).await {
+            return Err("Ollama service is not responding at the configured URL.".to_string());
+        }
+        let mut port_guard = state.server_port.lock().unwrap();
+        *port_guard = Some(11434); // We still set a port to indicate it's "running"
+        let mut loaded_variant_guard = state.loaded_gemma_variant.lock().unwrap();
+        *loaded_variant_guard = Some(GemmaVariant::Ollama);
+        return Ok(());
+    }
+
     let port;
     {
         let mut process_guard = state.server_process.lock().unwrap();
@@ -1372,7 +1508,7 @@ async fn start_server(
             if let Some(loaded_variant) = loaded_gemma_variant(state.inner()) {
                 if loaded_variant != selected_variant {
                     return Err(format!(
-                        "Gemma {} is already loaded. Unload it before switching to {}.",
+                        "LLM {} is already loaded. Unload it before switching to {}.",
                         loaded_variant.label(),
                         selected_variant.label()
                     ));
@@ -2079,10 +2215,13 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
         let state = app_handle.state::<AppState>();
         generation_id = state.next_generation_id.fetch_add(1, Ordering::Relaxed);
         conversation_session_id = current_conversation_session_id(state.inner());
-        gemma_model = loaded_gemma_variant(state.inner())
-            .unwrap_or_else(|| selected_gemma_variant(state.inner()))
-            .repo_id()
-            .to_string();
+        let variant = loaded_gemma_variant(state.inner())
+            .unwrap_or_else(|| selected_gemma_variant(state.inner()));
+        gemma_model = if variant == GemmaVariant::Ollama {
+            state.selected_ollama_model.lock().unwrap().clone()
+        } else {
+            variant.repo_id().to_string()
+        };
         active_stt_model = selected_stt_model(state.inner());
         server_port = *state.server_port.lock().unwrap();
     }
@@ -2353,6 +2492,9 @@ async fn transcribe_audio_with_gemma(
     gemma_model: &str,
     audio_path: &Path,
 ) -> Result<String, String> {
+    if server_port == 11434 {
+        return Err("Ollama does not support audio transcription. Please switch to Whisper Large V3 Turbo for STT.".to_string());
+    }
     let stt_started_at = Instant::now();
     let client = reqwest::Client::new();
     let request = ChatRequest {
@@ -2518,6 +2660,47 @@ async fn transcribe_audio_with_stt_worker(
     Ok(sanitized_transcript)
 }
 
+fn serialize_request_for_ollama(request: &ChatRequest) -> serde_json::Value {
+    let messages: Vec<serde_json::Value> = request
+        .messages
+        .iter()
+        .map(|msg| {
+            let content: Vec<serde_json::Value> = msg
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    ChatContent::Text { text } => Some(serde_json::json!({
+                        "type": "text",
+                        "text": text
+                    })),
+                    ChatContent::InputImage { image_url } => {
+                        load_image_data_url(Path::new(image_url)).map(|data_url| {
+                            serde_json::json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": data_url
+                                }
+                            })
+                        })
+                    }
+                    ChatContent::InputAudio { .. } => None,
+                })
+                .collect();
+
+            serde_json::json!({
+                "role": msg.role,
+                "content": content
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "model": request.model,
+        "messages": messages,
+        "stream": request.stream
+    })
+}
+
 async fn stream_gemma_response_to_csm(
     app_handle: &tauri::AppHandle,
     server_port: u16,
@@ -2589,15 +2772,40 @@ async fn stream_gemma_response_to_csm(
     };
     log_chat_request_debug(conversation_session_id, &request);
 
-    let mut response = client
-        .post(format!(
-            "{}/v1/chat/completions",
-            server_base_url(server_port)
-        ))
-        .json(&request)
+    let state = app_handle.state::<AppState>();
+    let is_ollama = server_port == 11434;
+    let request_body = if is_ollama {
+        serialize_request_for_ollama(&request)
+    } else {
+        serde_json::to_value(&request).unwrap()
+    };
+
+    let base_url = if is_ollama {
+        state.ollama_base_url.lock().unwrap().clone()
+    } else {
+        server_base_url(server_port)
+    };
+
+    let mut request_builder = client
+        .post(format!("{}/v1/chat/completions", base_url.trim_end_matches('/')))
+        .json(&request_body);
+
+    if is_ollama {
+        if let Some(api_key) = state.ollama_api_key.lock().unwrap().as_ref() {
+            request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
+        }
+    }
+
+    let mut response = request_builder
         .send()
         .await
-        .map_err(|e| format!("Failed to call MLX Server: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "Failed to call {} Server: {}",
+                if is_ollama { "Ollama" } else { "MLX" },
+                e
+            )
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -2605,7 +2813,10 @@ async fn stream_gemma_response_to_csm(
             .text()
             .await
             .unwrap_or_else(|e| format!("Failed to read error body: {e}"));
-        return Err(format!("MLX Server returned error {status}: {body}"));
+        return Err(format!(
+            "{} Server returned error {status}: {body}",
+            if is_ollama { "Ollama" } else { "MLX" }
+        ));
     }
 
     let response_id = allocate_csm_response_id(app_handle);
@@ -4264,7 +4475,12 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
             if let Some(detail) = &model.detail {
                 item_text.push_str(&format!(" ({detail})"));
             }
-            item_text.push_str(&format!(": {}", format_memory_bytes(model.bytes)));
+
+            if model.bytes > 0 {
+                item_text.push_str(&format!(": {}", format_memory_bytes(model.bytes)));
+            } else {
+                item_text.push_str(": external");
+            }
 
             let memory_item = match MenuItemBuilder::with_id(item_id, item_text)
                 .enabled(false)
@@ -4302,14 +4518,14 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     } else if any_models_loaded {
         builder = builder.separator();
 
-        if gemma_loaded {
+        if gemma_loaded && loaded_gemma_variant(state.inner()) != Some(GemmaVariant::Ollama) {
             builder = builder.text(TRAY_UNLOAD_GEMMA_MENU_ID, "Unload Gemma");
         }
         if stt_loaded {
             builder = builder.text(TRAY_UNLOAD_STT_MENU_ID, "Unload STT");
         }
         if csm_loaded {
-            builder = builder.text(TRAY_UNLOAD_CSM_MENU_ID, "Unload Speech");
+            builder = builder.text(TRAY_UNLOAD_CSM_MENU_ID, "Unload TTS");
         }
 
         let unload_all_item =
@@ -4486,7 +4702,7 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
                     }
 
                     if let Err(err) = stop_csm_server_inner(state.inner()).await {
-                        error!("Failed to unload Speech from tray: {}", err);
+                        error!("Failed to unload TTS from tray: {}", err);
                     }
 
                     refresh_tray_presentation(&app_handle);
@@ -4505,7 +4721,7 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
                         error!("Failed to unload STT from tray: {}", err);
                     }
                     if let Err(err) = stop_csm_server_inner(state.inner()).await {
-                        error!("Failed to unload Speech from tray: {}", err);
+                        error!("Failed to unload TTS from tray: {}", err);
                     }
                     if let Err(err) = stop_server_inner(state.inner()) {
                         error!("Failed to unload Gemma from tray: {}", err);
@@ -6019,6 +6235,9 @@ fn any_snapshot_matches(model_dir_name: &str, predicate: impl Fn(&Path) -> bool)
 }
 
 fn gemma_model_cache_exists(variant: GemmaVariant) -> bool {
+    if variant == GemmaVariant::Ollama {
+        return true;
+    }
     any_snapshot_matches(variant.cache_dir(), gemma_snapshot_is_complete)
 }
 
@@ -7073,6 +7292,9 @@ pub fn run() {
             tray_pong_playback_hydrated: Mutex::new(false),
             tray_pong_playback_modified_before_hydration: Mutex::new(false),
             conversation_log_has_visible_images: Mutex::new(false),
+            selected_ollama_model: Mutex::new("gemma2:2b".to_string()),
+            ollama_base_url: Mutex::new("http://127.0.0.1:11434".to_string()),
+            ollama_api_key: Mutex::new(None),
             next_conversation_entry_id: AtomicU64::new(1),
             is_quitting: Mutex::new(false),
         })
@@ -7103,8 +7325,14 @@ pub fn run() {
             set_gemma_variant,
             get_stt_model_variant,
             set_stt_model_variant,
-            check_model_status,
-            check_csm_status,
+                check_model_status,
+                check_ollama_status,
+                get_ollama_models,
+                get_ollama_model,
+                set_ollama_model,
+                get_ollama_config,
+                set_ollama_config,
+                check_csm_status,
             check_stt_status,
             clear_model_cache,
             get_model_download_status,

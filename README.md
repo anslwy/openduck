@@ -1,9 +1,9 @@
 # OpenDuck
 
-OpenDuck is a local voice-call prototype built with a Svelte frontend and a Tauri/Rust backend for Apple Silicon.
+A local voice-call desktop application built for [rubberducking](https://en.wikipedia.org/wiki/Rubber_duck_debugging) on Apple Silicon.
 
 The frontend captures microphone audio and plays streamed speech output.
-The backend uses Gemma for reply generation, a selectable STT backend for transcription, and a selectable speech backend for text-to-speech.
+The backend uses Gemma / Ollama for reply generation, a selectable STT backend for transcription, and a selectable speech backend for text-to-speech.
 
 <img width="689" height="745" alt="image" src="https://github.com/user-attachments/assets/dcf3b70b-5221-4139-8c98-0bd38557f17b" />
 
@@ -60,12 +60,12 @@ flowchart TD
     F --> G{Long enough silence?}
     G -- No --> D
     G -- Yes --> H[Write temp WAV]
-    H --> I[Transcribe with Gemma]
+    H --> I[Transcribe with Gemma / Whisper]
     I --> J{Meaningful transcript?}
     J -- No --> K[Return to Listening]
     J -- Yes --> L[Interrupt active reply]
     L --> M[Build prompt with system prompt prior text turns transcript and same-turn audio context]
-    M --> N[Stream reply tokens from Gemma]
+    M --> N[Stream reply tokens from LLM]
     N --> O[Sanitize text and update assistant transcript]
     O --> P{Sentence boundary reached?}
     P -- Yes --> Q[Send completed sentence to selected speech worker]
@@ -101,3 +101,11 @@ The app is now split so the entry files stay focused on orchestration:
 
 - Frontend: `src/routes/+page.svelte` owns the page-level state machine, while `src/lib/components/home/` contains the repeated UI sections and `src/lib/openduck/` contains shared browser-side helpers.
 - Backend: `src-tauri/src/lib.rs` remains the main Tauri entry/coordinator, while reusable constants, model-selection enums, and frontend event payloads/helpers live in dedicated Rust modules.
+
+## FAQ
+
+### Q: What is the minimum requirement for RAM?
+### A: If you choose `Gemma-4-E2B` for both LLM and STT, then select `Kokoro-82M` for TTS you can get away with ~4GB
+
+### Q: The model is too slow / My Mac does not have enough RAM / Even the E4B model is too dumb to be useful. What should I do?
+### A: Use [Ollama](https://ollama.com) for the LLM. They support cloud models. Execute for example `ollama run gemma4:31b-cloud` in your Terminal. Then you should be able to see the model in the dropdown on OpenDuck and you can chat with the model without using your GPU. Alternatively, you can setup Ollama on your more powerful desktop / GPU server then change the base url.

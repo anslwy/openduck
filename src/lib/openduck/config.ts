@@ -8,7 +8,7 @@ import type {
 } from "./types";
 
 export const DEFAULT_VOICE_SYSTEM_PROMPT =
-  "You are a friendly voice AI assistant from OpenDuck. You are in a live voice call right now. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Try to ask follow-up questions more often.";
+  "You are a friendly voice AI assistant from OpenDuck. A local-first voice-call desktop application built for rubberducking. You are in a live voice call right now. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Try to ask follow-up questions more often.";
 export const CONTACTS_STORAGE_KEY = "openduck.contacts.v1";
 export const CONTACT_ICONS_DB_NAME = "openduck.contacts";
 export const CONTACT_ICONS_STORE_NAME = "contact-icons";
@@ -18,6 +18,7 @@ export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
 export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
 export const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
+export const DEFAULT_OLLAMA_MODEL = "gemma2:2b";
 
 export const MODEL_PRESETS: Record<
   Exclude<ModelPreset, "custom">,
@@ -34,6 +35,7 @@ export const MODEL_PRESETS: Record<
       gemmaVariant: "e2b",
       csmModel: "kokoro_82m",
       sttModel: "gemma",
+      ollamaModel: DEFAULT_OLLAMA_MODEL,
     },
   },
   normal: {
@@ -43,6 +45,7 @@ export const MODEL_PRESETS: Record<
       gemmaVariant: "e4b",
       csmModel: "kokoro_82m",
       sttModel: "whisper_large_v3_turbo",
+      ollamaModel: DEFAULT_OLLAMA_MODEL,
     },
   },
   realistic: {
@@ -52,6 +55,7 @@ export const MODEL_PRESETS: Record<
       gemmaVariant: "e4b",
       csmModel: "expressiva_1b",
       sttModel: "whisper_large_v3_turbo",
+      ollamaModel: DEFAULT_OLLAMA_MODEL,
     },
   },
 };

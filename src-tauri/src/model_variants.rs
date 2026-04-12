@@ -5,6 +5,7 @@ use crate::constants::*;
 pub(crate) enum GemmaVariant {
     E4b,
     E2b,
+    Ollama,
 }
 
 impl GemmaVariant {
@@ -12,7 +13,8 @@ impl GemmaVariant {
         match value.trim().to_ascii_lowercase().as_str() {
             "e4b" => Ok(Self::E4b),
             "e2b" => Ok(Self::E2b),
-            other => Err(format!("Unsupported Gemma variant: {other}")),
+            "ollama" => Ok(Self::Ollama),
+            other => Err(format!("Unsupported LLM variant: {other}")),
         }
     }
 
@@ -20,13 +22,15 @@ impl GemmaVariant {
         match self {
             Self::E4b => "e4b",
             Self::E2b => "e2b",
+            Self::Ollama => "ollama",
         }
     }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::E4b => "E4B",
-            Self::E2b => "E2B",
+            Self::E4b => "Gemma-4-E4B",
+            Self::E2b => "Gemma-4-E2B",
+            Self::Ollama => "Ollama",
         }
     }
 
@@ -34,6 +38,7 @@ impl GemmaVariant {
         match self {
             Self::E4b => "mlx-community/gemma-4-E4B-it-8bit",
             Self::E2b => "mlx-community/gemma-4-E2B-it-4bit",
+            Self::Ollama => "gemma2:2b",
         }
     }
 
@@ -41,6 +46,7 @@ impl GemmaVariant {
         match self {
             Self::E4b => "models--mlx-community--gemma-4-E4B-it-8bit",
             Self::E2b => "models--mlx-community--gemma-4-E2B-it-4bit",
+            Self::Ollama => "",
         }
     }
 }

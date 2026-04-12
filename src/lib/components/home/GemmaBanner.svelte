@@ -1,4 +1,4 @@
-<!-- Gemma model banner for downloading, loading, and switching the selected LLM variant. -->
+<!-- LLM model banner for downloading, loading, and switching the selected LLM variant. -->
 <script lang="ts">
     import type { GemmaVariant, SelectOption } from "$lib/openduck/types";
 
@@ -25,6 +25,11 @@
         handleClearGemmaCache,
         handleDownloadGemma,
         handleLoadGemma,
+        ollamaModels,
+        selectedOllamaModel,
+        handleOllamaModelChange,
+        ollamaModelDisabled,
+        openOllamaConfig,
     } = $props<{
         isDownloadingGemma: boolean;
         isGemmaDownloaded: boolean;
@@ -44,12 +49,40 @@
         formatDownloadPercent: (progress: number) => string;
         handleGemmaVariantChange: (event: Event) => Promise<void>;
         handleCancelGemmaDownload: () => Promise<void>;
-        handleUnloadGemma: () => Promise<void>;
+        handleUnloadGemma: (options?: {
+            suppressAlert?: boolean;
+        }) => Promise<void>;
         handleClearGemmaCache: () => Promise<void>;
         handleDownloadGemma: () => Promise<void>;
         handleLoadGemma: () => Promise<void>;
+        ollamaModels: string[];
+        selectedOllamaModel: string;
+        handleOllamaModelChange: (event: Event) => Promise<void>;
+        ollamaModelDisabled: boolean;
+        openOllamaConfig: () => void;
     }>();
 </script>
+
+{#snippet ollamaModelSelect()}
+    {#if selectedGemmaVariant === "ollama" && ollamaModels.length > 0}
+        <div class="tooltip-shell variant-select-shell ollama-model-shell">
+            <select
+                class="variant-select ollama-model-select"
+                value={selectedOllamaModel}
+                aria-label="Ollama model"
+                disabled={ollamaModelDisabled}
+                onchange={handleOllamaModelChange}
+            >
+                {#each ollamaModels as model}
+                    <option value={model}>{model}</option>
+                {/each}
+            </select>
+            <div class="tooltip-bubble variant-tooltip">
+                Select the Ollama model to use.
+            </div>
+        </div>
+    {/if}
+{/snippet}
 
 <div class="download-banner" class:ready={isGemmaDownloaded && isGemmaLoaded}>
     {#if isDownloadingGemma}
@@ -65,13 +98,16 @@
                         onchange={handleGemmaVariantChange}
                     >
                         {#each gemmaVariantOptions as option}
-                            <option value={option.value}>{option.label}</option>
+                            <option value={option.value} disabled={option.disabled}
+                                >{option.label}</option
+                            >
                         {/each}
                     </select>
                     <div class="tooltip-bubble variant-tooltip">
                         {gemmaVariantTooltip}
                     </div>
                 </div>
+                {@render ollamaModelSelect()}
             </div>
             <div class="download-row">
                 <span
@@ -89,7 +125,7 @@
                     type="button"
                     class="progress-cancel-btn"
                     disabled={isCancellingGemmaDownload}
-                    aria-label="Cancel Gemma download"
+                    aria-label="Cancel LLM download"
                     title={isCancellingGemmaDownload
                         ? "Cancelling download..."
                         : "Cancel download"}
@@ -141,7 +177,7 @@
                                     onchange={handleGemmaVariantChange}
                                 >
                                     {#each gemmaVariantOptions as option}
-                                        <option value={option.value}
+                                        <option value={option.value} disabled={option.disabled}
                                             >{option.label}</option
                                         >
                                     {/each}
@@ -150,6 +186,7 @@
                                     {gemmaVariantTooltip}
                                 </div>
                             </div>
+                            {@render ollamaModelSelect()}
                         </div>
                         <span class="banner-subtitle">Loaded</span>
                     </div>
@@ -157,9 +194,13 @@
                         <button
                             class="utility-btn"
                             disabled={isUnloadingGemma}
-                            onclick={handleUnloadGemma}
+                            onclick={() => handleUnloadGemma()}
                         >
-                            {isUnloadingGemma ? "Unloading..." : "Unload"}
+                            {isUnloadingGemma
+                                ? "Unloading..."
+                                : selectedGemmaVariant === "ollama"
+                                  ? "Disconnect"
+                                  : "Unload"}
                         </button>
                         <div class="status-icon">
                             <svg
@@ -190,7 +231,7 @@
                                 onchange={handleGemmaVariantChange}
                             >
                                 {#each gemmaVariantOptions as option}
-                                    <option value={option.value}
+                                    <option value={option.value} disabled={option.disabled}
                                         >{option.label}</option
                                     >
                                 {/each}
@@ -199,30 +240,55 @@
                                 {gemmaVariantTooltip}
                             </div>
                         </div>
+                        {@render ollamaModelSelect()}
                     </div>
                     <div class="banner-subtitle-row">
-                        <span class="banner-subtitle">Downloaded</span>
-                        <button
-                            type="button"
-                            class="utility-btn subtitle-action-btn"
-                            disabled={isLoadingGemma ||
-                                isUnloadingGemma ||
-                                isClearingGemmaCache}
-                            onclick={handleClearGemmaCache}
+                        <span class="banner-subtitle"
+                            >{selectedGemmaVariant === "ollama"
+                                ? "External"
+                                : "Downloaded"}</span
                         >
-                            {isClearingGemmaCache ? "Clearing..." : "Clear Cache"}
-                        </button>
+                        {#if selectedGemmaVariant !== "ollama"}
+                            <button
+                                type="button"
+                                class="utility-btn subtitle-action-btn"
+                                disabled={isLoadingGemma ||
+                                    isUnloadingGemma ||
+                                    isClearingGemmaCache}
+                                onclick={handleClearGemmaCache}
+                            >
+                                {isClearingGemmaCache
+                                    ? "Clearing..."
+                                    : "Clear Cache"}
+                            </button>
+                        {/if}
                     </div>
                 </div>
-                <button
-                    class="download-btn"
-                    disabled={isLoadingGemma ||
-                        isUnloadingGemma ||
-                        isClearingGemmaCache}
-                    onclick={handleLoadGemma}
-                >
-                    {isLoadingGemma ? "Loading..." : "Load Model"}
-                </button>
+                <div class="banner-action-row">
+                    <button
+                        class="download-btn"
+                        disabled={isLoadingGemma ||
+                            isUnloadingGemma ||
+                            isClearingGemmaCache}
+                        onclick={handleLoadGemma}
+                    >
+                        {isLoadingGemma
+                            ? "Loading..."
+                            : selectedGemmaVariant === "ollama"
+                              ? "Connect"
+                              : "Load Model"}
+                    </button>
+                    {#if selectedGemmaVariant === "ollama"}
+                        <button
+                            type="button"
+                            class="utility-btn config-btn"
+                            onclick={openOllamaConfig}
+                            title="Configure Ollama connection"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                        </button>
+                    {/if}
+                </div>
             {/if}
         </div>
     {:else}
@@ -239,32 +305,51 @@
                             onchange={handleGemmaVariantChange}
                         >
                             {#each gemmaVariantOptions as option}
-                                <option value={option.value}>{option.label}</option>
+                                <option value={option.value} disabled={option.disabled}
+                                    >{option.label}</option
+                                >
                             {/each}
                         </select>
                         <div class="tooltip-bubble variant-tooltip">
                             {gemmaVariantTooltip}
                         </div>
                     </div>
+                    {@render ollamaModelSelect()}
                 </div>
                 {#if gemmaDownloadError}
                     <span class="banner-subtitle error">Download failed</span>
                     <span class="banner-detail error">{gemmaDownloadError}</span>
                 {:else}
-                    <span class="banner-subtitle">Model not found in cache</span>
+                    <span class="banner-subtitle"
+                        >{selectedGemmaVariant === "ollama"
+                            ? "Ollama service not detected"
+                            : "Model not found in cache"}</span
+                    >
                 {/if}
             </div>
-            <button
-                class="download-btn"
-                disabled={isDownloadingGemma}
-                onclick={handleDownloadGemma}
-            >
-                {isDownloadingGemma
-                    ? "Downloading..."
-                    : gemmaDownloadError
-                      ? "Retry Download"
-                      : "Download Model"}
-            </button>
+            <div class="banner-action-row">
+                <button
+                    class="download-btn"
+                    disabled={isDownloadingGemma}
+                    onclick={handleDownloadGemma}
+                >
+                    {isDownloadingGemma
+                        ? "Downloading..."
+                        : gemmaDownloadError
+                          ? "Retry Download"
+                          : "Download Model"}
+                </button>
+                {#if selectedGemmaVariant === "ollama"}
+                    <button
+                        type="button"
+                        class="utility-btn config-btn"
+                        onclick={openOllamaConfig}
+                        title="Configure Ollama connection"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </button>
+                {/if}
+            </div>
         </div>
     {/if}
 </div>

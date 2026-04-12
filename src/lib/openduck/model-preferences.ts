@@ -3,6 +3,7 @@ import {
     DEFAULT_CSM_MODEL,
     DEFAULT_GEMMA_VARIANT,
     DEFAULT_STT_MODEL,
+    DEFAULT_OLLAMA_MODEL,
     MODEL_PREFERENCES_STORAGE_KEY,
     MODEL_PRESETS,
 } from "./config";
@@ -21,11 +22,12 @@ export function createDefaultModelPreferences(): StoredModelPreferences {
         gemmaVariant: DEFAULT_GEMMA_VARIANT,
         csmModel: DEFAULT_CSM_MODEL,
         sttModel: DEFAULT_STT_MODEL,
+        ollamaModel: DEFAULT_OLLAMA_MODEL,
     };
 }
 
 export function isGemmaVariant(value: unknown): value is GemmaVariant {
-    return value === "e4b" || value === "e2b";
+    return value === "e4b" || value === "e2b" || value === "ollama";
 }
 
 export function isCsmModelVariant(value: unknown): value is CsmModelVariant {
@@ -47,7 +49,8 @@ export function selectionsMatch(
     return (
         left.gemmaVariant === right.gemmaVariant &&
         left.csmModel === right.csmModel &&
-        left.sttModel === right.sttModel
+        left.sttModel === right.sttModel &&
+        left.ollamaModel === right.ollamaModel
     );
 }
 
@@ -95,6 +98,7 @@ export function loadModelPreferencesFromStorage(): StoredModelPreferences {
             gemmaVariant?: unknown;
             csmModel?: unknown;
             sttModel?: unknown;
+            ollamaModel?: unknown;
         };
 
         if (parsed.version !== 1) {
@@ -112,6 +116,10 @@ export function loadModelPreferencesFromStorage(): StoredModelPreferences {
             sttModel: isSttModelVariant(parsed.sttModel)
                 ? parsed.sttModel
                 : DEFAULT_STT_MODEL,
+            ollamaModel:
+                typeof parsed.ollamaModel === "string"
+                    ? parsed.ollamaModel
+                    : DEFAULT_OLLAMA_MODEL,
         };
     } catch (err) {
         console.error("Failed to restore model preferences:", err);
