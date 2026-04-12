@@ -229,6 +229,13 @@ struct ChatCompletionStreamDelta {
     content: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TrayIconVariant {
+    Default,
+    Muted,
+    ImagePasted,
+}
+
 struct AppState {
     audio_buffer: Mutex<Vec<f32>>,
     silent_chunks_count: Mutex<usize>,
@@ -271,6 +278,7 @@ struct AppState {
     pending_screen_capture: Mutex<Option<PathBuf>>,
     screen_capture_in_progress: Mutex<bool>,
     transient_tray_title: Mutex<Option<String>>,
+    transient_tray_icon: Mutex<Option<TrayIconVariant>>,
     voice_system_prompt: Mutex<String>,
     conversation_session_id: AtomicU64,
     call_started_at: Mutex<Option<Instant>>,
@@ -5118,11 +5126,13 @@ fn reset_call_session_state(state: &AppState) {
 }
 
 #[cfg(target_os = "macos")]
-fn tray_icon_image(muted: bool) -> tauri::Result<tauri::image::Image<'static>> {
-    let bytes = if muted {
-        include_bytes!("../icons/tray-template-muted.png").as_slice()
-    } else {
-        include_bytes!("../icons/tray-template.png").as_slice()
+fn tray_icon_image(variant: TrayIconVariant) -> tauri::Result<tauri::image::Image<'static>> {
+    let bytes = match variant {
+        TrayIconVariant::Muted => include_bytes!("../icons/tray-template-muted.png").as_slice(),
+        TrayIconVariant::Default => include_bytes!("../icons/tray-template.png").as_slice(),
+        TrayIconVariant::ImagePasted => {
+            include_bytes!("../icons/tray-template-image-pasted.png").as_slice()
+        }
     };
 
     tauri::image::Image::from_bytes(bytes)
@@ -5134,6 +5144,7 @@ fn clear_call_timer_state(state: &AppState) {
         .tray_title_override_generation
         .fetch_add(1, Ordering::Relaxed);
     clear_transient_tray_title(state);
+    clear_transient_tray_icon(state);
     let mut started_at_guard = state.call_started_at.lock().unwrap();
     *started_at_guard = None;
 }
@@ -5188,12 +5199,22 @@ fn refresh_tray_title(_app_handle: &AppHandle) {}
 #[cfg(target_os = "macos")]
 fn refresh_tray_icon(app_handle: &AppHandle) {
     let state = app_handle.state::<AppState>();
-    let muted = *state.call_muted.lock().unwrap();
     let Some(tray) = app_handle.tray_by_id(TRAY_ICON_ID) else {
         return;
     };
 
-    let icon = match tray_icon_image(muted) {
+    let variant = {
+        let transient_icon_guard = state.transient_tray_icon.lock().unwrap();
+        if let Some(variant) = *transient_icon_guard {
+            variant
+        } else if *state.call_muted.lock().unwrap() {
+            TrayIconVariant::Muted
+        } else {
+            TrayIconVariant::Default
+        }
+    };
+
+    let icon = match tray_icon_image(variant) {
         Ok(icon) => icon,
         Err(err) => {
             error!("Failed to load tray icon: {}", err);
@@ -5223,6 +5244,43 @@ fn clear_transient_tray_title(state: &AppState) {
     *transient_title_guard = None;
 }
 
+fn clear_transient_tray_icon(state: &AppState) {
+    let mut transient_icon_guard = state.transient_tray_icon.lock().unwrap();
+    *transient_icon_guard = None;
+}
+
+#[cfg(target_os = "macos")]
+fn show_temporary_tray_icon(app_handle: &AppHandle, duration: Duration) {
+    let state = app_handle.state::<AppState>();
+    let generation = state
+        .tray_title_override_generation
+        .fetch_add(1, Ordering::Relaxed)
+        + 1;
+
+    {
+        let mut transient_icon_guard = state.transient_tray_icon.lock().unwrap();
+        *transient_icon_guard = Some(TrayIconVariant::ImagePasted);
+    }
+    refresh_tray_icon(app_handle);
+
+    let app_handle_clone = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(duration).await;
+
+        let state = app_handle_clone.state::<AppState>();
+        if state.tray_title_override_generation.load(Ordering::Relaxed) != generation {
+            return;
+        }
+
+        clear_transient_tray_icon(state.inner());
+        refresh_tray_icon(&app_handle_clone);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_temporary_tray_icon(_app_handle: &AppHandle, _duration: Duration) {}
+
+#[allow(dead_code)]
 #[cfg(target_os = "macos")]
 fn show_temporary_tray_title(app_handle: &AppHandle, title: &str, duration: Duration) {
     let state = app_handle.state::<AppState>();
@@ -5359,7 +5417,7 @@ async fn capture_screen_selection_inner(app_handle: &AppHandle) -> Result<(), St
                 "ready",
                 "Screen region attached to your next turn.",
             );
-            show_temporary_tray_title(app_handle, " Shared", Duration::from_secs(3));
+            show_temporary_tray_icon(app_handle, Duration::from_secs(3));
             refresh_tray_presentation(app_handle);
             Ok(())
         }
@@ -6822,6 +6880,7 @@ pub fn run() {
             pending_screen_capture: Mutex::new(None),
             screen_capture_in_progress: Mutex::new(false),
             transient_tray_title: Mutex::new(None),
+            transient_tray_icon: Mutex::new(None),
             voice_system_prompt: Mutex::new(DEFAULT_VOICE_SYSTEM_PROMPT.to_string()),
             conversation_session_id: AtomicU64::new(1),
             call_started_at: Mutex::new(None),
