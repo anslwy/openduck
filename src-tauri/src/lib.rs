@@ -4154,7 +4154,7 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
         } else if has_pending_screen_capture {
             "Replace Screen Region"
         } else {
-            "Look at Screen"
+            "Look at Screen Region"
         };
         let look_at_screen_item =
             match MenuItemBuilder::with_id(TRAY_LOOK_AT_SCREEN_MENU_ID, look_at_screen_label)
@@ -4168,6 +4168,21 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
                 }
             };
         builder = builder.item(&look_at_screen_item);
+
+        let look_at_entire_screen_item = match MenuItemBuilder::with_id(
+            TRAY_LOOK_AT_ENTIRE_SCREEN_MENU_ID,
+            "Look at Entire Screen",
+        )
+        .enabled(!screen_capture_in_progress)
+        .build(app_handle)
+        {
+            Ok(item) => item,
+            Err(err) => {
+                error!("Failed to build tray look-at-entire-screen item: {}", err);
+                return;
+            }
+        };
+        builder = builder.item(&look_at_entire_screen_item);
 
         if has_pending_screen_capture {
             let attached_item = match MenuItemBuilder::with_id(
@@ -4371,6 +4386,14 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
                 tauri::async_runtime::spawn(async move {
                     if let Err(err) = capture_screen_selection_inner(&app_handle).await {
                         error!("Failed to capture screen from tray: {}", err);
+                    }
+                });
+            }
+            TRAY_LOOK_AT_ENTIRE_SCREEN_MENU_ID => {
+                let app_handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(err) = capture_entire_screen_inner(&app_handle).await {
+                        error!("Failed to capture entire screen from tray: {}", err);
                     }
                 });
             }
@@ -5416,8 +5439,13 @@ fn clear_pending_screen_capture_inner(app_handle: &AppHandle, emit_event: bool) 
 async fn capture_screen_selection_inner(app_handle: &AppHandle) -> Result<(), String> {
     let state = app_handle.state::<AppState>();
     if !*state.call_in_progress.lock().unwrap() {
-        return Err("Look at Screen is only available during an active call.".to_string());
+        return Err("Look at Screen Region is only available during an active call.".to_string());
     }
+
+    if *state.tray_pong_playback_enabled.lock().unwrap() {
+        emit_play_tray_pong(app_handle);
+    }
+
     {
         let mut in_progress_guard = state.screen_capture_in_progress.lock().unwrap();
         if *in_progress_guard {
@@ -5486,6 +5514,72 @@ async fn capture_screen_selection_inner(app_handle: &AppHandle) -> Result<(), St
     }
 }
 
+async fn capture_entire_screen_inner(app_handle: &AppHandle) -> Result<(), String> {
+    let state = app_handle.state::<AppState>();
+    if !*state.call_in_progress.lock().unwrap() {
+        return Err("Look at Entire Screen is only available during an active call.".to_string());
+    }
+
+    if *state.tray_pong_playback_enabled.lock().unwrap() {
+        emit_play_tray_pong(app_handle);
+    }
+
+    {
+        let mut in_progress_guard = state.screen_capture_in_progress.lock().unwrap();
+        if *in_progress_guard {
+            return Err("A screen capture is already in progress.".to_string());
+        }
+        *in_progress_guard = true;
+    }
+
+    refresh_tray_presentation(app_handle);
+    emit_screen_capture_event(
+        app_handle,
+        "capturing",
+        "Capturing the entire screen to attach to your next turn.",
+    );
+
+    let capture_result = run_entire_screen_capture().await;
+
+    {
+        let mut in_progress_guard = state.screen_capture_in_progress.lock().unwrap();
+        *in_progress_guard = false;
+    }
+
+    if !*state.call_in_progress.lock().unwrap() {
+        if let Ok(Some(path)) = &capture_result {
+            remove_temp_image_file(path);
+        }
+        refresh_tray_presentation(app_handle);
+        return Ok(());
+    }
+
+    match capture_result {
+        Ok(Some(path)) => {
+            replace_pending_screen_capture(state.inner(), path);
+            emit_screen_capture_event(
+                app_handle,
+                "ready",
+                "Entire screen attached to your next turn.",
+            );
+            show_temporary_tray_icon(app_handle, Duration::from_secs(3));
+            refresh_tray_presentation(app_handle);
+            Ok(())
+        }
+        Ok(None) => {
+            emit_screen_capture_event(app_handle, "cancelled", "Entire screen capture cancelled.");
+            refresh_tray_presentation(app_handle);
+            Ok(())
+        }
+        Err(err) => {
+            let message = format!("Entire screen capture failed. {err}");
+            emit_screen_capture_event(app_handle, "error", &message);
+            refresh_tray_presentation(app_handle);
+            Err(err)
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 async fn run_interactive_screen_capture() -> Result<Option<PathBuf>, String> {
     let capture_path = create_temp_screen_capture_path();
@@ -5530,9 +5624,54 @@ async fn run_interactive_screen_capture() -> Result<Option<PathBuf>, String> {
     }
 }
 
+#[cfg(target_os = "macos")]
+async fn run_entire_screen_capture() -> Result<Option<PathBuf>, String> {
+    let capture_path = create_temp_screen_capture_path();
+    let (capture_path, output) = tauri::async_runtime::spawn_blocking(move || {
+        std::process::Command::new("/usr/sbin/screencapture")
+            .args(["-x"])
+            .arg(&capture_path)
+            .output()
+            .map(|output| (capture_path, output))
+            .map_err(|err| format!("Failed to launch screencapture: {err}"))
+    })
+    .await
+    .map_err(|err| format!("Screen capture task failed: {err}"))??;
+
+    if output.status.success() {
+        return match std::fs::metadata(&capture_path) {
+            Ok(metadata) if metadata.len() > 0 => Ok(Some(capture_path)),
+            _ => {
+                remove_temp_image_file(&capture_path);
+                Ok(None)
+            }
+        };
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    remove_temp_image_file(&capture_path);
+
+    if stderr.is_empty() {
+        Err(format!(
+            "screencapture exited with status {}.",
+            output.status
+        ))
+    } else {
+        Err(format!(
+            "screencapture exited with status {}: {}",
+            output.status, stderr
+        ))
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 async fn run_interactive_screen_capture() -> Result<Option<PathBuf>, String> {
     Err("Interactive screen capture is only supported on macOS right now.".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn run_entire_screen_capture() -> Result<Option<PathBuf>, String> {
+    Err("Entire screen capture is only supported on macOS right now.".to_string())
 }
 
 fn reset_csm_startup_state(state: &AppState) {

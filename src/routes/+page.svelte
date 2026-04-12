@@ -2091,6 +2091,58 @@
         }
     }
 
+    async function playTrayPong() {
+        if (!pongPlaybackEnabled || !captureContext) {
+            return false;
+        }
+
+        try {
+            if (captureContext.state === "suspended") {
+                await captureContext.resume();
+            }
+
+            const pongSamples = await getPongPlaybackSamples();
+            if (!pongSamples || pongSamples.length === 0 || !captureContext) {
+                return false;
+            }
+
+            stopActivePongPlayback();
+
+            const audioBuffer = captureContext.createBuffer(
+                1,
+                pongSamples.length,
+                captureContext.sampleRate,
+            );
+            audioBuffer.copyToChannel(pongSamples, 0);
+
+            const source = captureContext.createBufferSource();
+            const gainNode = captureContext.createGain();
+            gainNode.gain.value = PONG_VOLUME;
+            source.buffer = audioBuffer;
+            source.connect(gainNode);
+            gainNode.connect(captureContext.destination);
+            source.onended = () => {
+                if (activePongSource === source) {
+                    activePongSource = null;
+                }
+                if (activePongGainNode === gainNode) {
+                    activePongGainNode = null;
+                }
+                source.disconnect();
+                gainNode.disconnect();
+            };
+
+            activePongSource = source;
+            activePongGainNode = gainNode;
+            source.start();
+            return true;
+        } catch (err) {
+            console.error("Failed to play tray pong:", err);
+            stopActivePongPlayback();
+            return false;
+        }
+    }
+
     async function playCallStartPong() {
         if (!pongPlaybackEnabled || !calling || !captureContext) {
             return false;
@@ -2867,6 +2919,9 @@
                             openAboutPopup({ checkForUpdates: true });
                         },
                     ),
+                    listen("play-tray-pong", () => {
+                        void playTrayPong();
+                    }),
                 ]);
             } catch (err) {
                 console.error("Failed to register Tauri event listeners:", err);

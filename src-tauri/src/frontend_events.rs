@@ -214,6 +214,12 @@ pub(crate) fn emit_tray_pong_playback(app_handle: &AppHandle, enabled: bool) {
     }
 }
 
+pub(crate) fn emit_play_tray_pong(app_handle: &AppHandle) {
+    if let Err(err) = app_handle.emit(PLAY_TRAY_PONG_EVENT, ()) {
+        error!("Failed to emit play tray pong event: {}", err);
+    }
+}
+
 pub(crate) fn emit_conversation_context_committed(
     app_handle: &AppHandle,
     payload: ConversationContextCommittedEvent,
