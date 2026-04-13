@@ -23,6 +23,7 @@ use tauri::{
     tray::TrayIconBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
+use uuid::Uuid;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -130,13 +131,28 @@ struct ModelMemoryUsageSnapshot {
     models: Vec<ModelMemoryUsageEntry>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct ConversationTurn {
     user_entry_id: u64,
     assistant_entry_id: u64,
     user_text: String,
     assistant_text: String,
     image_path: Option<PathBuf>,
+    user_image_data_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct SessionMetadata {
+    id: String,
+    title: String,
+    created_at: u64,
+    updated_at: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SessionData {
+    metadata: SessionMetadata,
+    turns: Vec<ConversationTurn>,
 }
 
 struct TempAudioFile {
@@ -295,6 +311,8 @@ struct AppState {
     call_stage_phase: Mutex<String>,
     voice_system_prompt: Mutex<String>,
     conversation_session_id: AtomicU64,
+    current_session_id: Mutex<Option<String>>,
+    current_session_title: Mutex<Option<String>>,
     call_started_at: Mutex<Option<Instant>>,
     tray_timer_generation: AtomicU64,
     tray_title_override_generation: AtomicU64,
@@ -752,7 +770,60 @@ fn initialize_pong_playback_preference(
 }
 
 #[tauri::command]
+fn delete_conversation_context_entry(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    entry_id: u64,
+) -> Result<Option<u64>, String> {
+    let mut removed_image_path = None;
+    let mut other_entry_id = None;
+    let mut updated = false;
+
+    {
+        let mut conversation_turns = state.conversation_turns.lock().unwrap();
+        let mut index_to_remove = None;
+
+        for (i, turn) in conversation_turns.iter().enumerate() {
+            if turn.user_entry_id == entry_id {
+                index_to_remove = Some(i);
+                other_entry_id = Some(turn.assistant_entry_id);
+                break;
+            }
+            if turn.assistant_entry_id == entry_id {
+                index_to_remove = Some(i);
+                other_entry_id = Some(turn.user_entry_id);
+                break;
+            }
+        }
+
+        if let Some(i) = index_to_remove {
+            let removed_turn = conversation_turns.remove(i).unwrap();
+            removed_image_path = removed_turn.image_path;
+            updated = true;
+            info!("Deleted conversation turn containing entry {}. Other entry in turn was {}.", entry_id, other_entry_id.unwrap_or(0));
+        }
+    }
+
+    if !updated {
+        warn!("Attempted to delete entry {}, but it was not found in the active context.", entry_id);
+        return Err("Conversation entry is no longer part of the active context.".to_string());
+    }
+
+    if let Some(image_path) = removed_image_path {
+        unregister_conversation_image_path(state.inner(), &image_path);
+        remove_temp_image_file(&image_path);
+    }
+
+    if let Err(err) = save_current_session(&app_handle, state.inner()) {
+        error!("Failed to save session after entry deletion: {}", err);
+    }
+
+    Ok(other_entry_id)
+}
+
+#[tauri::command]
 fn update_conversation_context_entry(
+    app_handle: AppHandle,
     state: State<'_, AppState>,
     entry_id: u64,
     text: String,
@@ -777,8 +848,10 @@ fn update_conversation_context_entry(
                 turn.user_text = normalized_text.clone();
                 if clear_image {
                     removed_image_path = turn.image_path.take();
+                    turn.user_image_data_url = None;
                 }
                 updated = true;
+                info!("Updated user entry {} with text: {:?}", entry_id, turn.user_text);
                 break;
             }
 
@@ -792,18 +865,24 @@ fn update_conversation_context_entry(
 
                 turn.assistant_text = normalized_text.clone();
                 updated = true;
+                info!("Updated assistant entry {} with text: {:?}", entry_id, turn.assistant_text);
                 break;
             }
         }
     }
 
     if !updated {
+        warn!("Attempted to update entry {}, but it was not found in the active context.", entry_id);
         return Err("Conversation entry is no longer part of the active context.".to_string());
     }
 
     if let Some(image_path) = removed_image_path {
         unregister_conversation_image_path(state.inner(), &image_path);
         remove_temp_image_file(&image_path);
+    }
+
+    if let Err(err) = save_current_session(&app_handle, state.inner()) {
+        error!("Failed to save session: {}", err);
     }
 
     Ok(())
@@ -829,6 +908,7 @@ fn clear_conversation_context_images_inner(state: &AppState) -> usize {
         let mut removed_paths = Vec::new();
 
         for turn in conversation_turns.iter_mut() {
+            turn.user_image_data_url = None;
             if let Some(image_path) = turn.image_path.take() {
                 removed_paths.push(image_path);
             }
@@ -2444,18 +2524,29 @@ fn start_response_generation(
                 }
 
                 let persisted_image_path = latest_image_file.take().map(TempImageFile::release);
-                let (user_entry_id, assistant_entry_id) = append_conversation_turn(
+                let (user_entry_id, assistant_entry_id) = append_conversation_turn_with_save(
+                    &app_handle_for_task,
                     app_handle_for_task.state::<AppState>().inner(),
-                    user_text,
-                    response_text,
+                    user_text.clone(),
+                    response_text.clone(),
                     persisted_image_path,
                 );
+                
+                let session_title = {
+                    let state = app_handle_for_task.state::<AppState>();
+                    let guard = state.current_session_title.lock().unwrap();
+                    guard.clone()
+                };
+
                 emit_conversation_context_committed(
                     &app_handle_for_task,
                     ConversationContextCommittedEvent {
                         request_id: response_id,
                         user_entry_id,
                         assistant_entry_id,
+                        user_text,
+                        assistant_text: response_text,
+                        session_title,
                     },
                 );
             }
@@ -2674,11 +2765,17 @@ fn serialize_request_for_ollama(request: &ChatRequest) -> serde_json::Value {
                         "text": text
                     })),
                     ChatContent::InputImage { image_url } => {
-                        load_image_data_url(Path::new(image_url)).map(|data_url| {
+                        let data_url = if image_url.starts_with("data:") {
+                            Some(image_url.clone())
+                        } else {
+                            load_image_data_url(Path::new(image_url))
+                        };
+
+                        data_url.map(|url| {
                             serde_json::json!({
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": data_url
+                                    "url": url
                                 }
                             })
                         })
@@ -2687,9 +2784,19 @@ fn serialize_request_for_ollama(request: &ChatRequest) -> serde_json::Value {
                 })
                 .collect();
 
+            let content_value = if content.iter().all(|c| c.get("type").and_then(|t| t.as_str()) == Some("text")) {
+                let merged_text = content.iter()
+                    .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                serde_json::Value::String(merged_text)
+            } else {
+                serde_json::Value::Array(content)
+            };
+
             serde_json::json!({
                 "role": msg.role,
-                "content": content
+                "content": content_value
             })
         })
         .collect();
@@ -2727,9 +2834,9 @@ async fn stream_gemma_response_to_csm(
     };
     let has_latest_audio = latest_audio_path.is_some();
     let has_any_image_context = latest_image_path.is_some()
-        || conversation_turns
-            .iter()
-            .any(|turn| turn.image_path.as_ref().is_some());
+        || conversation_turns.iter().any(|turn| {
+            turn.image_path.is_some() || turn.user_image_data_url.is_some()
+        });
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
         content: vec![ChatContent::Text {
@@ -2746,15 +2853,16 @@ async fn stream_gemma_response_to_csm(
         }],
     }];
 
-    for turn in conversation_turns {
+    for turn in &conversation_turns {
         messages.push(build_user_turn_message(
             &turn.user_text,
             turn.image_path.as_deref(),
+            turn.user_image_data_url.as_deref(),
         ));
         messages.push(ChatMessage {
             role: "assistant".to_string(),
             content: vec![ChatContent::Text {
-                text: turn.assistant_text,
+                text: turn.assistant_text.clone(),
             }],
         });
     }
@@ -2765,15 +2873,32 @@ async fn stream_gemma_response_to_csm(
         latest_image_path,
     ));
 
-    let request = ChatRequest {
+    let mut request = ChatRequest {
         model: gemma_model.to_string(),
         messages,
         stream: true,
     };
+
+    let is_ollama = server_port == 11434;
+    let mut _temp_image_files = Vec::new();
+    if !is_ollama {
+        for msg in &mut request.messages {
+            for content in &mut msg.content {
+                if let ChatContent::InputImage { image_url } = content {
+                    if image_url.starts_with("data:") {
+                        if let Some(path) = write_data_url_to_temp_file(image_url) {
+                            *image_url = path.to_string_lossy().into_owned();
+                            _temp_image_files.push(TempImageFile::new(path));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     log_chat_request_debug(conversation_session_id, &request);
 
     let state = app_handle.state::<AppState>();
-    let is_ollama = server_port == 11434;
     let request_body = if is_ollama {
         serialize_request_for_ollama(&request)
     } else {
@@ -3251,11 +3376,30 @@ fn build_input_image_content(image_path: &Path) -> ChatContent {
     }
 }
 
-fn build_user_turn_message(user_text: &str, image_path: Option<&Path>) -> ChatMessage {
+fn build_user_turn_message(
+    user_text: &str,
+    image_path: Option<&Path>,
+    image_data_url: Option<&str>,
+) -> ChatMessage {
     let mut content = Vec::new();
-    if let Some(image_path) = image_path {
-        content.push(build_input_image_content(image_path));
+
+    let mut attached_image_url = None;
+    if let Some(path) = image_path {
+        if path.exists() {
+            attached_image_url = Some(path.to_string_lossy().into_owned());
+        }
     }
+
+    if attached_image_url.is_none() {
+        if let Some(data_url) = image_data_url {
+            attached_image_url = Some(data_url.to_string());
+        }
+    }
+
+    if let Some(image_url) = attached_image_url {
+        content.push(ChatContent::InputImage { image_url });
+    }
+
     content.push(ChatContent::Text {
         text: user_text.to_string(),
     });
@@ -3287,7 +3431,7 @@ fn build_latest_user_turn_message(
     _latest_audio_path: Option<&Path>,
     latest_image_path: Option<&Path>,
 ) -> ChatMessage {
-    build_user_turn_message(user_text, latest_image_path)
+    build_user_turn_message(user_text, latest_image_path, None)
 }
 
 enum ParsedGemmaStreamEvent {
@@ -3397,7 +3541,19 @@ fn serialize_chat_messages_for_debug(messages: &[ChatMessage]) -> serde_json::Va
 }
 
 fn log_chat_request_debug(conversation_session_id: u64, request: &ChatRequest) {
-    match serde_json::to_string_pretty(&serialize_chat_messages_for_debug(&request.messages)) {
+    let mut messages_summary = Vec::new();
+    for msg in &request.messages {
+        let content_text = msg.content.iter().find_map(|c| {
+            if let ChatContent::Text { text } = c { Some(text.clone()) } else { None }
+        }).unwrap_or_default();
+        messages_summary.push(serde_json::json!({
+            "role": msg.role,
+            "text": content_text.chars().take(50).collect::<String>(),
+            "content_count": msg.content.len(),
+        }));
+    }
+
+    match serde_json::to_string_pretty(&messages_summary) {
         Ok(messages_json) => debug!(
             "Sending chat request for conversation session {} with {} messages:\n{}",
             conversation_session_id,
@@ -3436,6 +3592,11 @@ fn remove_temp_image_file(image_path: &Path) {
 }
 
 fn load_image_data_url(image_path: &Path) -> Option<String> {
+    let path_str = image_path.to_string_lossy();
+    if path_str.starts_with("data:") || path_str.contains(";base64,") || path_str.len() > 1024 {
+        return None;
+    }
+
     match std::fs::read(image_path) {
         Ok(bytes) => Some(format!(
             "data:image/png;base64,{}",
@@ -3450,6 +3611,23 @@ fn load_image_data_url(image_path: &Path) -> Option<String> {
             None
         }
     }
+}
+
+fn write_data_url_to_temp_file(data_url: &str) -> Option<PathBuf> {
+    let base64_data = if data_url.starts_with("data:image/png;base64,") {
+        data_url.strip_prefix("data:image/png;base64,")?
+    } else if data_url.starts_with("data:image/jpeg;base64,") {
+        data_url.strip_prefix("data:image/jpeg;base64,")?
+    } else if data_url.contains("base64,") {
+        data_url.split("base64,").nth(1)?
+    } else {
+        return None;
+    };
+
+    let bytes = BASE64_STANDARD.decode(base64_data.trim()).ok()?;
+    let path = create_temp_screen_capture_path();
+    std::fs::write(&path, bytes).ok()?;
+    Some(path)
 }
 
 fn sanitize_for_voice_output(text: &str) -> String {
@@ -5256,6 +5434,7 @@ fn append_conversation_turn(
     user_text: String,
     assistant_text: String,
     image_path: Option<PathBuf>,
+    user_image_data_url: Option<String>,
 ) -> (u64, u64) {
     if let Some(image_path) = image_path.as_ref() {
         state
@@ -5278,6 +5457,7 @@ fn append_conversation_turn(
         user_text,
         assistant_text,
         image_path,
+        user_image_data_url,
     });
 
     while turns.len() > MAX_CONVERSATION_TURNS {
@@ -5290,6 +5470,57 @@ fn append_conversation_turn(
     }
 
     (user_entry_id, assistant_entry_id)
+}
+
+fn append_conversation_turn_with_save(
+    app_handle: &AppHandle,
+    state: &AppState,
+    user_text: String,
+    assistant_text: String,
+    image_path: Option<PathBuf>,
+) -> (u64, u64) {
+    let mut final_image_path = image_path;
+    let mut user_image_data_url = None;
+    if let Some(path) = final_image_path.as_ref() {
+        user_image_data_url = load_image_data_url(path);
+        if let Ok(session_id) = state.current_session_id.lock().unwrap().as_ref().ok_or("No session") {
+            if let Ok(images_dir) = resolve_session_images_dir(app_handle, session_id) {
+                if let Some(file_name) = path.file_name() {
+                    let dest_path = images_dir.join(file_name);
+                    if let Err(err) = std::fs::rename(path, &dest_path) {
+                        error!("Failed to move image to session directory: {}", err);
+                    } else {
+                        final_image_path = Some(dest_path);
+                    }
+                }
+            }
+        }
+    }
+
+    let res = append_conversation_turn(
+        state,
+        user_text,
+        assistant_text,
+        final_image_path,
+        user_image_data_url,
+    );
+    
+    // Auto-title if it's the first turn and no title is set
+    {
+        let mut title_guard = state.current_session_title.lock().unwrap();
+        if title_guard.is_none() {
+            let turns = state.conversation_turns.lock().unwrap();
+            if turns.len() == 1 {
+                let first_sentence = turns[0].user_text.split(|c| c == '.' || c == '?' || c == '!').next().unwrap_or(&turns[0].user_text).trim();
+                *title_guard = Some(first_sentence.chars().take(100).collect());
+            }
+        }
+    }
+
+    if let Err(err) = save_current_session(app_handle, state) {
+        error!("Failed to save session: {}", err);
+    }
+    res
 }
 
 fn has_pending_screen_capture(state: &AppState) -> bool {
@@ -5386,6 +5617,15 @@ fn reset_call_session_state(state: &AppState) {
         }
     }
     state.next_conversation_entry_id.store(1, Ordering::Relaxed);
+
+    {
+        let mut id_guard = state.current_session_id.lock().unwrap();
+        *id_guard = None;
+    }
+    {
+        let mut title_guard = state.current_session_title.lock().unwrap();
+        *title_guard = None;
+    }
 
     state
         .conversation_session_id
@@ -5811,13 +6051,17 @@ async fn run_interactive_screen_capture() -> Result<Option<PathBuf>, String> {
     .map_err(|err| format!("Screen capture task failed: {err}"))??;
 
     if output.status.success() {
-        return match std::fs::metadata(&capture_path) {
-            Ok(metadata) if metadata.len() > 0 => Ok(Some(capture_path)),
-            _ => {
-                remove_temp_image_file(&capture_path);
-                Ok(None)
+        if let Ok(metadata) = std::fs::metadata(&capture_path) {
+            if metadata.len() > 0 {
+                // Resize image to max 1024px width/height to avoid large payload issues with LLM providers
+                let _ = std::process::Command::new("/usr/bin/sips")
+                    .args(["-Z", "1024", &capture_path.to_string_lossy(), "--out", &capture_path.to_string_lossy()])
+                    .output();
+                return Ok(Some(capture_path));
             }
-        };
+        }
+        remove_temp_image_file(&capture_path);
+        return Ok(None);
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -5855,13 +6099,17 @@ async fn run_entire_screen_capture() -> Result<Option<PathBuf>, String> {
     .map_err(|err| format!("Screen capture task failed: {err}"))??;
 
     if output.status.success() {
-        return match std::fs::metadata(&capture_path) {
-            Ok(metadata) if metadata.len() > 0 => Ok(Some(capture_path)),
-            _ => {
-                remove_temp_image_file(&capture_path);
-                Ok(None)
+        if let Ok(metadata) = std::fs::metadata(&capture_path) {
+            if metadata.len() > 0 {
+                // Resize image to max 1024px width/height to avoid large payload issues with LLM providers
+                let _ = std::process::Command::new("/usr/bin/sips")
+                    .args(["-Z", "1024", &capture_path.to_string_lossy(), "--out", &capture_path.to_string_lossy()])
+                    .output();
+                return Ok(Some(capture_path));
             }
-        };
+        }
+        remove_temp_image_file(&capture_path);
+        return Ok(None);
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -6460,7 +6708,200 @@ fn get_model_download_status(
     Ok(Some(poll_tracked_download_event(&tracked_state)))
 }
 
-fn resolve_runtime_root(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn resolve_openduck_root() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(home).join(".openduck")
+}
+
+fn resolve_sessions_dir(_app_handle: &AppHandle) -> Result<PathBuf, String> {
+    let mut path = resolve_openduck_root();
+    path.push(SESSIONS_DIR_NAME);
+    std::fs::create_dir_all(&path).map_err(|err| format!("Failed to create sessions directory: {err}"))?;
+    Ok(path)
+}
+
+fn resolve_session_dir(app_handle: &AppHandle, session_id: &str) -> Result<PathBuf, String> {
+    let mut path = resolve_sessions_dir(app_handle)?;
+    path.push(session_id);
+    std::fs::create_dir_all(&path).map_err(|err| format!("Failed to create session directory: {err}"))?;
+    Ok(path)
+}
+
+fn resolve_session_file(app_handle: &AppHandle, session_id: &str) -> Result<PathBuf, String> {
+    let mut path = resolve_session_dir(app_handle, session_id)?;
+    path.push(SESSION_FILE_NAME);
+    Ok(path)
+}
+
+fn resolve_session_images_dir(app_handle: &AppHandle, session_id: &str) -> Result<PathBuf, String> {
+    let mut path = resolve_session_dir(app_handle, session_id)?;
+    path.push(SESSION_IMAGES_DIR_NAME);
+    std::fs::create_dir_all(&path).map_err(|err| format!("Failed to create session images directory: {err}"))?;
+    Ok(path)
+}
+
+fn save_current_session(app_handle: &AppHandle, state: &AppState) -> Result<(), String> {
+    let session_id = {
+        let guard = state.current_session_id.lock().unwrap();
+        guard.clone()
+    };
+
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+
+    let session_file = resolve_session_file(app_handle, &session_id)?;
+    
+    let (turns, title) = {
+        let turns_guard = state.conversation_turns.lock().unwrap();
+        let title_guard = state.current_session_title.lock().unwrap();
+        (turns_guard.iter().cloned().collect::<Vec<_>>(), title_guard.clone())
+    };
+
+    let metadata = if session_file.exists() {
+        let content = std::fs::read_to_string(&session_file).map_err(|err| err.to_string())?;
+        let existing_data: SessionData = serde_json::from_str(&content).map_err(|err| err.to_string())?;
+        let mut metadata = existing_data.metadata;
+        metadata.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        if let Some(new_title) = title {
+            metadata.title = new_title;
+        }
+        metadata
+    } else {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        SessionMetadata {
+            id: session_id.clone(),
+            title: title.unwrap_or_else(|| {
+                turns.first().map(|t| t.user_text.chars().take(50).collect()).unwrap_or_else(|| "New Session".to_string())
+            }),
+            created_at: now,
+            updated_at: now,
+        }
+    };
+
+    let data = SessionData {
+        metadata,
+        turns,
+    };
+
+    let content = serde_json::to_string_pretty(&data).map_err(|err| err.to_string())?;
+    std::fs::write(session_file, content).map_err(|err| err.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_sessions(app_handle: AppHandle) -> Result<Vec<SessionMetadata>, String> {
+    let sessions_dir = resolve_sessions_dir(&app_handle)?;
+    let mut sessions = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(sessions_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let session_file = entry.path().join(SESSION_FILE_NAME);
+                if session_file.exists() {
+                    if let Ok(content) = std::fs::read_to_string(session_file) {
+                        if let Ok(data) = serde_json::from_str::<SessionData>(&content) {
+                            sessions.push(data.metadata);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Ok(sessions)
+}
+
+#[tauri::command]
+async fn load_session(app_handle: AppHandle, state: State<'_, AppState>, session_id: String) -> Result<Vec<ConversationTurn>, String> {
+    let session_file = resolve_session_file(&app_handle, &session_id)?;
+    if !session_file.exists() {
+        return Err("Session not found".to_string());
+    }
+
+    let content = std::fs::read_to_string(session_file).map_err(|err| err.to_string())?;
+    let data: SessionData = serde_json::from_str(&content).map_err(|err| err.to_string())?;
+
+    {
+        let mut turns_guard = state.conversation_turns.lock().unwrap();
+        turns_guard.clear();
+        for turn in &data.turns {
+            turns_guard.push_back(turn.clone());
+        }
+    }
+
+    {
+        let mut id_guard = state.current_session_id.lock().unwrap();
+        *id_guard = Some(session_id);
+    }
+
+    {
+        let mut title_guard = state.current_session_title.lock().unwrap();
+        *title_guard = Some(data.metadata.title);
+    }
+
+    let max_id = data.turns.iter().map(|t| t.user_entry_id.max(t.assistant_entry_id)).max().unwrap_or(0);
+    state.next_conversation_entry_id.store(max_id + 1, Ordering::Relaxed);
+
+    Ok(data.turns)
+}
+
+#[tauri::command]
+fn delete_session(app_handle: AppHandle, session_id: String) -> Result<(), String> {
+    let session_dir = resolve_session_dir(&app_handle, &session_id)?;
+    if session_dir.exists() {
+        std::fs::remove_dir_all(session_dir).map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn rename_session(app_handle: AppHandle, session_id: String, new_title: String) -> Result<(), String> {
+    let session_file = resolve_session_file(&app_handle, &session_id)?;
+    if !session_file.exists() {
+        return Err("Session not found".to_string());
+    }
+
+    let content = std::fs::read_to_string(&session_file).map_err(|err| err.to_string())?;
+    let mut data: SessionData = serde_json::from_str(&content).map_err(|err| err.to_string())?;
+    data.metadata.title = new_title;
+    data.metadata.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+
+    let content = serde_json::to_string_pretty(&data).map_err(|err| err.to_string())?;
+    std::fs::write(session_file, content).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn start_new_session(state: State<'_, AppState>) {
+    reset_call_session_state(state.inner());
+    let session_id = Uuid::new_v4().to_string();
+    {
+        let mut id_guard = state.current_session_id.lock().unwrap();
+        *id_guard = Some(session_id);
+    }
+}
+
+#[tauri::command]
+fn get_current_session_id(state: State<'_, AppState>) -> Option<String> {
+    state.current_session_id.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn update_current_session_title(app_handle: AppHandle, state: State<'_, AppState>, title: String) {
+    {
+        let mut title_guard = state.current_session_title.lock().unwrap();
+        *title_guard = Some(title);
+    }
+    if let Err(err) = save_current_session(&app_handle, state.inner()) {
+        error!("Failed to save session after title update: {}", err);
+    }
+}
+
+fn resolve_runtime_root
+(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     app_handle
         .path()
         .app_data_dir()
@@ -7282,6 +7723,8 @@ pub fn run() {
             call_stage_phase: Mutex::new("idle".to_string()),
             voice_system_prompt: Mutex::new(DEFAULT_VOICE_SYSTEM_PROMPT.to_string()),
             conversation_session_id: AtomicU64::new(1),
+            current_session_id: Mutex::new(None),
+            current_session_title: Mutex::new(None),
             call_started_at: Mutex::new(None),
             tray_timer_generation: AtomicU64::new(0),
             tray_title_override_generation: AtomicU64::new(0),
@@ -7353,6 +7796,14 @@ pub fn run() {
             set_csm_quantize,
             set_csm_voice,
             update_conversation_context_entry,
+            delete_conversation_context_entry,
+            get_sessions,
+            load_session,
+            delete_session,
+            rename_session,
+            start_new_session,
+            get_current_session_id,
+            update_current_session_title,
             stop_server,
             stop_csm_server,
             stop_stt_server

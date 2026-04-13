@@ -1969,4 +1969,384 @@ main.idle-layout {
     flex: 1;
 }
 
+.popup-wrapper {
+    display: contents;
+}
+
+.sessions-popup {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 18px);
+    transform: translateX(-50%);
+    width: min(calc(100vw - 32px), 500px);
+    max-height: min(52vh, 420px);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px;
+    border-radius: 24px;
+    background: linear-gradient(
+        180deg,
+        rgba(34, 31, 16, 0.94) 0%,
+        rgba(18, 18, 20, 0.94) 100%
+    );
+    border: 1px solid rgba(255, 220, 102, 0.16);
+    box-shadow:
+        0 28px 70px rgba(0, 0, 0, 0.42),
+        0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+    backdrop-filter: blur(22px);
+    box-sizing: border-box;
+    z-index: 1000;
+}
+
+.sessions-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.sessions-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+.sessions-search {
+    padding: 0 16px 12px;
+}
+
+.sessions-search-input {
+    width: 100%;
+    padding: 10px 14px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1.5px solid rgba(255, 205, 64, 0.2);
+    border-radius: 12px;
+    color: white;
+    font-size: 0.95rem;
+    outline: none;
+    transition: all 0.2s;
+}
+
+.sessions-search-input:focus {
+    border-color: rgba(255, 205, 64, 0.6);
+    background: rgba(0, 0, 0, 0.3);
+    box-shadow: 0 0 0 3px rgba(255, 205, 64, 0.1);
+}
+
+.sessions-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-right: 4px;
+}
+
+.sessions-date-header {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #ffcd40;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 12px;
+    margin-bottom: 4px;
+    opacity: 0.8;
+}
+
+.sessions-date-header:first-child {
+    margin-top: 0;
+}
+
+.session-item-wrapper {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    width: 100%;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid transparent;
+    border-radius: 12px;
+    transition: all 0.2s;
+    margin-bottom: 6px;
+    position: relative;
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.session-item-wrapper:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.session-item-wrapper.selected {
+    border-color: rgba(255, 205, 64, 0.5);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.session-item-wrapper.active {
+    background: linear-gradient(135deg, #ffdf63 0%, #ffcd40 100%);
+    color: #2f2500;
+    box-shadow: 0 4px 12px rgba(255, 205, 64, 0.15);
+    border-color: transparent;
+}
+
+.session-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex: 1;
+    padding: 10px 14px;
+    background: transparent;
+    border: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    min-width: 0;
+}
+
+.session-delete-btn,
+.session-edit-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    align-self: stretch;
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0;
+    transition: all 0.2s;
+}
+
+.session-item-wrapper:hover .session-delete-btn,
+.session-item-wrapper.selected .session-delete-btn,
+.session-item-wrapper:hover .session-edit-btn,
+.session-item-wrapper.selected .session-edit-btn {
+    opacity: 0.5;
+}
+
+.session-delete-btn:hover {
+    opacity: 1 !important;
+    background: rgba(255, 77, 77, 0.15);
+    color: #ff4d4d;
+}
+
+.session-edit-btn:hover {
+    opacity: 1 !important;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.session-item-wrapper.active .session-delete-btn:hover,
+.session-item-wrapper.active .session-edit-btn:hover {
+    background: rgba(0, 0, 0, 0.1);
+    color: inherit;
+}
+
+.session-item-title {
+    font-size: 0.92rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+}
+
+.session-item-time {
+    font-size: 0.8rem;
+    margin-left: 16px;
+    opacity: 0.5;
+}
+
+.session-item-wrapper.active .session-item-time {
+    color: inherit;
+    opacity: 0.7;
+}
+
+.session-item-wrapper.selected .session-item-time {
+    opacity: 0.8;
+}
+
+.session-edit-container {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 6px 8px 6px 14px;
+    gap: 4px;
+}
+
+.session-edit-input {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 205, 64, 0.4);
+    border-radius: 8px;
+    color: white;
+    padding: 6px 10px;
+    font-size: 0.92rem;
+    font-weight: 600;
+    outline: none;
+    min-width: 0;
+}
+
+.session-edit-input:focus {
+    border-color: rgba(255, 205, 64, 0.8);
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.session-save-btn,
+.session-cancel-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    align-self: stretch;
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    transition: all 0.2s;
+    border-radius: 8px;
+}
+
+.session-save-btn:hover {
+    background: rgba(52, 199, 89, 0.15);
+    color: #34c759;
+}
+
+.session-cancel-btn:hover {
+    background: rgba(255, 77, 77, 0.15);
+    color: #ff4d4d;
+}
+
+.sessions-footer {
+    display: flex;
+    justify-content: center;
+    margin-top: 10px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.new-chat-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 24px;
+    color: #ffdf63;
+    background: #2f2500;
+    border: none;
+    border-radius: 12px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition:
+        transform 0.2s,
+        box-shadow 0.2s;
+}
+
+.new-chat-btn:active {
+    transform: translateY(0);
+}
+
+.new-chat-btn svg {
+    opacity: 0.8;
+}
+
+.start-btn-container {
+    display: flex;
+    align-items: stretch;
+    background: #34c759;
+    border-radius: 24px;
+    overflow: hidden;
+    height: 42px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.start-btn-container .start-btn {
+    border-radius: 0;
+    background: transparent;
+    padding: 0 20px 0 24px;
+    flex: 1;
+}
+
+.start-btn-arrow {
+    background: transparent;
+    border: none;
+    width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: white;
+    transition: background-color 0.2s;
+    margin: 6px;
+    border-radius: 12px;
+}
+
+.start-btn-arrow:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.35);
+}
+
+.start-btn-arrow:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.conversation-popup-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.conversation-popup-title-input {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    color: white;
+    font-size: 1rem;
+    font-weight: 700;
+    padding: 2px 4px;
+    width: 200px;
+    outline: none;
+}
+
+.title-edit-btn {
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.4);
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition:
+        color 0.2s,
+        background-color 0.2s;
+}
+
+.title-edit-btn:hover {
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.pulse-animation {
+    animation: pulse 1.5s 1;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(255, 205, 64, 0.7);
+    }
+    70% {
+        transform: scale(1.05);
+        box-shadow: 0 0 0 10px rgba(255, 205, 64, 0);
+    }
+    100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(255, 205, 64, 0);
+    }
+}
+
 /* Shared styles for the OpenDuck home page and its extracted UI components. */

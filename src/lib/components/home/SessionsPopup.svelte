@@ -1,0 +1,324 @@
+<script lang="ts">
+    import type { SessionMetadata } from "$lib/openduck/types";
+    import { onMount } from "svelte";
+    import ConfirmDialog from "../ui/ConfirmDialog.svelte";
+
+    let {
+        sessions,
+        activeSessionId,
+        onSelect,
+        onDelete,
+        onRename,
+        onNewChat,
+        onClose,
+    } = $props<{
+        sessions: SessionMetadata[];
+        activeSessionId: string | null;
+        onSelect: (session: SessionMetadata) => void;
+        onDelete: (session: SessionMetadata) => void;
+        onRename: (session: SessionMetadata, newTitle: string) => void;
+        onNewChat: () => void;
+        onClose: () => void;
+    }>();
+
+    let searchTerm = $state("");
+    let selectedIndex = $state(0);
+    let sessionToDelete = $state<SessionMetadata | null>(null);
+    let editingSessionId = $state<string | null>(null);
+    let editingTitle = $state("");
+
+    onMount(() => {
+        if (activeSessionId) {
+            const index = filteredSessions.findIndex(
+                (s) => s.id === activeSessionId,
+            );
+            if (index !== -1) {
+                selectedIndex = index;
+            }
+        }
+    });
+
+    const filteredSessions = $derived(
+        sessions.filter((s) =>
+            s.title.toLowerCase().includes(searchTerm.toLowerCase()),
+        ),
+    );
+
+    const sessionsByDate = $derived(
+        filteredSessions.reduce(
+            (acc, session) => {
+                const date = new Date(session.updated_at * 1000);
+                const dateStr = date.toLocaleDateString(undefined, {
+                    weekday: "short",
+                    year: "numeric",
+                    month: "short",
+                    day: "numeric",
+                });
+                if (!acc[dateStr]) {
+                    acc[dateStr] = [];
+                }
+                acc[dateStr].push(session);
+                return acc;
+            },
+            {} as Record<string, SessionMetadata[]>,
+        ),
+    );
+
+    const dateHeaders = $derived(Object.keys(sessionsByDate));
+
+    function handleKeydown(event: KeyboardEvent) {
+        if (editingSessionId) return;
+        if (event.key === "Escape") {
+            onClose();
+        } else if (event.key === "ArrowDown") {
+            selectedIndex = (selectedIndex + 1) % filteredSessions.length;
+            event.preventDefault();
+        } else if (event.key === "ArrowUp") {
+            selectedIndex =
+                (selectedIndex - 1 + filteredSessions.length) %
+                filteredSessions.length;
+            event.preventDefault();
+        } else if (event.key === "Enter") {
+            if (filteredSessions[selectedIndex]) {
+                onSelect(filteredSessions[selectedIndex]);
+            }
+        } else if (event.ctrlKey && event.key === "d") {
+            if (filteredSessions[selectedIndex]) {
+                onDelete(filteredSessions[selectedIndex]);
+            }
+            event.preventDefault();
+        } else if (event.ctrlKey && event.key === "r") {
+            if (filteredSessions[selectedIndex]) {
+                startEditing(filteredSessions[selectedIndex]);
+            }
+            event.preventDefault();
+        }
+    }
+
+    function startEditing(session: SessionMetadata) {
+        editingSessionId = session.id;
+        editingTitle = session.title;
+    }
+
+    function saveEdit(session: SessionMetadata) {
+        if (editingTitle.trim() && editingTitle !== session.title) {
+            onRename(session, editingTitle);
+        }
+        editingSessionId = null;
+    }
+
+    function cancelEdit() {
+        editingSessionId = null;
+    }
+
+    function autofocus(node: HTMLInputElement) {
+        node.focus();
+        node.select();
+    }
+
+    function formatTime(timestamp: number) {
+        return new Date(timestamp * 1000).toLocaleTimeString(undefined, {
+            hour: "numeric",
+            minute: "2-digit",
+        });
+    }
+</script>
+
+<div
+    class="sessions-popup"
+    role="dialog"
+    aria-label="Sessions"
+    onkeydown={handleKeydown}
+    tabindex="-1"
+>
+    <div class="sessions-header">
+        <span class="sessions-title">Sessions</span>
+    </div>
+
+    <div class="sessions-search">
+        <input
+            type="text"
+            class="sessions-search-input"
+            placeholder="Search sessions..."
+            bind:value={searchTerm}
+        />
+    </div>
+
+    <div class="sessions-list">
+        {#each dateHeaders as date}
+            <div class="sessions-date-header">{date}</div>
+            {#each sessionsByDate[date] as session}
+                {@const globalIndex = filteredSessions.indexOf(session)}
+                <div
+                    class="session-item-wrapper"
+                    class:selected={globalIndex === selectedIndex}
+                    class:active={session.id === activeSessionId}
+                    class:editing={editingSessionId === session.id}
+                    onmouseenter={() => (selectedIndex = globalIndex)}
+                >
+                    {#if editingSessionId === session.id}
+                        <div class="session-edit-container">
+                            <input
+                                type="text"
+                                class="session-edit-input"
+                                bind:value={editingTitle}
+                                onkeydown={(e) => {
+                                    if (e.key === "Enter") saveEdit(session);
+                                    if (e.key === "Escape") cancelEdit();
+                                    e.stopPropagation();
+                                }}
+                                use:autofocus
+                            />
+                            <button
+                                type="button"
+                                class="session-save-btn"
+                                onclick={() => saveEdit(session)}
+                                title="Save"
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="3"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><polyline points="20 6 9 17 4 12" /></svg
+                                >
+                            </button>
+                            <button
+                                type="button"
+                                class="session-cancel-btn"
+                                onclick={cancelEdit}
+                                title="Cancel"
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="3"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><line x1="18" y1="6" x2="6" y2="18" /><line
+                                        x1="6"
+                                        y1="6"
+                                        x2="18"
+                                        y2="18"
+                                    /></svg
+                                >
+                            </button>
+                        </div>
+                    {:else}
+                        <button
+                            type="button"
+                            class="session-item"
+                            onclick={() => onSelect(session)}
+                        >
+                            <span class="session-item-title">{session.title}</span>
+                            <span class="session-item-time"
+                                >{formatTime(session.updated_at)}</span
+                            >
+                        </button>
+                        <button
+                            type="button"
+                            class="session-edit-btn"
+                            onclick={(e) => {
+                                e.stopPropagation();
+                                startEditing(session);
+                            }}
+                            title="Rename session"
+                        >
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2.5"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                ><path
+                                    d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
+                                /><path
+                                    d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
+                                /></svg
+                            >
+                        </button>
+                        <button
+                            type="button"
+                            class="session-delete-btn"
+                            onclick={(e) => {
+                                e.stopPropagation();
+                                sessionToDelete = session;
+                            }}
+                            title="Delete session"
+                        >
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2.5"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                ><path d="M3 6h18" /><path
+                                    d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"
+                                /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /><line
+                                    x1="10"
+                                    y1="11"
+                                    x2="10"
+                                    y2="17"
+                                /><line
+                                    x1="14"
+                                    y1="11"
+                                    x2="14"
+                                    y2="17"
+                                /></svg
+                            >
+                        </button>
+                    {/if}
+                </div>
+            {/each}
+        {/each}
+        {#if filteredSessions.length === 0}
+            <div class="conversation-empty">No sessions found</div>
+        {/if}
+    </div>
+
+    <div class="sessions-footer">
+        <button type="button" class="new-chat-btn" onclick={onNewChat}>
+            <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"><path d="M12 5v14M5 12h14" /></svg
+            >
+            New Chat
+        </button>
+    </div>
+
+    {#if sessionToDelete}
+        <ConfirmDialog
+            title="Delete session?"
+            message="This action cannot be undone. Do you wish to continue?"
+            onConfirm={() => {
+                if (sessionToDelete) onDelete(sessionToDelete);
+                sessionToDelete = null;
+            }}
+            onCancel={() => (sessionToDelete = null)}
+        />
+    {/if}
+</div>

@@ -3,12 +3,13 @@
     import "./home.css";
 
     import { onDestroy, onMount } from "svelte";
-    import { invoke } from "@tauri-apps/api/core";
+    import { invoke, convertFileSrc } from "@tauri-apps/api/core";
     import { listen, type UnlistenFn } from "@tauri-apps/api/event";
     import { save } from "@tauri-apps/plugin-dialog";
     import AboutModal from "$lib/components/home/AboutModal.svelte";
     import ContactsModal from "$lib/components/home/ContactsModal.svelte";
     import ConversationPopup from "$lib/components/home/ConversationPopup.svelte";
+    import SessionsPopup from "$lib/components/home/SessionsPopup.svelte";
     import GemmaBanner from "$lib/components/home/GemmaBanner.svelte";
     import OllamaConfigModal from "$lib/components/home/OllamaConfigModal.svelte";
     import SpeechBanner from "$lib/components/home/SpeechBanner.svelte";
@@ -180,6 +181,11 @@
     let ollamaBaseUrl = $state("http://127.0.0.1:11434");
     let ollamaApiKey = $state("");
     let showConversationPopup = $state(false);
+    let showSessionsPopup = $state(false);
+    let sessions = $state<SessionMetadata[]>([]);
+    const hasHistory = $derived(sessions.length > 0);
+    let currentSessionTitle = $state<string | null>(null);
+    let currentSessionId = $state<string | null>(null);
     let showAboutPopup = $state(false);
     let conversationLogEntries = $state<ConversationLogEntry[]>([]);
     let buildInfo = $state<BuildInfo | null>(null);
@@ -193,6 +199,10 @@
     let activeAssistantConversationEntryId: number | null = null;
     let isSavingConversationLogEntryEdit = $state(false);
     let isClearingConversationLogImages = $state(false);
+
+    const popupActionsBusy = $derived(
+        isSavingConversationLogEntryEdit || isClearingConversationLogImages,
+    );
     let callStagePhase = $state<CallStagePhase>("idle");
     let callStageMessage = $state("");
     let screenCapturePhase = $state<ScreenCaptureEvent["phase"] | null>(null);
@@ -277,6 +287,10 @@
             (selectedSttModel === "whisper_large_v3_turbo" && isSttLoaded),
     );
     let conversationLogViewport = $state<HTMLDivElement | null>(null);
+    let contactsPopupEl = $state<HTMLElement | null>(null);
+    let conversationPopupEl = $state<HTMLElement | null>(null);
+    let aboutPopupEl = $state<HTMLElement | null>(null);
+    let sessionsPopupEl = $state<HTMLElement | null>(null);
 
     function setConversationLogViewport(element: HTMLDivElement | null) {
         conversationLogViewport = element;
@@ -581,30 +595,74 @@
     function markConversationTurnAsContextBacked(
         payload: ConversationContextCommittedEvent,
     ) {
-        if (
-            pendingConversationUserLogEntryId == null ||
-            activeAssistantConversationEntryId == null
-        ) {
+        if (payload.sessionTitle) {
+            currentSessionTitle = payload.sessionTitle;
+        }
+
+        const userEntryIdInLog = pendingConversationUserLogEntryId;
+        const assistantEntryIdInLog = activeAssistantConversationEntryId;
+
+        if (userEntryIdInLog == null || assistantEntryIdInLog == null) {
             return;
         }
 
+        const userEntry = conversationLogEntries.find(
+            (e) => e.id === userEntryIdInLog,
+        );
+        const assistantEntry = conversationLogEntries.find(
+            (e) => e.id === assistantEntryIdInLog,
+        );
+
+        if (!userEntry || !assistantEntry) {
+            // One or both entries were deleted from the UI before they could be context-backed.
+            // Still update the IDs so we can delete them from the backend.
+            void invoke("delete_conversation_context_entry", {
+                entryId: payload.userEntryId,
+            });
+        } else {
+            // Sync any edits that happened while the turn was being processed.
+            if (userEntry.text !== payload.userText) {
+                console.log(
+                    "Syncing edited user text to backend",
+                    userEntry.text,
+                );
+                void invoke("update_conversation_context_entry", {
+                    entryId: payload.userEntryId,
+                    text: userEntry.text,
+                    clearImage: false,
+                });
+            }
+            if (assistantEntry.text !== payload.assistantText) {
+                console.log(
+                    "Syncing edited assistant text to backend",
+                    assistantEntry.text,
+                );
+                void invoke("update_conversation_context_entry", {
+                    entryId: payload.assistantEntryId,
+                    text: assistantEntry.text,
+                    clearImage: false,
+                });
+            }
+        }
+
         conversationLogEntries = conversationLogEntries.map((entry) => {
-            if (entry.id === pendingConversationUserLogEntryId) {
+            if (entry.id === userEntryIdInLog) {
                 return {
                     ...entry,
-                    contextEntryId: payload.user_entry_id,
+                    contextEntryId: payload.userEntryId,
                 };
             }
 
-            if (entry.id === activeAssistantConversationEntryId) {
+            if (entry.id === assistantEntryIdInLog) {
                 return {
                     ...entry,
-                    contextEntryId: payload.assistant_entry_id,
+                    contextEntryId: payload.assistantEntryId,
                 };
             }
 
             return entry;
         });
+
         pendingConversationUserLogEntryId = null;
         pruneConversationLogContextBackedEntries();
     }
@@ -763,6 +821,76 @@
         applyPongPlaybackPreference(effectiveEnabled);
     }
 
+    async function deleteConversationLogEntry(entryId: number) {
+        const entryIndex = conversationLogEntries.findIndex(
+            (candidate) => candidate.id === entryId,
+        );
+        if (entryIndex === -1) {
+            return false;
+        }
+        const entry = conversationLogEntries[entryIndex];
+
+        if (entry.contextEntryId == null) {
+            conversationLogEntries = conversationLogEntries.filter(
+                (candidate) => candidate.id !== entryId,
+            );
+            return true;
+        }
+
+        isSavingConversationLogEntryEdit = true;
+
+        try {
+            console.log("Deleting context entry", entry.contextEntryId);
+            const otherContextEntryId: number | null = await invoke(
+                "delete_conversation_context_entry",
+                {
+                    entryId: entry.contextEntryId,
+                },
+            );
+
+            const contextEntryIdsToRemove = [entry.contextEntryId];
+            if (otherContextEntryId !== null) {
+                contextEntryIdsToRemove.push(otherContextEntryId);
+            }
+
+            conversationLogEntries = conversationLogEntries.filter(
+                (candidate) =>
+                    candidate.contextEntryId === null ||
+                    !contextEntryIdsToRemove.includes(candidate.contextEntryId),
+            );
+
+            // Also clear the pending IDs if we just deleted the hot messages
+            if (
+                pendingConversationUserLogEntryId === entry.id ||
+                pendingConversationUserLogEntryId === otherContextEntryId
+            ) {
+                pendingConversationUserLogEntryId = null;
+            }
+            if (
+                activeAssistantConversationEntryId === entry.id ||
+                activeAssistantConversationEntryId === otherContextEntryId
+            ) {
+                activeAssistantConversationEntryId = null;
+            }
+
+            return true;
+        } catch (err) {
+            const errorMsg = String(err);
+            if (errorMsg.includes("no longer part of the active context")) {
+                conversationLogEntries = conversationLogEntries.filter(
+                    (candidate) => candidate.id !== entryId,
+                );
+                return true;
+            }
+
+            console.error("Failed to delete conversation entry:", err);
+            alert(`Failed to delete the conversation entry.\n${errorMsg}`);
+            return false;
+        } finally {
+            isSavingConversationLogEntryEdit = false;
+        }
+    }
+
     async function saveConversationLogEntryEdit(
         entryId: number,
         nextText: string,
@@ -771,10 +899,7 @@
         const entry = conversationLogEntries.find(
             (candidate) => candidate.id === entryId,
         );
-        if (!entry || entry.contextEntryId == null) {
-            alert(
-                "This message is no longer part of the active conversation context.",
-            );
+        if (!entry) {
             return false;
         }
 
@@ -789,14 +914,65 @@
             return true;
         }
 
-        isSavingConversationLogEntryEdit = true;
+        // If it's a context-backed entry, we must update the backend.
+        // Even if it was "pruned" in the UI (contextEntryId == null),
+        // it might still be in the active backend context if it's recent enough.
+        // However, the UI currently clears contextEntryId for anything beyond 48 entries.
+        if (entry.contextEntryId !== null) {
+            isSavingConversationLogEntryEdit = true;
 
-        try {
-            await invoke("update_conversation_context_entry", {
-                entryId: entry.contextEntryId,
-                text: normalizedText,
-                clearImage,
-            });
+            try {
+                console.log(
+                    "Updating context entry",
+                    entry.contextEntryId,
+                    "with text",
+                    normalizedText,
+                );
+                await invoke("update_conversation_context_entry", {
+                    entryId: entry.contextEntryId,
+                    text: normalizedText,
+                    clearImage,
+                });
+
+                // Success, update local state
+                conversationLogEntries = conversationLogEntries.map(
+                    (candidate) =>
+                        candidate.id === entryId
+                            ? {
+                                  ...candidate,
+                                  text: normalizedText,
+                                  imageUrl: nextImageUrl,
+                              }
+                            : candidate,
+                );
+                return true;
+            } catch (err) {
+                const errorMsg = String(err);
+                if (errorMsg.includes("no longer part of the active context")) {
+                    // It's gone from the backend, so just update locally and clear the ID
+                    conversationLogEntries = conversationLogEntries.map(
+                        (candidate) =>
+                            candidate.id === entryId
+                                ? {
+                                      ...candidate,
+                                      text: normalizedText,
+                                      imageUrl: nextImageUrl,
+                                      contextEntryId: null,
+                                  }
+                                : candidate,
+                    );
+                    return true;
+                }
+
+                console.error("Failed to update conversation entry:", err);
+                alert(`Failed to update the conversation entry.\n${errorMsg}`);
+                return false;
+            } finally {
+                isSavingConversationLogEntryEdit = false;
+            }
+        } else {
+            // No context ID. Just update locally.
+            // If it's currently being responded to, markConversationTurnAsContextBacked will sync it later.
             conversationLogEntries = conversationLogEntries.map((candidate) =>
                 candidate.id === entryId
                     ? {
@@ -807,12 +983,6 @@
                     : candidate,
             );
             return true;
-        } catch (err) {
-            console.error("Failed to update conversation entry:", err);
-            alert(`Failed to update the conversation entry.\n${String(err)}`);
-            return false;
-        } finally {
-            isSavingConversationLogEntryEdit = false;
         }
     }
 
@@ -1084,6 +1254,128 @@
             closeContactsPopup();
             closeAboutPopup();
             scrollConversationLogToBottom();
+        }
+    }
+
+    async function loadSessions() {
+        try {
+            sessions = await invoke<SessionMetadata[]>("get_sessions");
+            currentSessionId = await invoke<string | null>(
+                "get_current_session_id",
+            );
+        } catch (err) {
+            console.error("Failed to load sessions:", err);
+        }
+    }
+
+    async function handleSelectSession(session: SessionMetadata) {
+        try {
+            const turns = await invoke<ConversationTurn[]>("load_session", {
+                sessionId: session.id,
+            });
+            currentSessionId = session.id;
+            resetConversationLog();
+            for (const turn of turns) {
+                const userEntryId = appendConversationLogEntry(
+                    "user",
+                    turn.user_text,
+                    turn.user_image_data_url ||
+                        (turn.image_path
+                            ? convertFileSrc(turn.image_path)
+                            : null),
+                );
+                const assistantEntryId = appendConversationLogEntry(
+                    "assistant",
+                    turn.assistant_text,
+                );
+                // Mark them as context backed immediately
+                conversationLogEntries = conversationLogEntries.map((entry) => {
+                    if (entry.id === userEntryId)
+                        return { ...entry, contextEntryId: turn.user_entry_id };
+                    if (entry.id === assistantEntryId)
+                        return {
+                            ...entry,
+                            contextEntryId: turn.assistant_entry_id,
+                        };
+                    return entry;
+                });
+            }
+            currentSessionTitle = session.title;
+            showSessionsPopup = false;
+            // Pulse the conversation log button
+            const logBtn = document.querySelector(".conversation-log-btn");
+            if (logBtn) {
+                logBtn.classList.add("pulse-animation");
+                setTimeout(
+                    () => logBtn.classList.remove("pulse-animation"),
+                    1000,
+                );
+            }
+        } catch (err) {
+            console.error("Failed to load session:", err);
+            alert(`Failed to load session.\n${String(err)}`);
+        }
+    }
+
+    async function handleDeleteSession(session: SessionMetadata) {
+        if (!confirm(`Delete session "${session.title}"?`)) return;
+        try {
+            await invoke("delete_session", { sessionId: session.id });
+            if (session.id === currentSessionId) {
+                await handleNewChat();
+            } else {
+                await loadSessions();
+            }
+        } catch (err) {
+            console.error("Failed to delete session:", err);
+            alert(`Failed to delete session.\n${String(err)}`);
+        }
+    }
+
+    async function handleRenameSession(
+        session: SessionMetadata,
+        newTitle: string,
+    ) {
+        if (!newTitle || newTitle === session.title) return;
+        try {
+            await invoke("rename_session", {
+                sessionId: session.id,
+                newTitle: newTitle,
+            });
+            if (
+                session.id ===
+                (await invoke<string | null>("get_current_session_id"))
+            ) {
+                currentSessionTitle = newTitle;
+            }
+            await loadSessions();
+        } catch (err) {
+            console.error("Failed to rename session:", err);
+            alert(`Failed to rename session.\n${String(err)}`);
+        }
+    }
+
+    async function handleNewChat() {
+        try {
+            await invoke("reset_call_session");
+            resetConversationLog();
+            currentSessionId = await invoke<string | null>(
+                "get_current_session_id",
+            );
+            currentSessionTitle = null;
+            showSessionsPopup = false;
+        } catch (err) {
+            console.error("Failed to reset session:", err);
+        }
+    }
+
+    function toggleSessionsPopup() {
+        showSessionsPopup = !showSessionsPopup;
+        if (showSessionsPopup) {
+            void loadSessions();
+            closeConversationPopup();
+            closeContactsPopup();
+            closeAboutPopup();
         }
     }
 
@@ -1364,6 +1656,16 @@
 
         if (showConversationPopup) {
             closeConversationPopup();
+            return;
+        }
+
+        if (showSessionsPopup) {
+            showSessionsPopup = false;
+            return;
+        }
+
+        if (showOllamaConfig) {
+            closeOllamaConfig();
         }
     }
 
@@ -1797,7 +2099,10 @@
             isOllamaSupported = ollamaSupported;
             isGemmaLoaded = gemmaLoaded;
 
-            if (ollamaSupported && (!previousOllamaSupported || ollamaModels.length === 0)) {
+            if (
+                ollamaSupported &&
+                (!previousOllamaSupported || ollamaModels.length === 0)
+            ) {
                 void syncOllamaModels();
             }
 
@@ -2423,14 +2728,60 @@
         await syncSelectedContactPrompt();
 
         try {
-            await invoke("reset_call_session");
+            await invoke("start_new_session");
         } catch (err) {
-            console.error("Failed to reset call session:", err);
+            console.error("Failed to start new session:", err);
         }
 
         closeContactsPopup();
         closeConversationPopup();
+        showSessionsPopup = false;
         resetConversationLog();
+        resetScreenCaptureStatus();
+        calling = true;
+        callStartedAtMs = Date.now();
+        syncCallElapsedTime();
+        activeTtsRequestId = null;
+        syncTtsPlaybackState(false);
+        setCallStage("listening", "Listening");
+
+        void invoke("start_call_timer", { muted: micMuted }).catch((err) =>
+            console.error("Failed to start tray call timer", err),
+        );
+        await startAudioCapture();
+        if (calling) {
+            void playCallStartPong();
+        }
+        void invoke("ping").catch((err) =>
+            console.error("Backend ping failed", err),
+        );
+
+        if (callTimerInterval) {
+            clearInterval(callTimerInterval);
+        }
+
+        callTimerInterval = window.setInterval(() => {
+            if (!calling || callStartedAtMs == null) {
+                if (callTimerInterval) {
+                    clearInterval(callTimerInterval);
+                    callTimerInterval = null;
+                }
+                return;
+            }
+            syncCallElapsedTime();
+        }, 1000);
+    }
+
+    async function handleResumeCall() {
+        if (!modelsReady) {
+            return;
+        }
+
+        await syncSelectedContactPrompt();
+
+        closeContactsPopup();
+        closeConversationPopup();
+        showSessionsPopup = false;
         resetScreenCaptureStatus();
         calling = true;
         callStartedAtMs = Date.now();
@@ -2479,6 +2830,7 @@
 
         try {
             await invoke("reset_call_session");
+            await loadSessions();
         } catch (err) {
             console.error("Failed to clear call session:", err);
         }
@@ -3001,7 +3353,7 @@
                         ({ payload }) => {
                             if (
                                 !calling ||
-                                payload.request_id !== activeAssistantResponseId
+                                payload.requestId !== activeAssistantResponseId
                             ) {
                                 return;
                             }
@@ -3086,6 +3438,23 @@
                         void playTrayPong();
                     }),
                 ]);
+
+                window.addEventListener("rename-session", (async (
+                    e: CustomEvent<string>,
+                ) => {
+                    try {
+                        await invoke("update_current_session_title", {
+                            title: e.detail,
+                        });
+                        currentSessionTitle = e.detail;
+                        await loadSessions();
+                    } catch (err) {
+                        console.error(
+                            "Failed to update current session title:",
+                            err,
+                        );
+                    }
+                }) as any);
             } catch (err) {
                 console.error("Failed to register Tauri event listeners:", err);
             }
@@ -3099,6 +3468,17 @@
             await restoreModelPreferences();
             await syncOllamaConfig();
             await initializePongPlaybackPreference();
+            await loadSessions();
+            if (sessions.length > 0) {
+                const logBtn = document.querySelector(".conversation-log-btn");
+                if (logBtn) {
+                    logBtn.classList.add("pulse-animation");
+                    setTimeout(
+                        () => logBtn.classList.remove("pulse-animation"),
+                        1500,
+                    );
+                }
+            }
             await ensureRuntimeDependencies();
             await syncModelStatus();
             await syncOllamaModels();
@@ -3107,6 +3487,72 @@
         healthCheckInterval = window.setInterval(() => {
             void syncModelStatus();
         }, 5000);
+
+        const handleClickOutside = (event: MouseEvent) => {
+            const target = event.target as HTMLElement;
+
+            // Check Sessions Popup
+            if (
+                showSessionsPopup &&
+                sessionsPopupEl &&
+                !sessionsPopupEl.contains(target)
+            ) {
+                if (
+                    !document
+                        .querySelector(".start-btn-arrow")
+                        ?.contains(target)
+                ) {
+                    showSessionsPopup = false;
+                }
+            }
+
+            // Check Conversation Popup
+            if (
+                showConversationPopup &&
+                conversationPopupEl &&
+                !conversationPopupEl.contains(target)
+            ) {
+                let clickedLogBtn = false;
+                document
+                    .querySelectorAll(".conversation-log-btn")
+                    .forEach((btn) => {
+                        if (btn.contains(target)) clickedLogBtn = true;
+                    });
+                if (!clickedLogBtn) {
+                    showConversationPopup = false;
+                }
+            }
+
+            // Check Contacts Popup
+            if (
+                showContactsPopup &&
+                contactsPopupEl &&
+                !contactsPopupEl.contains(target)
+            ) {
+                if (
+                    !document.querySelector(".contacts-btn")?.contains(target)
+                ) {
+                    closeContactsPopup();
+                }
+            }
+
+            // Check About Popup
+            if (
+                showAboutPopup &&
+                aboutPopupEl &&
+                !aboutPopupEl.contains(target)
+            ) {
+                if (!document.querySelector(".about-btn")?.contains(target)) {
+                    closeAboutPopup();
+                }
+            }
+        };
+
+        window.addEventListener("mousedown", handleClickOutside);
+
+        return () => {
+            window.removeEventListener("mousedown", handleClickOutside);
+        };
     });
 
     onDestroy(() => {
@@ -3349,23 +3795,24 @@
         {/if}
 
         {#if showContactsPopup}
-            <ContactsModal
-                {contacts}
-                {selectedContact}
-                {selectedContactName}
-                {selectedContactIconUrl}
-                {getContactDisplayName}
-                {closeContactsPopup}
-                {selectContact}
-                {triggerContactImport}
-                {createNewContact}
-                {triggerContactIconUpload}
-                {handleResetSelectedContactIcon}
-                {handleSelectedContactNameInput}
-                {handleSelectedContactPromptInput}
-                {handleDeleteSelectedContact}
-                {handleExportSelectedContact}
-            />
+            <div class="popup-wrapper" bind:this={contactsPopupEl}>
+                <ContactsModal
+                    {contacts}
+                    {selectedContact}
+                    {selectedContactName}
+                    {selectedContactIconUrl}
+                    {getContactDisplayName}
+                    {closeContactsPopup}
+                    {selectContact}
+                    {triggerContactImport}
+                    {createNewContact}
+                    {triggerContactIconUpload}
+                    {handleResetSelectedContactIcon}
+                    {handleSelectedContactNameInput}
+                    {handleSelectedContactPromptInput}
+                    {handleDeleteSelectedContact}
+                />
+            </div>
         {/if}
 
         {#if showOllamaConfig}
@@ -3378,29 +3825,34 @@
         {/if}
 
         {#if showConversationPopup}
-            <ConversationPopup
-                {conversationLogEntries}
-                {closeConversationPopup}
-                {clearConversationLogImages}
-                {isClearingConversationLogImages}
-                {isSavingConversationLogEntryEdit}
-                {saveConversationLogEntryEdit}
-                {setConversationLogViewport}
-            />
+            <div class="popup-wrapper" bind:this={conversationPopupEl}>
+                <ConversationPopup
+                    {conversationLogEntries}
+                    sessionTitle={currentSessionTitle}
+                    {popupActionsBusy}
+                    onClearHistory={clearConversationLogImages}
+                    onClose={closeConversationPopup}
+                    {saveConversationLogEntryEdit}
+                    {deleteConversationLogEntry}
+                    {setConversationLogViewport}
+                />
+            </div>
         {/if}
 
         {#if showAboutPopup}
-            <AboutModal
-                {buildInfo}
-                {buildInfoError}
-                {availableAppUpdate}
-                {appUpdateStatus}
-                {appUpdateError}
-                checkForUpdates={checkForAppUpdates}
-                installAvailableUpdate={installAppUpdate}
-                {restartToApplyUpdate}
-                {closeAboutPopup}
-            />
+            <div class="popup-wrapper" bind:this={aboutPopupEl}>
+                <AboutModal
+                    {buildInfo}
+                    {buildInfoError}
+                    {availableAppUpdate}
+                    {appUpdateStatus}
+                    {appUpdateError}
+                    checkForUpdates={checkForAppUpdates}
+                    installAvailableUpdate={installAppUpdate}
+                    {restartToApplyUpdate}
+                    {closeAboutPopup}
+                />
+            </div>
         {/if}
 
         <div
@@ -3414,7 +3866,7 @@
                         ? formattedTime
                         : modelsReady
                           ? "Ready"
-                          : "Models loading..."}</span
+                          : "Pending"}</span
                 >
             </div>
 
@@ -3422,7 +3874,32 @@
                 {#if !calling}
                     <button
                         type="button"
-                        class="icon-btn"
+                        class="icon-btn conversation-log-btn"
+                        class:active={showConversationPopup}
+                        onclick={toggleConversationPopup}
+                        disabled={!conversationLogEntries.length}
+                        aria-label="Toggle conversation log"
+                        aria-controls="conversation-log-popup"
+                        aria-expanded={showConversationPopup}
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="22"
+                            height="22"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            ><path d="M7 10h8" /><path d="M7 14h5" /><path
+                                d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"
+                            /></svg
+                        >
+                    </button>
+                    <button
+                        type="button"
+                        class="icon-btn contacts-btn"
                         class:active={showContactsPopup}
                         onclick={toggleContactsPopup}
                         aria-label="Toggle contacts"
@@ -3446,7 +3923,7 @@
                     </button>
                     <button
                         type="button"
-                        class="icon-btn"
+                        class="icon-btn about-btn"
                         class:active={showAboutPopup}
                         onclick={toggleAboutPopup}
                         aria-label="Show app info"
@@ -3605,11 +4082,42 @@
                 <button class="end-btn" onclick={handleEndCall}>End</button>
             {:else}
                 <div class="tooltip-shell start-call-tooltip-shell">
-                    <button
-                        class="start-btn"
-                        disabled={!modelsReady}
-                        onclick={handleStartCall}>Call</button
-                    >
+                    <div class="start-btn-container">
+                        {#if conversationLogEntries.length > 0}
+                            <button
+                                class="start-btn"
+                                disabled={!modelsReady}
+                                onclick={handleResumeCall}>Resume</button
+                            >
+                        {:else}
+                            <button
+                                class="start-btn"
+                                disabled={!modelsReady}
+                                onclick={handleStartCall}>Call</button
+                            >
+                        {/if}
+                        {#if hasHistory}
+                            <button
+                                class="start-btn-arrow"
+                                disabled={!modelsReady}
+                                onclick={toggleSessionsPopup}
+                                title="continue from previous session"
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="3"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><path d="m9 18 6-6-6-6" /></svg
+                                >
+                            </button>
+                        {/if}
+                    </div>
                     {#if !modelsReady}
                         <div
                             id="start-call-tooltip"
@@ -3619,6 +4127,20 @@
                             the call.
                         </div>
                     {/if}
+                </div>
+            {/if}
+
+            {#if showSessionsPopup}
+                <div class="popup-wrapper" bind:this={sessionsPopupEl}>
+                    <SessionsPopup
+                        {sessions}
+                        activeSessionId={currentSessionId}
+                        onSelect={handleSelectSession}
+                        onDelete={handleDeleteSession}
+                        onRename={handleRenameSession}
+                        onNewChat={handleNewChat}
+                        onClose={toggleSessionsPopup}
+                    />
                 </div>
             {/if}
         </div>

@@ -98,10 +98,14 @@ pub(crate) struct TrayPongPlaybackEvent {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ConversationContextCommittedEvent {
     pub(crate) request_id: u64,
     pub(crate) user_entry_id: u64,
     pub(crate) assistant_entry_id: u64,
+    pub(crate) user_text: String,
+    pub(crate) assistant_text: String,
+    pub(crate) session_title: Option<String>,
 }
 
 #[derive(Clone, Serialize)]

@@ -1,36 +1,46 @@
 <!-- Floating live transcript panel shown during active calls. -->
 <script lang="ts">
     import type { ConversationLogEntry } from "$lib/openduck/types";
+    import { onMount } from "svelte";
+    import ConfirmDialog from "../ui/ConfirmDialog.svelte";
 
     let {
         conversationLogEntries,
-        closeConversationPopup,
-        clearConversationLogImages,
-        isClearingConversationLogImages,
-        isSavingConversationLogEntryEdit,
+        sessionTitle,
+        popupActionsBusy,
+        onClearHistory,
+        onClose,
         saveConversationLogEntryEdit,
+        deleteConversationLogEntry,
         setConversationLogViewport,
     } = $props<{
         conversationLogEntries: ConversationLogEntry[];
-        closeConversationPopup: () => void;
-        clearConversationLogImages: () => Promise<void>;
-        isClearingConversationLogImages: boolean;
-        isSavingConversationLogEntryEdit: boolean;
+        sessionTitle: string | null;
+        popupActionsBusy: boolean;
+        onClearHistory: () => void;
+        onClose: () => void;
         saveConversationLogEntryEdit: (
             entryId: number,
-            nextText: string,
+            text: string,
             clearImage: boolean,
         ) => Promise<boolean>;
-        setConversationLogViewport: (element: HTMLDivElement | null) => void;
+        deleteConversationLogEntry: (entryId: number) => Promise<boolean>;
+        setConversationLogViewport: (el: HTMLElement | null) => void;
     }>();
 
-    let viewport: HTMLDivElement | null = null;
+    let viewport = $state<HTMLElement | null>(null);
     let editingEntryId = $state<number | null>(null);
     let editingText = $state("");
     let editingImageRemoved = $state(false);
-    const popupActionsBusy = $derived(
-        isSavingConversationLogEntryEdit || isClearingConversationLogImages,
-    );
+    let messageToDelete = $state<ConversationLogEntry | null>(null);
+    let editingTitle = $state(false);
+    let titleValue = $state("");
+
+    // Use internal state for busy to avoid naming conflict with prop
+    let isSavingConversationLogEntryEdit = $state(false);
+    let isClearingConversationLogImages = $state(false);
+    
+    const isBusy = $derived(popupActionsBusy || isSavingConversationLogEntryEdit || isClearingConversationLogImages);
     const hasClearableConversationImages = $derived(
         conversationLogEntries.some((entry) => entry.imageUrl !== null),
     );
@@ -43,6 +53,17 @@
         };
     });
 
+    function startEditingTitle() {
+        titleValue = sessionTitle || "Conversation";
+        editingTitle = true;
+    }
+
+    async function saveTitle() {
+        editingTitle = false;
+        const event = new CustomEvent('rename-session', { detail: titleValue });
+        window.dispatchEvent(event);
+    }
+
     $effect(() => {
         if (editingEntryId == null) {
             return;
@@ -51,7 +72,7 @@
         const activeEntry = conversationLogEntries.find(
             (entry) => entry.id === editingEntryId,
         );
-        if (!activeEntry || activeEntry.contextEntryId == null) {
+        if (!activeEntry) {
             cancelEditingConversationEntry();
         }
     });
@@ -73,19 +94,29 @@
             return;
         }
 
-        const didSave = await saveConversationLogEntryEdit(
-            editingEntryId,
-            editingText,
-            editingImageRemoved,
-        );
-        if (didSave) {
-            cancelEditingConversationEntry();
+        isSavingConversationLogEntryEdit = true;
+        try {
+            const didSave = await saveConversationLogEntryEdit(
+                editingEntryId,
+                editingText,
+                editingImageRemoved,
+            );
+            if (didSave) {
+                cancelEditingConversationEntry();
+            }
+        } finally {
+            isSavingConversationLogEntryEdit = false;
         }
     }
 
     async function handleClearConversationImages() {
         cancelEditingConversationEntry();
-        await clearConversationLogImages();
+        isClearingConversationLogImages = true;
+        try {
+            await onClearHistory();
+        } finally {
+            isClearingConversationLogImages = false;
+        }
     }
 </script>
 
@@ -98,7 +129,24 @@
 >
     <div class="conversation-popup-header">
         <div class="conversation-popup-copy">
-            <span class="conversation-popup-title">Conversation</span>
+            <div class="conversation-popup-title-row">
+                {#if editingTitle}
+                    <!-- svelte-ignore a11y_autofocus -->
+                    <input
+                        type="text"
+                        class="conversation-popup-title-input"
+                        bind:value={titleValue}
+                        onblur={saveTitle}
+                        onkeydown={(e) => e.key === 'Enter' && saveTitle()}
+                        autofocus
+                    />
+                {:else}
+                    <span class="conversation-popup-title">{sessionTitle || "Conversation"}</span>
+                    <button type="button" class="title-edit-btn" onclick={startEditingTitle} aria-label="Edit title">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                    </button>
+                {/if}
+            </div>
             <span class="conversation-popup-subtitle">Live call transcript</span>
         </div>
         <div class="conversation-popup-actions">
@@ -106,7 +154,7 @@
                 type="button"
                 class="conversation-header-btn"
                 onclick={handleClearConversationImages}
-                disabled={!hasClearableConversationImages || popupActionsBusy}
+                disabled={!hasClearableConversationImages || isBusy}
             >
                 {isClearingConversationLogImages
                     ? "Clearing..."
@@ -115,7 +163,7 @@
             <button
                 type="button"
                 class="conversation-close-btn"
-                onclick={closeConversationPopup}
+                onclick={onClose}
                 aria-label="Close conversation log"
             >
                 <svg
@@ -164,7 +212,7 @@
                                             onclick={() => {
                                                 editingImageRemoved = true;
                                             }}
-                                            disabled={popupActionsBusy}
+                                            disabled={isBusy}
                                         >
                                             Remove image
                                         </button>
@@ -176,7 +224,7 @@
                                     bind:value={editingText}
                                     rows="4"
                                     placeholder="Edit this message"
-                                    disabled={popupActionsBusy}
+                                    disabled={isBusy}
                                 ></textarea>
                             {:else}
                                 {#if entry.imageUrl}
@@ -204,7 +252,7 @@
                                     type="button"
                                     class="conversation-entry-action-btn secondary"
                                     onclick={cancelEditingConversationEntry}
-                                    disabled={popupActionsBusy}
+                                    disabled={isBusy}
                                 >
                                     Cancel
                                 </button>
@@ -212,14 +260,14 @@
                                     type="button"
                                     class="conversation-entry-action-btn primary"
                                     onclick={handleSaveConversationEntryEdit}
-                                    disabled={popupActionsBusy}
+                                    disabled={isBusy}
                                 >
                                     {isSavingConversationLogEntryEdit
                                         ? "Saving..."
                                         : "Save"}
                                 </button>
                             </div>
-                        {:else if entry.contextEntryId !== null}
+                        {:else}
                             <div
                                 class="conversation-entry-actions"
                                 data-role={entry.role}
@@ -230,9 +278,19 @@
                                     onclick={() => {
                                         startEditingConversationEntry(entry);
                                     }}
-                                    disabled={popupActionsBusy}
+                                    disabled={isBusy}
                                 >
                                     Edit
+                                </button>
+                                <button
+                                    type="button"
+                                    class="conversation-entry-action-btn secondary"
+                                    onclick={() => {
+                                        messageToDelete = entry;
+                                    }}
+                                    disabled={isBusy}
+                                >
+                                    Delete
                                 </button>
                             </div>
                         {/if}
@@ -241,4 +299,18 @@
             {/each}
         {/if}
     </div>
+
+    {#if messageToDelete}
+        <ConfirmDialog
+            title="Delete message?"
+            message="This action cannot be undone. Do you wish to continue?"
+            onConfirm={async () => {
+                if (messageToDelete) {
+                    await deleteConversationLogEntry(messageToDelete.id);
+                }
+                messageToDelete = null;
+            }}
+            onCancel={() => (messageToDelete = null)}
+        />
+    {/if}
 </div>

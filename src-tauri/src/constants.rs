@@ -95,6 +95,9 @@ pub(crate) const TRIGGER_APP_UPDATE_CHECK_EVENT: &str = "trigger-app-update-chec
 pub(crate) const CONVERSATION_CONTEXT_COMMITTED_EVENT: &str = "conversation-context-committed";
 pub(crate) const CONVERSATION_IMAGE_HISTORY_CLEARED_EVENT: &str =
     "conversation-image-history-cleared";
+pub(crate) const SESSIONS_DIR_NAME: &str = "sessions";
+pub(crate) const SESSION_FILE_NAME: &str = "session.json";
+pub(crate) const SESSION_IMAGES_DIR_NAME: &str = "images";
 pub(crate) const MAX_CONVERSATION_TURNS: usize = 24;
 pub(crate) const MAX_SPOKEN_SENTENCES_PER_SEGMENT: usize = 1;
 pub(crate) const MAX_SPOKEN_WORDS_PER_SEGMENT: usize = 16;

@@ -78,9 +78,12 @@ export type TrayPongPlaybackEvent = {
 export type ShowAboutModalEvent = Record<string, never>;
 export type TriggerAppUpdateCheckEvent = Record<string, never>;
 export type ConversationContextCommittedEvent = {
-    request_id: number;
-    user_entry_id: number;
-    assistant_entry_id: number;
+    requestId: number;
+    userEntryId: number;
+    assistantEntryId: number;
+    userText: string;
+    assistantText: string;
+    sessionTitle?: string | null;
 };
 export type ConversationImageHistoryClearedEvent = Record<string, never>;
 
@@ -197,4 +200,20 @@ export type SelectOption<T extends string> = {
     value: T;
     label: string;
     disabled?: boolean;
+};
+
+export type SessionMetadata = {
+    id: string;
+    title: string;
+    created_at: number;
+    updated_at: number;
+};
+
+export type ConversationTurn = {
+    user_entry_id: number;
+    assistant_entry_id: number;
+    user_text: string;
+    assistant_text: string;
+    image_path?: string | null;
+    user_image_data_url?: string | null;
 };
