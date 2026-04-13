@@ -7,7 +7,17 @@ The backend uses Gemma / Ollama for reply generation, a selectable STT backend f
 
 <img width="689" height="745" alt="image" src="https://github.com/user-attachments/assets/dcf3b70b-5221-4139-8c98-0bd38557f17b" />
 
-## Quick Start
+## Quick Start for Beta Version
+
+1. Go to [Release](https://github.com/anslwy/openduck/releases)
+2. Download the latest `openduck-beta-xxx.dmg` and move it to your Applications folder
+3. Execute the following in your Terminal:
+```
+xattr -d com.apple.quarantine /Applications/OpenDuck.app
+```
+4. Start OpenDuck in your Applications folder
+
+## Development
 
 One-time installation for setting up the environment:
 ```
