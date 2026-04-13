@@ -6875,6 +6875,75 @@ fn rename_session(app_handle: AppHandle, session_id: String, new_title: String) 
 }
 
 #[tauri::command]
+async fn fork_session(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    assistant_entry_id: u64,
+    new_title: String,
+) -> Result<SessionMetadata, String> {
+    let mut forked_turns = VecDeque::new();
+    {
+        let turns = state.conversation_turns.lock().unwrap();
+        let mut found = false;
+        for turn in turns.iter() {
+            forked_turns.push_back(turn.clone());
+            if turn.assistant_entry_id == assistant_entry_id {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err("Assistant entry not found in active context".to_string());
+        }
+    }
+
+    let new_session_id = Uuid::new_v4().to_string();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let metadata = SessionMetadata {
+        id: new_session_id.clone(),
+        title: new_title,
+        created_at: now,
+        updated_at: now,
+    };
+
+    let session_file = resolve_session_file(&app_handle, &new_session_id)?;
+    let data = SessionData {
+        metadata: metadata.clone(),
+        turns: forked_turns.iter().cloned().collect(),
+    };
+    let content = serde_json::to_string_pretty(&data).map_err(|err| err.to_string())?;
+    std::fs::write(session_file, content).map_err(|err| err.to_string())?;
+
+    {
+        let mut id_guard = state.current_session_id.lock().unwrap();
+        *id_guard = Some(new_session_id);
+    }
+    {
+        let mut title_guard = state.current_session_title.lock().unwrap();
+        *title_guard = Some(metadata.title.clone());
+    }
+    {
+        let mut turns_guard = state.conversation_turns.lock().unwrap();
+        *turns_guard = forked_turns;
+    }
+
+    let max_id = data
+        .turns
+        .iter()
+        .map(|t| t.user_entry_id.max(t.assistant_entry_id))
+        .max()
+        .unwrap_or(0);
+    state
+        .next_conversation_entry_id
+        .store(max_id + 1, Ordering::Relaxed);
+
+    Ok(metadata)
+}
+
+#[tauri::command]
 fn start_new_session(state: State<'_, AppState>) {
     reset_call_session_state(state.inner());
     let session_id = Uuid::new_v4().to_string();
@@ -7801,6 +7870,7 @@ pub fn run() {
             load_session,
             delete_session,
             rename_session,
+            fork_session,
             start_new_session,
             get_current_session_id,
             update_current_session_title,

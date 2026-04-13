@@ -8,8 +8,10 @@
         conversationLogEntries,
         sessionTitle,
         popupActionsBusy,
+        calling,
         onClearHistory,
         onClose,
+        onFork,
         saveConversationLogEntryEdit,
         deleteConversationLogEntry,
         setConversationLogViewport,
@@ -17,8 +19,10 @@
         conversationLogEntries: ConversationLogEntry[];
         sessionTitle: string | null;
         popupActionsBusy: boolean;
+        calling: boolean;
         onClearHistory: () => void;
         onClose: () => void;
+        onFork: (entry: ConversationLogEntry) => void;
         saveConversationLogEntryEdit: (
             entryId: number,
             text: string,
@@ -282,6 +286,16 @@
                                 >
                                     Edit
                                 </button>
+                                {#if entry.role === "assistant" && !calling}
+                                    <button
+                                        type="button"
+                                        class="conversation-entry-action-btn secondary"
+                                        onclick={() => onFork(entry)}
+                                        disabled={isBusy}
+                                    >
+                                        Fork
+                                    </button>
+                                {/if}
                                 <button
                                     type="button"
                                     class="conversation-entry-action-btn secondary"

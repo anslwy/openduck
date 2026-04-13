@@ -1355,6 +1355,28 @@
         }
     }
 
+    async function handleForkSession(entry: ConversationLogEntry) {
+        if (entry.contextEntryId === null) {
+            alert("This message is not yet saved to the conversation history.");
+            return;
+        }
+
+        const originalTitle = currentSessionTitle || "Conversation";
+        const newTitle = `${originalTitle} - Fork`;
+
+        try {
+            const newMetadata = await invoke<SessionMetadata>("fork_session", {
+                assistantEntryId: entry.contextEntryId,
+                newTitle: newTitle,
+            });
+            await loadSessions();
+            await handleSelectSession(newMetadata);
+        } catch (err) {
+            console.error("Failed to fork session:", err);
+            alert(`Failed to fork session.\n${String(err)}`);
+        }
+    }
+
     async function handleNewChat() {
         try {
             await invoke("reset_call_session");
@@ -3830,8 +3852,10 @@
                     {conversationLogEntries}
                     sessionTitle={currentSessionTitle}
                     {popupActionsBusy}
+                    {calling}
                     onClearHistory={clearConversationLogImages}
                     onClose={closeConversationPopup}
+                    onFork={handleForkSession}
                     {saveConversationLogEntryEdit}
                     {deleteConversationLogEntry}
                     {setConversationLogViewport}
