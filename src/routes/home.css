@@ -1752,6 +1752,26 @@ main.idle-layout {
     text-align: center;
 }
 
+.tooltip-bubble.left-aligned {
+    left: 0;
+    transform: translateY(6px);
+    white-space: normal;
+    max-width: 280px;
+    width: max-content;
+    text-align: left;
+}
+
+.tooltip-shell:hover .tooltip-bubble.left-aligned,
+.tooltip-shell:focus-within .tooltip-bubble.left-aligned {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.tooltip-bubble.left-aligned::after {
+    left: 20px;
+    transform: rotate(45deg);
+}
+
 .tooltip-bubble.variant-tooltip::after {
     top: auto;
     bottom: 100%;

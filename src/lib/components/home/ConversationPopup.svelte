@@ -287,14 +287,19 @@
                                     Edit
                                 </button>
                                 {#if entry.role === "assistant" && !calling}
-                                    <button
-                                        type="button"
-                                        class="conversation-entry-action-btn secondary"
-                                        onclick={() => onFork(entry)}
-                                        disabled={isBusy}
-                                    >
-                                        Fork
-                                    </button>
+                                    <div class="tooltip-shell">
+                                        <button
+                                            type="button"
+                                            class="conversation-entry-action-btn secondary"
+                                            onclick={() => onFork(entry)}
+                                            disabled={isBusy}
+                                        >
+                                            Fork
+                                        </button>
+                                        <div class="tooltip-bubble control-tooltip left-aligned">
+                                            Copy messages up to this point into a new session.
+                                        </div>
+                                    </div>
                                 {/if}
                                 <button
                                     type="button"
