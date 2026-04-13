@@ -50,10 +50,10 @@ export const MODEL_PRESETS: Record<
   },
   realistic: {
     label: "Realistic (~12GB)",
-    description: "Gemma 4B + Whisper + CSM-1B",
+    description: "Gemma 4B + Whisper + CosyVoice3 8-bit",
     selection: {
       gemmaVariant: "e4b",
-      csmModel: "expressiva_1b",
+      csmModel: "cosyvoice3_0_5b_8bit",
       sttModel: "whisper_large_v3_turbo",
       ollamaModel: DEFAULT_OLLAMA_MODEL,
     },

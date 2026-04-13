@@ -34,7 +34,9 @@ export function isCsmModelVariant(value: unknown): value is CsmModelVariant {
     return (
         value === "expressiva_1b" ||
         value === "kokoro_82m" ||
-        value === "cosyvoice2_0_5b"
+        value === "cosyvoice2_0_5b" ||
+        value === "cosyvoice3_0_5b_8bit" ||
+        value === "cosyvoice3_0_5b_4bit"
     );
 }
 
@@ -46,12 +48,20 @@ export function selectionsMatch(
     left: ModelSelection,
     right: ModelSelection,
 ): boolean {
-    return (
+    const baseMatch =
         left.gemmaVariant === right.gemmaVariant &&
         left.csmModel === right.csmModel &&
-        left.sttModel === right.sttModel &&
-        left.ollamaModel === right.ollamaModel
-    );
+        left.sttModel === right.sttModel;
+
+    if (!baseMatch) {
+        return false;
+    }
+
+    if (left.gemmaVariant === "ollama") {
+        return left.ollamaModel === right.ollamaModel;
+    }
+
+    return true;
 }
 
 export function resolveModelPreset(selection: ModelSelection): ModelPreset {

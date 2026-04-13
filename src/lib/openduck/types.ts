@@ -122,7 +122,9 @@ export type GemmaVariant = "e4b" | "e2b" | "ollama";
 export type CsmModelVariant =
     | "expressiva_1b"
     | "kokoro_82m"
-    | "cosyvoice2_0_5b";
+    | "cosyvoice2_0_5b"
+    | "cosyvoice3_0_5b_8bit"
+    | "cosyvoice3_0_5b_4bit";
 export type SttModelVariant = "gemma" | "whisper_large_v3_turbo";
 
 export type ConversationLogEntry = {

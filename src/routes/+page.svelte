@@ -311,9 +311,10 @@
         },
     ]);
     const csmModelOptions: Array<SelectOption<CsmModelVariant>> = [
-        { value: "expressiva_1b", label: "CSM Expressiva 1B" },
         { value: "kokoro_82m", label: "Kokoro-82M" },
-        { value: "cosyvoice2_0_5b", label: "CosyVoice2-0.5B" },
+        { value: "cosyvoice3_0_5b_4bit", label: "Fun-CosyVoice3-0.5B (4-bit)" },
+        { value: "cosyvoice3_0_5b_8bit", label: "Fun-CosyVoice3-0.5B (8-bit)" },
+        { value: "expressiva_1b", label: "CSM Expressiva 1B" },
     ];
     const sttModelOptions: Array<SelectOption<SttModelVariant>> = $derived([
         {
@@ -342,7 +343,11 @@
             ? "CSM Expressiva 1B supports voice conditioning and optional quantization."
             : selectedCsmModel === "kokoro_82m"
               ? "Kokoro-82M is a lighter English TTS backend. Quantization is not used for this model."
-              : "CosyVoice2-0.5B produces high quality audio with higher usage of memory. Quantization is not used for this model.",
+              : selectedCsmModel === "cosyvoice2_0_5b"
+                ? "CosyVoice2-0.5B produces high quality audio with higher usage of memory. Quantization is not used for this model."
+                : selectedCsmModel === "cosyvoice3_0_5b_8bit"
+                  ? "Fun-CosyVoice3-0.5B (8-bit) provides the most realistic voice quality among the available backends."
+                  : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM. Quantization is not used for this model.",
     );
     const selectedSttModelLabel = $derived(
         sttModelOptions.find((option) => option.value === selectedSttModel)
@@ -2070,6 +2075,13 @@
             if (currentSelection.sttModel !== nextSelection.sttModel) {
                 selectedSttModel = nextSelection.sttModel;
                 await setSttModelSelection(nextSelection.sttModel);
+            }
+
+            if (currentSelection.ollamaModel !== nextSelection.ollamaModel) {
+                selectedOllamaModel = nextSelection.ollamaModel;
+                await invoke("set_ollama_model", {
+                    model: nextSelection.ollamaModel,
+                });
             }
         } catch (err) {
             selectedGemmaVariant = previousSelection.gemmaVariant;

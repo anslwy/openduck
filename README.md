@@ -39,9 +39,9 @@ The STT card in the app can switch between:
 
 The speech card in the app can switch between:
 
-- `CSM Expressiva 1B`: the original MLX-based speech model, with optional quantization.
 - `Kokoro-82M`: a lighter English TTS backend that runs through `mlx-audio` with the default `af_heart` voice from `mlx-community/Kokoro-82M-bf16`.
-- `CosyVoice2-0.5B`: a reference-audio TTS backend that runs through `mlx-audio-plus` using the bundled sample voice.
+- `Fun-CosyVoice3-0.5B`: the latest reference-audio TTS backend from FunAudioLLM, available in 8-bit (most realistic) and 4-bit (VRAM efficient) versions through `mlx-audio-plus`.
+- `CSM Expressiva 1B`: the original MLX-based speech model, with optional quantization.
 
 Use the dropdowns in the STT and speech cards to choose the backends, then download and load the selected models before starting a call. The `Gemma` STT option does not need its own load step.
 If you want to use Whisper, Kokoro, or CosyVoice2 in a fresh checkout, run `scripts/setup_python_env.sh` first so the dedicated STT and speech environments install the required `mlx-audio` / `mlx-audio-plus` dependencies.
