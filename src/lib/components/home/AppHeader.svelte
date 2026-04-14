@@ -1,31 +1,27 @@
 <script lang="ts">
-    let {
-        currentSessionTitle,
-        showSessionsPopup,
-        calling,
-        onToggleSessions,
-    } = $props<{
-        currentSessionTitle: string | null;
-        showSessionsPopup: boolean;
-        calling: boolean;
-        onToggleSessions: () => void;
-    }>();
+    let { currentSessionTitle, showSessionsPopup, calling, onToggleSessions } =
+        $props<{
+            currentSessionTitle: string | null;
+            showSessionsPopup: boolean;
+            calling: boolean;
+            onToggleSessions: () => void;
+        }>();
 </script>
 
 <header class="app-header">
     <div class="header-left">
-        <button
-            class="sessions-dropdown-btn"
-            class:active={showSessionsPopup}
-            class:in-call={calling}
-            onclick={() => !calling && onToggleSessions()}
-            disabled={calling}
-            aria-label="Toggle session history"
-        >
-            <span class="sessions-dropdown-label">
-                {currentSessionTitle || "Past Sessions"}
-            </span>
-            {#if !calling}
+        {#if !calling}
+            <button
+                class="sessions-dropdown-btn"
+                class:active={showSessionsPopup}
+                class:in-call={calling}
+                onclick={() => !calling && onToggleSessions()}
+                disabled={calling}
+                aria-label="Toggle session history"
+            >
+                <span class="sessions-dropdown-label">
+                    {currentSessionTitle || "Past Sessions"}
+                </span>
                 <svg
                     xmlns="http://www.w3.org/2000/svg"
                     width="16"
@@ -41,7 +37,7 @@
                 >
                     <path d="m6 9 6 6 6-6" />
                 </svg>
-            {/if}
-        </button>
+            </button>
+        {/if}
     </div>
 </header>

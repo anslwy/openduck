@@ -3799,7 +3799,7 @@
     </main>
 
     <div class="control-bar-wrapper">
-        {#if showModelMemorySummary && modelMemorySnapshot}
+        {#if showModelMemorySummary && modelMemorySnapshot && !calling}
             <div class="model-memory-pill" aria-live="polite">
                 <span class="model-memory-pill-label">Memory</span>
                 <span class="model-memory-pill-value"
