@@ -1995,11 +1995,10 @@ main.idle-layout {
 
 .sessions-popup {
     position: absolute;
-    left: 50%;
-    bottom: calc(100% + 18px);
-    transform: translateX(-50%);
-    width: min(calc(100vw - 32px), 500px);
-    max-height: min(52vh, 420px);
+    top: 92px;
+    left: 12px;
+    width: min(calc(100vw - 24px), 440px);
+    max-height: min(75vh, 600px);
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -2007,8 +2006,8 @@ main.idle-layout {
     border-radius: 24px;
     background: linear-gradient(
         180deg,
-        rgba(34, 31, 16, 0.94) 0%,
-        rgba(18, 18, 20, 0.94) 100%
+        rgba(34, 31, 16, 0.96) 0%,
+        rgba(18, 18, 20, 0.96) 100%
     );
     border: 1px solid rgba(255, 220, 102, 0.16);
     box-shadow:
@@ -2017,6 +2016,100 @@ main.idle-layout {
     backdrop-filter: blur(22px);
     box-sizing: border-box;
     z-index: 1000;
+}
+
+.app-header {
+    position: absolute;
+    top: 40px;
+    left: 0;
+    right: 0;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    z-index: 1001;
+    pointer-events: none;
+}
+
+.header-left {
+    margin-bottom: 10px;
+}
+
+.header-left,
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    pointer-events: auto;
+}
+
+.sessions-dropdown-btn {
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.9);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    font-weight: 700;
+    font-size: 1.05rem;
+    letter-spacing: -0.01em;
+}
+
+.sessions-dropdown-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.sessions-dropdown-btn.active {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.sessions-dropdown-btn:disabled {
+    cursor: default;
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.sessions-dropdown-label {
+    max-width: min(320px, 40vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dropdown-arrow {
+    opacity: 0.6;
+    transition: transform 0.2s;
+}
+
+.dropdown-arrow.open {
+    transform: rotate(180deg);
+}
+
+.header-icon-btn {
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.55);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.header-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.header-icon-btn:active {
+    transform: scale(0.92);
 }
 
 .sessions-header {
@@ -2033,11 +2126,12 @@ main.idle-layout {
 }
 
 .sessions-search {
-    padding: 0 16px 12px;
+    padding: 0 16px 16px;
 }
 
 .sessions-search-input {
     width: 100%;
+    box-sizing: border-box;
     padding: 10px 14px;
     background: rgba(0, 0, 0, 0.2);
     border: 1.5px solid rgba(255, 205, 64, 0.2);
@@ -2240,11 +2334,7 @@ main.idle-layout {
 }
 
 .sessions-footer {
-    display: flex;
-    justify-content: center;
-    margin-top: 10px;
-    padding-top: 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    display: none;
 }
 
 .new-chat-btn {
@@ -2270,46 +2360,6 @@ main.idle-layout {
 
 .new-chat-btn svg {
     opacity: 0.8;
-}
-
-.start-btn-container {
-    display: flex;
-    align-items: stretch;
-    background: #34c759;
-    border-radius: 24px;
-    overflow: hidden;
-    height: 42px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.start-btn-container .start-btn {
-    border-radius: 0;
-    background: transparent;
-    padding: 0 20px 0 24px;
-    flex: 1;
-}
-
-.start-btn-arrow {
-    background: transparent;
-    border: none;
-    width: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    color: white;
-    transition: background-color 0.2s;
-    margin: 6px;
-    border-radius: 12px;
-}
-
-.start-btn-arrow:hover:not(:disabled) {
-    background: rgba(255, 255, 255, 0.35);
-}
-
-.start-btn-arrow:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
 }
 
 .conversation-popup-title-row {

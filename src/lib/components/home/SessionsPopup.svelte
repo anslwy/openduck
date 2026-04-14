@@ -131,10 +131,6 @@
     onkeydown={handleKeydown}
     tabindex="-1"
 >
-    <div class="sessions-header">
-        <span class="sessions-title">Sessions</span>
-    </div>
-
     <div class="sessions-search">
         <input
             type="text"
@@ -145,6 +141,26 @@
     </div>
 
     <div class="sessions-list">
+        <button type="button" class="session-item-wrapper new-session-item" onclick={onNewChat}>
+            <div class="session-item">
+                <div class="new-session-content">
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="3"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        ><path d="M12 5v14M5 12h14" /></svg
+                    >
+                    <span class="session-item-title">New Chat</span>
+                </div>
+            </div>
+        </button>
+
         {#each dateHeaders as date}
             <div class="sessions-date-header">{date}</div>
             {#each sessionsByDate[date] as session}
@@ -293,23 +309,6 @@
         {/if}
     </div>
 
-    <div class="sessions-footer">
-        <button type="button" class="new-chat-btn" onclick={onNewChat}>
-            <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"><path d="M12 5v14M5 12h14" /></svg
-            >
-            New Chat
-        </button>
-    </div>
-
     {#if sessionToDelete}
         <ConfirmDialog
             title="Delete session?"
@@ -322,3 +321,23 @@
         />
     {/if}
 </div>
+
+<style>
+    .new-session-item {
+        border: 1px dashed rgba(255, 205, 64, 0.3);
+        background: rgba(255, 205, 64, 0.05);
+        margin-bottom: 12px;
+    }
+
+    .new-session-item:hover {
+        background: rgba(255, 205, 64, 0.1);
+        border-color: rgba(255, 205, 64, 0.5);
+    }
+
+    .new-session-content {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #ffdf63;
+    }
+</style>

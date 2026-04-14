@@ -10,6 +10,7 @@
     import ContactsModal from "$lib/components/home/ContactsModal.svelte";
     import ConversationPopup from "$lib/components/home/ConversationPopup.svelte";
     import SessionsPopup from "$lib/components/home/SessionsPopup.svelte";
+    import AppHeader from "$lib/components/home/AppHeader.svelte";
     import GemmaBanner from "$lib/components/home/GemmaBanner.svelte";
     import OllamaConfigModal from "$lib/components/home/OllamaConfigModal.svelte";
     import SpeechBanner from "$lib/components/home/SpeechBanner.svelte";
@@ -1268,6 +1269,12 @@
             currentSessionId = await invoke<string | null>(
                 "get_current_session_id",
             );
+            if (currentSessionId) {
+                const session = sessions.find((s) => s.id === currentSessionId);
+                if (session) {
+                    currentSessionTitle = session.title;
+                }
+            }
         } catch (err) {
             console.error("Failed to load sessions:", err);
         }
@@ -1307,14 +1314,17 @@
             }
             currentSessionTitle = session.title;
             showSessionsPopup = false;
-            // Pulse the conversation log button
-            const logBtn = document.querySelector(".conversation-log-btn");
-            if (logBtn) {
-                logBtn.classList.add("pulse-animation");
-                setTimeout(
-                    () => logBtn.classList.remove("pulse-animation"),
-                    1000,
-                );
+
+            // Pulse the conversation log button if the session has content
+            if (turns.length > 0) {
+                const logBtn = document.querySelector(".conversation-log-btn");
+                if (logBtn) {
+                    logBtn.classList.add("pulse-animation");
+                    setTimeout(
+                        () => logBtn.classList.remove("pulse-animation"),
+                        1000,
+                    );
+                }
             }
         } catch (err) {
             console.error("Failed to load session:", err);
@@ -3503,16 +3513,6 @@
             await syncOllamaConfig();
             await initializePongPlaybackPreference();
             await loadSessions();
-            if (sessions.length > 0) {
-                const logBtn = document.querySelector(".conversation-log-btn");
-                if (logBtn) {
-                    logBtn.classList.add("pulse-animation");
-                    setTimeout(
-                        () => logBtn.classList.remove("pulse-animation"),
-                        1500,
-                    );
-                }
-            }
             await ensureRuntimeDependencies();
             await syncModelStatus();
             await syncOllamaModels();
@@ -3533,7 +3533,7 @@
             ) {
                 if (
                     !document
-                        .querySelector(".start-btn-arrow")
+                        .querySelector(".sessions-dropdown-btn")
                         ?.contains(target)
                 ) {
                     showSessionsPopup = false;
@@ -3617,6 +3617,13 @@
 
 <div class="app-container" class:contacts-open={showContactsPopup}>
     <div class="background" style={selectedContactImageStyle}></div>
+
+    <AppHeader
+        {currentSessionTitle}
+        {showSessionsPopup}
+        {calling}
+        onToggleSessions={toggleSessionsPopup}
+    />
 
     {#if !calling}
         <div
@@ -4118,42 +4125,19 @@
                 <button class="end-btn" onclick={handleEndCall}>End</button>
             {:else}
                 <div class="tooltip-shell start-call-tooltip-shell">
-                    <div class="start-btn-container">
-                        {#if conversationLogEntries.length > 0}
-                            <button
-                                class="start-btn"
-                                disabled={!modelsReady}
-                                onclick={handleResumeCall}>Resume</button
-                            >
-                        {:else}
-                            <button
-                                class="start-btn"
-                                disabled={!modelsReady}
-                                onclick={handleStartCall}>Call</button
-                            >
-                        {/if}
-                        {#if hasHistory}
-                            <button
-                                class="start-btn-arrow"
-                                disabled={!modelsReady}
-                                onclick={toggleSessionsPopup}
-                                title="continue from previous session"
-                            >
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    width="16"
-                                    height="16"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="3"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    ><path d="m9 18 6-6-6-6" /></svg
-                                >
-                            </button>
-                        {/if}
-                    </div>
+                    {#if conversationLogEntries.length > 0}
+                        <button
+                            class="start-btn"
+                            disabled={!modelsReady}
+                            onclick={handleResumeCall}>Resume</button
+                        >
+                    {:else}
+                        <button
+                            class="start-btn"
+                            disabled={!modelsReady}
+                            onclick={handleStartCall}>Call</button
+                        >
+                    {/if}
                     {#if !modelsReady}
                         <div
                             id="start-call-tooltip"
@@ -4165,22 +4149,22 @@
                     {/if}
                 </div>
             {/if}
-
-            {#if showSessionsPopup}
-                <div class="popup-wrapper" bind:this={sessionsPopupEl}>
-                    <SessionsPopup
-                        {sessions}
-                        activeSessionId={currentSessionId}
-                        onSelect={handleSelectSession}
-                        onDelete={handleDeleteSession}
-                        onRename={handleRenameSession}
-                        onNewChat={handleNewChat}
-                        onClose={toggleSessionsPopup}
-                    />
-                </div>
-            {/if}
         </div>
     </div>
+
+    {#if showSessionsPopup}
+        <div class="popup-wrapper" bind:this={sessionsPopupEl}>
+            <SessionsPopup
+                {sessions}
+                activeSessionId={currentSessionId}
+                onSelect={handleSelectSession}
+                onDelete={handleDeleteSession}
+                onRename={handleRenameSession}
+                onNewChat={handleNewChat}
+                onClose={toggleSessionsPopup}
+            />
+        </div>
+    {/if}
 
     <input
         class="hidden-file-input"
