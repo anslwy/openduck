@@ -32,6 +32,8 @@ pub(crate) const COSYVOICE2_S3_TOKENIZER_MODEL_FILE: &str = "model.safetensors";
 pub(crate) const STT_WHISPER_MODEL_REPO: &str = "mlx-community/whisper-large-v3-turbo-asr-fp16";
 pub(crate) const STT_WHISPER_CACHE_DIR: &str =
     "models--mlx-community--whisper-large-v3-turbo-asr-fp16";
+pub(crate) const STT_DISTIL_WHISPER_MODEL_REPO: &str = "distil-whisper/distil-large-v3";
+pub(crate) const STT_DISTIL_WHISPER_CACHE_DIR: &str = "models--distil-whisper--distil-large-v3";
 pub(crate) const STT_WHISPER_MODEL_FILE: &str = "model.safetensors";
 pub(crate) const STT_WHISPER_ADDED_TOKENS_FILE: &str = "added_tokens.json";
 pub(crate) const STT_WHISPER_CONFIG_FILE: &str = "config.json";

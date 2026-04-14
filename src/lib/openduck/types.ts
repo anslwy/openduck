@@ -125,7 +125,7 @@ export type CsmModelVariant =
     | "cosyvoice2_0_5b"
     | "cosyvoice3_0_5b_8bit"
     | "cosyvoice3_0_5b_4bit";
-export type SttModelVariant = "gemma" | "whisper_large_v3_turbo";
+export type SttModelVariant = "gemma" | "distil_whisper_large_v3" | "whisper_large_v3_turbo";
 
 export type ConversationLogEntry = {
     id: number;

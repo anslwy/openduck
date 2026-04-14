@@ -2371,7 +2371,7 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
             SttModelVariant::Gemma => {
                 transcribe_audio_with_gemma(server_port, &gemma_model, &audio_path).await
             }
-            SttModelVariant::WhisperLargeV3Turbo => {
+            SttModelVariant::DistilWhisperLargeV3 | SttModelVariant::WhisperLargeV3Turbo => {
                 transcribe_audio_with_stt_worker(&app_handle_for_task, &audio_path).await
             }
         };
@@ -6512,6 +6512,10 @@ fn csm_model_cache_exists(variant: CsmModelVariant) -> bool {
 fn stt_model_cache_exists(variant: SttModelVariant) -> bool {
     match variant {
         SttModelVariant::Gemma => true,
+        SttModelVariant::DistilWhisperLargeV3 => huggingface_cached_files_exist(
+            STT_DISTIL_WHISPER_CACHE_DIR,
+            SttModelVariant::DistilWhisperLargeV3.required_files(),
+        ),
         SttModelVariant::WhisperLargeV3Turbo => huggingface_cached_files_exist(
             STT_WHISPER_CACHE_DIR,
             SttModelVariant::WhisperLargeV3Turbo.required_files(),

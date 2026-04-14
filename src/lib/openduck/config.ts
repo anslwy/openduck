@@ -40,11 +40,11 @@ export const MODEL_PRESETS: Record<
   },
   normal: {
     label: "Normal (~10GB)",
-    description: "Gemma 4B + Whisper + Kokoro",
+    description: "Gemma 4B + Distil-Whisper + Kokoro",
     selection: {
       gemmaVariant: "e4b",
       csmModel: "kokoro_82m",
-      sttModel: "whisper_large_v3_turbo",
+      sttModel: "distil_whisper_large_v3",
       ollamaModel: DEFAULT_OLLAMA_MODEL,
     },
   },

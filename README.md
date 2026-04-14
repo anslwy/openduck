@@ -33,6 +33,7 @@ Then execute the following the start the app:
 The STT card in the app can switch between:
 
 - `Gemma`: uses the loaded Gemma model for transcription. There is no separate STT model to download or load.
+- `Distil-Whisper`: runs through `mlx-audio` with `distil-whisper/distil-large-v3`.
 - `Whisper Large V3 Turbo`: runs through `mlx-audio` with `mlx-community/whisper-large-v3-turbo-asr-fp16`.
 
 ## Speech Models
@@ -102,7 +103,7 @@ flowchart TD
 - `src-tauri/src/model_variants.rs`: backend enums and lookup helpers for Gemma, STT, speech model, and voice selection.
 - `src-tauri/src/frontend_events.rs`: serialized frontend event payloads plus emit helpers used by the Tauri backend.
 - `src-tauri/resources/csm_stream.py`: shared speech worker entrypoint for CSM Expressiva 1B, Kokoro-82M, and CosyVoice2-0.5B.
-- `src-tauri/resources/stt_stream.py`: dedicated Whisper STT worker entrypoint for `mlx-community/whisper-large-v3-turbo-asr-fp16`.
+- `src-tauri/resources/stt_stream.py`: dedicated Whisper STT worker entrypoint for Distil-Whisper and Whisper Large V3 Turbo.
 - `scripts/setup_python_env.sh`: bootstraps the Gemma environment plus separate CSM, Kokoro, CosyVoice, and Whisper STT environments.
 
 ## Project Structure

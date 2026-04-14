@@ -285,7 +285,7 @@
             isCancellingSttDownload ||
             isLoadingStt ||
             isUnloadingStt ||
-            (selectedSttModel === "whisper_large_v3_turbo" && isSttLoaded),
+            (selectedSttModel !== "gemma" && isSttLoaded),
     );
     let conversationLogViewport = $state<HTMLDivElement | null>(null);
     let contactsPopupEl = $state<HTMLElement | null>(null);
@@ -324,6 +324,10 @@
             disabled: selectedGemmaVariant === "ollama",
         },
         {
+            value: "distil_whisper_large_v3",
+            label: "Distil-Whisper",
+        },
+        {
             value: "whisper_large_v3_turbo",
             label: "Whisper Large V3 Turbo",
         },
@@ -359,7 +363,9 @@
             ? selectedGemmaVariant === "ollama"
                 ? "Gemma STT is not supported when using Ollama."
                 : "Use the loaded Gemma model for transcription. There is no separate STT model to load."
-            : "Use mlx-audio with mlx-community/whisper-large-v3-turbo-asr-fp16 for transcription. Download and load it separately from Gemma.",
+            : selectedSttModel === "distil_whisper_large_v3"
+              ? "Use mlx-audio with distil-whisper/distil-large-v3 for transcription. This model has lower RAM usage but supports only English."
+              : "Use mlx-audio with mlx-community/whisper-large-v3-turbo-asr-fp16 for transcription. This model has higher RAM usage with 99+ languages support.",
     );
     const modelPresetTooltip = $derived(
         getModelPresetDescription(activeModelPreset),
@@ -382,7 +388,7 @@
             }
 
             if (
-                selectedSttModel === "whisper_large_v3_turbo" &&
+                selectedSttModel !== "gemma" &&
                 !isSttDownloaded
             ) {
                 missingModels.push(selectedSttModelLabel);
@@ -394,7 +400,7 @@
     const loadAllNeedsAction = $derived(
         !isGemmaLoaded ||
             !isCsmLoaded ||
-            (selectedSttModel === "whisper_large_v3_turbo" && !isSttLoaded),
+            (selectedSttModel !== "gemma" && !isSttLoaded),
     );
     const loadAllBusy = $derived(
         isPreparingRuntime ||
@@ -3190,7 +3196,7 @@
                 }
             }
 
-            if (selectedSttModel === "whisper_large_v3_turbo") {
+            if (selectedSttModel !== "gemma") {
                 if (!isSttDownloaded) {
                     await handleDownloadStt();
                     if (!isSttDownloaded || !isSttLoaded) {

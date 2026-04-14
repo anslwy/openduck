@@ -189,6 +189,7 @@ impl CsmModelVariant {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SttModelVariant {
     Gemma,
+    DistilWhisperLargeV3,
     WhisperLargeV3Turbo,
 }
 
@@ -196,6 +197,9 @@ impl SttModelVariant {
     pub(crate) fn from_key(value: &str) -> Result<Self, String> {
         match value.trim().to_ascii_lowercase().as_str() {
             "gemma" => Ok(Self::Gemma),
+            "distil_whisper_large_v3" | "distil-whisper-large-v3" | "distil-whisper" => {
+                Ok(Self::DistilWhisperLargeV3)
+            }
             "whisper_large_v3_turbo" | "whisper-large-v3-turbo" | "whisper" => {
                 Ok(Self::WhisperLargeV3Turbo)
             }
@@ -206,6 +210,7 @@ impl SttModelVariant {
     pub(crate) fn key(self) -> &'static str {
         match self {
             Self::Gemma => "gemma",
+            Self::DistilWhisperLargeV3 => "distil_whisper_large_v3",
             Self::WhisperLargeV3Turbo => "whisper_large_v3_turbo",
         }
     }
@@ -213,6 +218,7 @@ impl SttModelVariant {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Gemma => "Gemma",
+            Self::DistilWhisperLargeV3 => "Distil-Whisper",
             Self::WhisperLargeV3Turbo => "Whisper Large V3 Turbo",
         }
     }
@@ -220,6 +226,7 @@ impl SttModelVariant {
     pub(crate) fn repo_id(self) -> Option<&'static str> {
         match self {
             Self::Gemma => None,
+            Self::DistilWhisperLargeV3 => Some(STT_DISTIL_WHISPER_MODEL_REPO),
             Self::WhisperLargeV3Turbo => Some(STT_WHISPER_MODEL_REPO),
         }
     }
@@ -227,6 +234,7 @@ impl SttModelVariant {
     pub(crate) fn cache_dir(self) -> Option<&'static str> {
         match self {
             Self::Gemma => None,
+            Self::DistilWhisperLargeV3 => Some(STT_DISTIL_WHISPER_CACHE_DIR),
             Self::WhisperLargeV3Turbo => Some(STT_WHISPER_CACHE_DIR),
         }
     }
@@ -234,7 +242,7 @@ impl SttModelVariant {
     pub(crate) fn required_files(self) -> &'static [&'static str] {
         match self {
             Self::Gemma => &[],
-            Self::WhisperLargeV3Turbo => &[
+            Self::DistilWhisperLargeV3 | Self::WhisperLargeV3Turbo => &[
                 STT_WHISPER_ADDED_TOKENS_FILE,
                 STT_WHISPER_CONFIG_FILE,
                 STT_WHISPER_GENERATION_CONFIG_FILE,
@@ -251,6 +259,6 @@ impl SttModelVariant {
     }
 
     pub(crate) fn uses_worker(self) -> bool {
-        matches!(self, Self::WhisperLargeV3Turbo)
+        matches!(self, Self::DistilWhisperLargeV3 | Self::WhisperLargeV3Turbo)
     }
 }

@@ -41,7 +41,11 @@ export function isCsmModelVariant(value: unknown): value is CsmModelVariant {
 }
 
 export function isSttModelVariant(value: unknown): value is SttModelVariant {
-    return value === "gemma" || value === "whisper_large_v3_turbo";
+    return (
+        value === "gemma" ||
+        value === "distil_whisper_large_v3" ||
+        value === "whisper_large_v3_turbo"
+    );
 }
 
 export function selectionsMatch(
