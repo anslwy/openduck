@@ -171,17 +171,6 @@
                     />
                 </label>
 
-                <label class="contact-field contact-field-grow">
-                    <span class="contact-field-label">Prompt</span>
-                    <textarea
-                        class="contact-textarea"
-                        rows="6"
-                        placeholder="Describe how this contact should respond."
-                        value={selectedContact?.prompt ?? ""}
-                        oninput={handleSelectedContactPromptInput}
-                    ></textarea>
-                </label>
-
                 <div class="contact-field">
                     <span class="contact-field-label">Audio Reference</span>
                     <div class="contact-audio-row">
@@ -238,6 +227,17 @@
                         placeholder="Transcription of the reference audio."
                         oninput={handleSelectedContactRefTextInput}
                     />
+                </label>
+
+                <label class="contact-field contact-field-grow">
+                    <span class="contact-field-label">Prompt</span>
+                    <textarea
+                        class="contact-textarea"
+                        rows="6"
+                        placeholder="Describe how this contact should respond."
+                        value={selectedContact?.prompt ?? ""}
+                        oninput={handleSelectedContactPromptInput}
+                    ></textarea>
                 </label>
             </div>
 

@@ -1020,7 +1020,7 @@ main.idle-layout {
 }
 
 .contact-textarea {
-    min-height: 320px;
+    min-height: 160px;
     height: 100%;
     max-height: none;
     resize: none;
