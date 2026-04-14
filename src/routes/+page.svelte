@@ -212,6 +212,7 @@
     let screenCaptureFileName = $state<string | null>(null);
     let contactsImportInput: HTMLInputElement | null = null;
     let contactIconInput: HTMLInputElement | null = null;
+    let contactRefAudioInput: HTMLInputElement | null = null;
     let selectedContactPromptSyncTimeout: ReturnType<
         typeof window.setTimeout
     > | null = null;
@@ -1447,6 +1448,8 @@
             prompt: selectedContact?.prompt ?? DEFAULT_VOICE_SYSTEM_PROMPT,
             hasCustomIcon: false,
             iconDataUrl: null,
+            refAudio: null,
+            refText: null,
         };
 
         contacts = [...contacts, nextContact];
@@ -1545,6 +1548,8 @@
                 prompt: nextPrompt,
                 hasCustomIcon: Boolean(iconDataUrl),
                 iconDataUrl,
+                refAudio: typeof parsed.refAudio === "string" ? parsed.refAudio : null,
+                refText: typeof parsed.refText === "string" ? parsed.refText : null,
             };
 
             if (iconDataUrl) {
@@ -1609,6 +1614,74 @@
                 `Failed to clear contact icon.\n${normalizeErrorMessage(err)}`,
             );
         }
+    }
+
+    function triggerContactRefAudioUpload() {
+        contactRefAudioInput?.click();
+    }
+
+    async function handleContactRefAudioChange(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const input = event.currentTarget as HTMLInputElement;
+        const file = input.files?.[0];
+        input.value = "";
+
+        if (!file) {
+            return;
+        }
+
+        try {
+            const refAudio = await readFileAsDataUrl(file);
+            updateContactById(selectedContact.id, (contact) => ({
+                ...contact,
+                refAudio,
+            }));
+            persistContactsMetadata();
+        } catch (err) {
+            console.error("Failed to save the voice reference audio:", err);
+            alert(
+                `Failed to save voice reference audio.\n${normalizeErrorMessage(err)}`,
+            );
+        }
+    }
+
+    function handleResetSelectedContactRefAudio() {
+        if (!selectedContact) {
+            return;
+        }
+
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            refAudio: null,
+        }));
+        persistContactsMetadata();
+    }
+
+    function handlePlaySelectedContactRefAudio() {
+        if (!selectedContact?.refAudio) {
+            return;
+        }
+
+        const audio = new Audio(selectedContact.refAudio);
+        audio.play().catch((err) => {
+            console.error("Failed to play voice reference audio:", err);
+        });
+    }
+
+    function handleSelectedContactRefTextInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextText = (event.currentTarget as HTMLInputElement).value;
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            refText: nextText,
+        }));
+        persistContactsMetadata();
     }
 
     async function handleExportSelectedContact() {
@@ -3855,10 +3928,15 @@
                     {triggerContactImport}
                     {createNewContact}
                     {triggerContactIconUpload}
+                    {triggerContactRefAudioUpload}
                     {handleResetSelectedContactIcon}
+                    {handleResetSelectedContactRefAudio}
+                    {handlePlaySelectedContactRefAudio}
                     {handleSelectedContactNameInput}
                     {handleSelectedContactPromptInput}
+                    {handleSelectedContactRefTextInput}
                     {handleDeleteSelectedContact}
+                    handleExportSelectedContact={handleExportSelectedContact}
                 />
             </div>
         {/if}
@@ -4186,5 +4264,12 @@
         accept="image/*"
         bind:this={contactIconInput}
         onchange={handleContactIconChange}
+    />
+    <input
+        class="hidden-file-input"
+        type="file"
+        accept="audio/*"
+        bind:this={contactRefAudioInput}
+        onchange={handleContactRefAudioChange}
     />
 </div>

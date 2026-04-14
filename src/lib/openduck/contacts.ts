@@ -21,6 +21,8 @@ export function createDefaultContact(): ContactProfile {
         prompt: DEFAULT_VOICE_SYSTEM_PROMPT,
         hasCustomIcon: false,
         iconDataUrl: null,
+        refAudio: null,
+        refText: null,
     };
 }
 
@@ -51,6 +53,8 @@ export function createStoredContactsPayload(
             name: contact.name,
             prompt: contact.prompt,
             hasCustomIcon: contact.hasCustomIcon,
+            refAudio: contact.refAudio,
+            refText: contact.refText,
         })),
     };
 }
@@ -79,6 +83,8 @@ function normalizeStoredContactProfile(
                 ? record.prompt
                 : DEFAULT_VOICE_SYSTEM_PROMPT,
         hasCustomIcon: Boolean(record.hasCustomIcon),
+        refAudio: typeof record.refAudio === "string" ? record.refAudio : null,
+        refText: typeof record.refText === "string" ? record.refText : null,
     };
 }
 

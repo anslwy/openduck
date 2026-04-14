@@ -13,9 +13,13 @@
         triggerContactImport,
         createNewContact,
         triggerContactIconUpload,
+        triggerContactRefAudioUpload,
         handleResetSelectedContactIcon,
+        handleResetSelectedContactRefAudio,
+        handlePlaySelectedContactRefAudio,
         handleSelectedContactNameInput,
         handleSelectedContactPromptInput,
+        handleSelectedContactRefTextInput,
         handleDeleteSelectedContact,
         handleExportSelectedContact,
     } = $props<{
@@ -31,9 +35,13 @@
         triggerContactImport: () => void;
         createNewContact: () => void;
         triggerContactIconUpload: () => void;
+        triggerContactRefAudioUpload: () => void;
         handleResetSelectedContactIcon: () => Promise<void>;
+        handleResetSelectedContactRefAudio: () => void;
+        handlePlaySelectedContactRefAudio: () => void;
         handleSelectedContactNameInput: (event: Event) => void;
         handleSelectedContactPromptInput: (event: Event) => void;
+        handleSelectedContactRefTextInput: (event: Event) => void;
         handleDeleteSelectedContact: () => Promise<void>;
         handleExportSelectedContact: () => Promise<void>;
     }>();
@@ -172,6 +180,64 @@
                         value={selectedContact?.prompt ?? ""}
                         oninput={handleSelectedContactPromptInput}
                     ></textarea>
+                </label>
+
+                <div class="contact-field">
+                    <span class="contact-field-label">Audio Reference</span>
+                    <div class="contact-audio-row">
+                        <button
+                            type="button"
+                            class="utility-btn"
+                            onclick={triggerContactRefAudioUpload}
+                        >
+                            {selectedContact?.refAudio
+                                ? "Change Audio"
+                                : "Upload Audio"}
+                        </button>
+                        {#if selectedContact?.refAudio}
+                            <button
+                                type="button"
+                                class="utility-btn"
+                                onclick={handlePlaySelectedContactRefAudio}
+                                aria-label="Play reference audio"
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="currentColor"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><polygon points="5 3 19 12 5 21 5 3" /></svg
+                                >
+                            </button>
+                            <button
+                                type="button"
+                                class="utility-btn"
+                                onclick={handleResetSelectedContactRefAudio}
+                            >
+                                Reset
+                            </button>
+                        {/if}
+                    </div>
+                    <span class="contacts-editor-hint"
+                        >Optional. Used for voice cloning with CosyVoice3
+                        models.</span
+                    >
+                </div>
+
+                <label class="contact-field">
+                    <span class="contact-field-label">Transcription</span>
+                    <input
+                        class="contact-text-input"
+                        type="text"
+                        value={selectedContact?.refText ?? ""}
+                        placeholder="Transcription of the reference audio."
+                        oninput={handleSelectedContactRefTextInput}
+                    />
                 </label>
             </div>
 

@@ -983,6 +983,12 @@ main.idle-layout {
     letter-spacing: -0.015em;
 }
 
+.contact-audio-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .contact-text-input,
 .contact-textarea {
     width: 100%;

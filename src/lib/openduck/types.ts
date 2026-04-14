@@ -140,6 +140,8 @@ export type StoredContactProfile = {
     name: string;
     prompt: string;
     hasCustomIcon: boolean;
+    refAudio?: string | null;
+    refText?: string | null;
 };
 
 export type ContactProfile = StoredContactProfile & {
