@@ -5552,7 +5552,6 @@ async fn cancel_active_generation(app_handle: &tauri::AppHandle, stop_csm_worker
         if let Some(last_turn) = turns.back_mut() {
             if !last_turn.assistant_text.contains("[Interrupted]") {
                 info!("Marking last assistant turn as interrupted in history");
-                last_turn.assistant_text.push_str(" [Interrupted]");
                 drop(turns);
                 let _ = save_current_session(app_handle, state.inner());
             }
