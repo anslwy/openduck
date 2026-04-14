@@ -3552,13 +3552,13 @@
                 conversationPopupEl &&
                 !conversationPopupEl.contains(target)
             ) {
-                let clickedLogBtn = false;
+                let shouldNotClose = false;
                 document
-                    .querySelectorAll(".conversation-log-btn")
+                    .querySelectorAll(".conversation-log-btn, .mute-btn")
                     .forEach((btn) => {
-                        if (btn.contains(target)) clickedLogBtn = true;
+                        if (btn.contains(target)) shouldNotClose = true;
                     });
-                if (!clickedLogBtn) {
+                if (!shouldNotClose) {
                     showConversationPopup = false;
                 }
             }
@@ -4000,7 +4000,7 @@
                 {#if calling}
                     <button
                         type="button"
-                        class="icon-btn"
+                        class="icon-btn conversation-log-btn"
                         class:active={showConversationPopup}
                         onclick={toggleConversationPopup}
                         aria-label="Toggle conversation log"
@@ -4024,7 +4024,7 @@
                     </button>
                     <div class="tooltip-shell control-tooltip-shell">
                         <button
-                            class="icon-btn"
+                            class="icon-btn mute-btn"
                             class:active={!micMuted}
                             class:muted={micMuted}
                             type="button"
