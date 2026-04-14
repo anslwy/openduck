@@ -3,12 +3,34 @@ body {
     margin: 0;
     padding: 0;
     overflow: hidden;
+    user-select: none;
+    cursor: default;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
     font-family:
         -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
         Arial, sans-serif;
     height: 100vh;
     width: 100vw;
     background: #000;
+}
+
+::selection {
+    background-color: rgba(255, 205, 64, 0.3); /* macOS-style gold selection */
+    color: inherit;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+}
+
+img {
+    -webkit-user-drag: none;
+    user-drag: none;
 }
 
 .app-container {
@@ -1126,6 +1148,9 @@ main.idle-layout {
     gap: 12px;
     overflow-y: auto;
     padding-right: 4px;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
 }
 
 .conversation-entry {
