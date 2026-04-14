@@ -12,6 +12,7 @@
         onClearHistory,
         onClose,
         onFork,
+        onPreviewImage,
         saveConversationLogEntryEdit,
         deleteConversationLogEntry,
         setConversationLogViewport,
@@ -23,6 +24,7 @@
         onClearHistory: () => void;
         onClose: () => void;
         onFork: (entry: ConversationLogEntry) => void;
+        onPreviewImage: (url: string) => void;
         saveConversationLogEntryEdit: (
             entryId: number,
             text: string,
@@ -206,11 +208,14 @@
                                     <div class="conversation-attachment-shell">
                                         <div class="conversation-attachment-images">
                                             {#each entry.imageUrls as imageUrl}
+                                                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                                                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                                                 <img
-                                                    class="conversation-attachment-image"
+                                                    class="conversation-attachment-image zoomable"
                                                     src={imageUrl}
                                                     alt="Attached screen capture"
                                                     loading="lazy"
+                                                    onclick={() => onPreviewImage(imageUrl)}
                                                 />
                                             {/each}
                                         </div>
@@ -238,14 +243,17 @@
                                 {#if entry.imageUrls.length > 0}
                                     <div class="conversation-attachment-images">
                                         {#each entry.imageUrls as imageUrl}
+                                            <!-- svelte-ignore a11y_click_events_have_key_events -->
+                                            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                                             <img
-                                                class="conversation-attachment-image"
-                                                src={imageUrl}
-                                                alt="Attached screen capture"
-                                                loading="lazy"
-                                            />
-                                        {/each}
-                                    </div>
+                                                class="conversation-attachment-image zoomable"
+                                                    src={imageUrl}
+                                                    alt="Attached screen capture"
+                                                    loading="lazy"
+                                                    onclick={() => onPreviewImage(imageUrl)}
+                                                />
+                                            {/each}
+                                        </div>
                                 {/if}
                                 {#if entry.text}
                                     <div class="conversation-entry-text">

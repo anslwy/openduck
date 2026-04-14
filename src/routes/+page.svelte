@@ -223,6 +223,7 @@
         typeof window.setTimeout
     > | null = null;
     let syncedConversationLogHasVisibleImages: boolean | null = null;
+    let previewImageUrl = $state<string | null>(null);
 
     const formattedTime = $derived(
         `${Math.floor(time / 60)
@@ -1867,6 +1868,11 @@
         }
 
         if (event.key !== "Escape") {
+            return;
+        }
+
+        if (previewImageUrl) {
+            previewImageUrl = null;
             return;
         }
 
@@ -4091,10 +4097,56 @@
                     onClearHistory={clearConversationLogImages}
                     onClose={closeConversationPopup}
                     onFork={handleForkSession}
+                    onPreviewImage={(url) => previewImageUrl = url}
                     {saveConversationLogEntryEdit}
                     {deleteConversationLogEntry}
                     {setConversationLogViewport}
                 />
+            </div>
+        {/if}
+
+        {#if previewImageUrl}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <div
+                class="image-preview-overlay"
+                onclick={() => (previewImageUrl = null)}
+                role="presentation"
+            >
+                <div
+                    class="image-preview-content"
+                    onclick={(e) => e.stopPropagation()}
+                >
+                    <img
+                        src={previewImageUrl}
+                        alt="Preview"
+                        class="image-preview-img"
+                    />
+                    <button
+                        type="button"
+                        class="image-preview-close-btn"
+                        onclick={() => (previewImageUrl = null)}
+                        aria-label="Close preview"
+                    >
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="24"
+                            height="24"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            ><line x1="18" y1="6" x2="6" y2="18"></line><line
+                                x1="6"
+                                y1="6"
+                                x2="18"
+                                y2="18"
+                            ></line></svg
+                        >
+                    </button>
+                </div>
             </div>
         {/if}
 
