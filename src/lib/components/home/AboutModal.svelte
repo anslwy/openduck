@@ -2,6 +2,7 @@
 <script lang="ts">
     import { onDestroy } from "svelte";
     import { invoke } from "@tauri-apps/api/core";
+    import { ask } from "@tauri-apps/plugin-dialog";
 
     import type {
         AppUpdateInfo,
@@ -33,6 +34,7 @@
 
     let copyState = $state<"idle" | "copied" | "failed">("idle");
     let copyResetTimeout: ReturnType<typeof window.setTimeout> | null = null;
+    let isRefreshing = $state(false);
 
     function clearCopyFeedback() {
         if (copyResetTimeout) {
@@ -56,6 +58,26 @@
             });
         } catch (error) {
             console.error("Failed to open GitHub releases:", error);
+        }
+    }
+
+    async function refreshRuntimeCaches() {
+        const confirmed = await ask(
+            "This will clear the local Python runtime and bootstrap caches, then restart OpenDuck. Are you sure?",
+            {
+                title: "Refresh Runtime Caches",
+                kind: "warning",
+            },
+        );
+
+        if (!confirmed) return;
+
+        isRefreshing = true;
+        try {
+            await invoke("refresh_runtime_caches");
+        } catch (error) {
+            console.error("Failed to refresh runtime caches:", error);
+            isRefreshing = false;
         }
     }
 
@@ -237,6 +259,41 @@
         </div>
 
         <div class="about-update-card">
+            <div class="about-update-header">
+                <div class="about-update-copy">
+                    <span class="about-update-title">Runtime Cache</span>
+                    <span class="about-update-detail"
+                        >Clear local Python environment and bootstrap caches.</span
+                    >
+                </div>
+                <button
+                    type="button"
+                    class="utility-btn"
+                    onclick={refreshRuntimeCaches}
+                    disabled={isRefreshing}
+                >
+                    <div class="refresh-btn-content">
+                        {#if isRefreshing}
+                            <svg
+                                class="spinner"
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="3"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                            </svg>
+                        {/if}
+                        Refresh Caches
+                    </div>
+                </button>
+            </div>
+
             <div class="about-update-header">
                 <div class="about-update-copy">
                     <span class="about-update-title">Updates</span>

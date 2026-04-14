@@ -120,3 +120,6 @@ The app is now split so the entry files stay focused on orchestration:
 
 ### Q: The model is too slow / My Mac does not have enough RAM / Even the E4B model is too dumb to be useful. What should I do?
 ### A: Use [Ollama](https://ollama.com) for the LLM. They support cloud models. Execute for example `ollama run gemma4:31b-cloud` in your Terminal. Then you should be able to see the model in the dropdown on OpenDuck and you can chat with the model without using your GPU. Alternatively, you can setup Ollama on your more powerful desktop / GPU server then change the base url.
+
+### Q: Failed to install some packages / Cannot start the call / There is an error
+### A: Click "Check for Updates" button to see if you are on the latest version. If not, try upgrading it to see if it resolves the issue. If the error persists, try pressing "Refresh Caches" button to reinstall the runtime environment. If it's still not fixed, you can create an issue and make sure you include your OpenDuck version number and Mac model

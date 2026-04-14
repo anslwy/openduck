@@ -654,6 +654,43 @@ fn restart_app(app_handle: AppHandle) {
 }
 
 #[tauri::command]
+async fn refresh_runtime_caches(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    info!("Refreshing runtime caches...");
+
+    // Stop all background processes that might be using the runtime
+    let _ = stop_server_inner(state.inner());
+    let _ = stop_csm_server_inner(state.inner()).await;
+    let _ = stop_stt_server_inner(state.inner()).await;
+
+    let runtime_root = resolve_runtime_root(&app_handle)?;
+    let temp_dir = app_handle
+        .path()
+        .app_cache_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("openduck"))
+        .join("runtime-bootstrap");
+
+    if runtime_root.exists() {
+        info!("Removing runtime directory: {}", runtime_root.display());
+        std::fs::remove_dir_all(&runtime_root)
+            .map_err(|err| format!("Failed to remove runtime directory: {err}"))?;
+    }
+
+    if temp_dir.exists() {
+        info!("Removing runtime-bootstrap directory: {}", temp_dir.display());
+        std::fs::remove_dir_all(&temp_dir)
+            .map_err(|err| format!("Failed to remove runtime-bootstrap directory: {err}"))?;
+    }
+
+    info!("Restarting application...");
+    app_handle.restart();
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn capture_screen_selection(app_handle: AppHandle) -> Result<(), String> {
     capture_screen_selection_inner(&app_handle).await
 }
@@ -7827,6 +7864,7 @@ pub fn run() {
             check_for_app_update,
             install_app_update,
             restart_app,
+            refresh_runtime_caches,
             set_voice_system_prompt,
             export_contact_profile,
             reset_call_session,

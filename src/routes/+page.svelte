@@ -387,10 +387,7 @@
                 missingModels.push(selectedCsmModelLabel);
             }
 
-            if (
-                selectedSttModel !== "gemma" &&
-                !isSttDownloaded
-            ) {
+            if (selectedSttModel !== "gemma" && !isSttDownloaded) {
                 missingModels.push(selectedSttModelLabel);
             }
 
@@ -457,7 +454,9 @@
         `background-image: url('${selectedContactIconUrl}')`,
     );
     const runtimeSetupTitle = $derived(
-        isPreparingRuntime ? "Preparing Local Runtime" : "Runtime Setup Failed",
+        isPreparingRuntime
+            ? "Preparing Local Runtime [One-Time Setup]"
+            : "Runtime Setup Failed",
     );
     const PLAYBACK_PREBUFFER_SAMPLES = 2048;
     const MAX_CONTEXT_BACKED_CONVERSATION_LOG_ENTRIES = 48;
@@ -3624,12 +3623,14 @@
 <div class="app-container" class:contacts-open={showContactsPopup}>
     <div class="background" style={selectedContactImageStyle}></div>
 
-    <AppHeader
-        {currentSessionTitle}
-        {showSessionsPopup}
-        {calling}
-        onToggleSessions={toggleSessionsPopup}
-    />
+    {#if !isPreparingRuntime}
+        <AppHeader
+            {currentSessionTitle}
+            {showSessionsPopup}
+            {calling}
+            onToggleSessions={toggleSessionsPopup}
+        />
+    {/if}
 
     {#if !calling}
         <div
