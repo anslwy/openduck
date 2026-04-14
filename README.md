@@ -41,7 +41,7 @@ The STT card in the app can switch between:
 The speech card in the app can switch between:
 
 - `Kokoro-82M`: a lighter English TTS backend that runs through `mlx-audio` with the default `af_heart` voice from `mlx-community/Kokoro-82M-bf16`.
-- `Fun-CosyVoice3-0.5B`: the latest reference-audio TTS backend from FunAudioLLM, available in 8-bit (most realistic) and 4-bit (VRAM efficient) versions through `mlx-audio-plus`.
+- `Fun-CosyVoice3-0.5B`: the latest reference-audio TTS backend from FunAudioLLM, available in fp16 (highest quality), 8-bit (realistic) and 4-bit (VRAM efficient) versions through `mlx-audio-plus`.
 - `CSM Expressiva 1B`: the original MLX-based speech model, with optional quantization.
 
 Use the dropdowns in the STT and speech cards to choose the backends, then download and load the selected models before starting a call. The `Gemma` STT option does not need its own load step.

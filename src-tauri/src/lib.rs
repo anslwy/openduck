@@ -6481,7 +6481,11 @@ fn clear_huggingface_cache(model_dir_name: &str) -> Result<(), String> {
 fn clear_csm_model_cache(variant: CsmModelVariant) -> Result<(), String> {
     clear_huggingface_cache(variant.cache_dir())?;
 
-    if variant == CsmModelVariant::CosyVoice205b || variant == CsmModelVariant::CosyVoice305b8bit || variant == CsmModelVariant::CosyVoice305b4bit {
+    if variant == CsmModelVariant::CosyVoice205b
+        || variant == CsmModelVariant::CosyVoice305b8bit
+        || variant == CsmModelVariant::CosyVoice305b4bit
+        || variant == CsmModelVariant::CosyVoice305bFp16
+    {
         clear_huggingface_cache(COSYVOICE2_S3_TOKENIZER_CACHE_DIR)?;
     }
 
@@ -6593,7 +6597,11 @@ fn csm_model_cache_exists(variant: CsmModelVariant) -> bool {
         return false;
     }
 
-    if variant == CsmModelVariant::CosyVoice205b || variant == CsmModelVariant::CosyVoice305b8bit || variant == CsmModelVariant::CosyVoice305b4bit {
+    if variant == CsmModelVariant::CosyVoice205b
+        || variant == CsmModelVariant::CosyVoice305b8bit
+        || variant == CsmModelVariant::CosyVoice305b4bit
+        || variant == CsmModelVariant::CosyVoice305bFp16
+    {
         return huggingface_cached_files_exist(
             COSYVOICE2_S3_TOKENIZER_CACHE_DIR,
             &[
@@ -7188,9 +7196,10 @@ fn resolve_speech_site_packages(
     match variant {
         CsmModelVariant::Expressiva1b => resolve_csm_site_packages(app_handle),
         CsmModelVariant::Kokoro82m => resolve_kokoro_site_packages(app_handle),
-        CsmModelVariant::CosyVoice205b | CsmModelVariant::CosyVoice305b8bit | CsmModelVariant::CosyVoice305b4bit => {
-            resolve_cosyvoice_site_packages(app_handle)
-        }
+        CsmModelVariant::CosyVoice205b
+        | CsmModelVariant::CosyVoice305b8bit
+        | CsmModelVariant::CosyVoice305b4bit
+        | CsmModelVariant::CosyVoice305bFp16 => resolve_cosyvoice_site_packages(app_handle),
     }
 }
 
@@ -7494,7 +7503,11 @@ async fn download_csm_model(
     )
     .await?;
 
-    if selected_variant == CsmModelVariant::CosyVoice205b || selected_variant == CsmModelVariant::CosyVoice305b8bit || selected_variant == CsmModelVariant::CosyVoice305b4bit {
+    if selected_variant == CsmModelVariant::CosyVoice205b
+        || selected_variant == CsmModelVariant::CosyVoice305b8bit
+        || selected_variant == CsmModelVariant::CosyVoice305b4bit
+        || selected_variant == CsmModelVariant::CosyVoice305bFp16
+    {
         run_hf_download(
             &app_handle,
             python_executable,

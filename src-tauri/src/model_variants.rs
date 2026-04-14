@@ -84,6 +84,7 @@ pub(crate) enum CsmModelVariant {
     CosyVoice205b,
     CosyVoice305b8bit,
     CosyVoice305b4bit,
+    CosyVoice305bFp16,
 }
 
 impl CsmModelVariant {
@@ -100,6 +101,9 @@ impl CsmModelVariant {
             "cosyvoice3_0_5b_4bit" | "cosyvoice3-0-5b-4bit" | "cosyvoice3-0.5b-4bit" => {
                 Ok(Self::CosyVoice305b4bit)
             }
+            "cosyvoice3_0_5b_fp16" | "cosyvoice3-0-5b-fp16" | "cosyvoice3-0.5b-fp16" => {
+                Ok(Self::CosyVoice305bFp16)
+            }
             other => Err(format!("Unsupported speech model: {other}")),
         }
     }
@@ -111,6 +115,7 @@ impl CsmModelVariant {
             Self::CosyVoice205b => "cosyvoice2_0_5b",
             Self::CosyVoice305b8bit => "cosyvoice3_0_5b_8bit",
             Self::CosyVoice305b4bit => "cosyvoice3_0_5b_4bit",
+            Self::CosyVoice305bFp16 => "cosyvoice3_0_5b_fp16",
         }
     }
 
@@ -121,6 +126,7 @@ impl CsmModelVariant {
             Self::CosyVoice205b => "cosyvoice2",
             Self::CosyVoice305b8bit => "cosyvoice3_8bit",
             Self::CosyVoice305b4bit => "cosyvoice3_4bit",
+            Self::CosyVoice305bFp16 => "cosyvoice3_fp16",
         }
     }
 
@@ -131,6 +137,7 @@ impl CsmModelVariant {
             Self::CosyVoice205b => "CosyVoice2-0.5B",
             Self::CosyVoice305b8bit => "Fun-CosyVoice3-0.5B (8-bit)",
             Self::CosyVoice305b4bit => "Fun-CosyVoice3-0.5B (4-bit)",
+            Self::CosyVoice305bFp16 => "Fun-CosyVoice3-0.5B (fp16)",
         }
     }
 
@@ -141,6 +148,7 @@ impl CsmModelVariant {
             Self::CosyVoice205b => COSYVOICE2_MODEL_REPO,
             Self::CosyVoice305b8bit => COSYVOICE3_8BIT_MODEL_REPO,
             Self::CosyVoice305b4bit => COSYVOICE3_4BIT_MODEL_REPO,
+            Self::CosyVoice305bFp16 => COSYVOICE3_FP16_MODEL_REPO,
         }
     }
 
@@ -151,6 +159,7 @@ impl CsmModelVariant {
             Self::CosyVoice205b => COSYVOICE2_CACHE_DIR,
             Self::CosyVoice305b8bit => COSYVOICE3_8BIT_CACHE_DIR,
             Self::CosyVoice305b4bit => COSYVOICE3_4BIT_CACHE_DIR,
+            Self::CosyVoice305bFp16 => COSYVOICE3_FP16_CACHE_DIR,
         }
     }
 
@@ -168,7 +177,7 @@ impl CsmModelVariant {
                 COSYVOICE2_TOKENIZER_FILE,
                 COSYVOICE2_TOKENIZER_CONFIG_FILE,
             ],
-            Self::CosyVoice305b8bit | Self::CosyVoice305b4bit => &[
+            Self::CosyVoice305b8bit | Self::CosyVoice305b4bit | Self::CosyVoice305bFp16 => &[
                 COSYVOICE3_CONFIG_FILE,
                 COSYVOICE3_MODEL_FILE,
                 COSYVOICE3_TOKENIZER_FILE,
@@ -184,7 +193,10 @@ impl CsmModelVariant {
     pub(crate) fn uses_reference_audio(self) -> bool {
         matches!(
             self,
-            Self::CosyVoice205b | Self::CosyVoice305b8bit | Self::CosyVoice305b4bit
+            Self::CosyVoice205b
+                | Self::CosyVoice305b8bit
+                | Self::CosyVoice305b4bit
+                | Self::CosyVoice305bFp16
         )
     }
 }

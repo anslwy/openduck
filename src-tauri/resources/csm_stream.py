@@ -61,6 +61,7 @@ COSYVOICE2_S3_TOKENIZER_CONFIG_FILE = "config.json"
 COSYVOICE2_S3_TOKENIZER_MODEL_FILE = "model.safetensors"
 COSYVOICE3_8BIT_MODEL_REPO = "mlx-community/Fun-CosyVoice3-0.5B-2512-8bit"
 COSYVOICE3_4BIT_MODEL_REPO = "mlx-community/Fun-CosyVoice3-0.5B-2512-4bit"
+COSYVOICE3_FP16_MODEL_REPO = "mlx-community/Fun-CosyVoice3-0.5B-2512-fp16"
 COSYVOICE3_MODEL_FILE = "model.safetensors"
 COSYVOICE3_CONFIG_FILE = "config.json"
 COSYVOICE3_TOKENIZER_FILE = "tokenizer.json"
@@ -1123,6 +1124,10 @@ def run_server(
         return run_cosyvoice3_server(
             quantize, COSYVOICE3_4BIT_MODEL_REPO, context_audio
         )
+    if model_name == "cosyvoice3_fp16":
+        return run_cosyvoice3_server(
+            quantize, COSYVOICE3_FP16_MODEL_REPO, context_audio
+        )
 
     emit({"type": "error", "message": f"Unsupported speech model: {model_name}"})
     return 2
@@ -1151,6 +1156,9 @@ def main() -> int:
                 emit({"type": "downloaded", "paths": paths})
             elif args.model == "cosyvoice3_4bit":
                 paths = download_cosyvoice3_assets(COSYVOICE3_4BIT_MODEL_REPO)
+                emit({"type": "downloaded", "paths": paths})
+            elif args.model == "cosyvoice3_fp16":
+                paths = download_cosyvoice3_assets(COSYVOICE3_FP16_MODEL_REPO)
                 emit({"type": "downloaded", "paths": paths})
             else:
                 path = download_csm_weights()

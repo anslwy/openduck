@@ -36,7 +36,8 @@ export function isCsmModelVariant(value: unknown): value is CsmModelVariant {
         value === "kokoro_82m" ||
         value === "cosyvoice2_0_5b" ||
         value === "cosyvoice3_0_5b_8bit" ||
-        value === "cosyvoice3_0_5b_4bit"
+        value === "cosyvoice3_0_5b_4bit" ||
+        value === "cosyvoice3_0_5b_fp16"
     );
 }
 

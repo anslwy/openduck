@@ -21,6 +21,9 @@ pub(crate) const COSYVOICE3_8BIT_CACHE_DIR: &str =
 pub(crate) const COSYVOICE3_4BIT_MODEL_REPO: &str = "mlx-community/Fun-CosyVoice3-0.5B-2512-4bit";
 pub(crate) const COSYVOICE3_4BIT_CACHE_DIR: &str =
     "models--mlx-community--Fun-CosyVoice3-0.5B-2512-4bit";
+pub(crate) const COSYVOICE3_FP16_MODEL_REPO: &str = "mlx-community/Fun-CosyVoice3-0.5B-2512-fp16";
+pub(crate) const COSYVOICE3_FP16_CACHE_DIR: &str =
+    "models--mlx-community--Fun-CosyVoice3-0.5B-2512-fp16";
 pub(crate) const COSYVOICE3_MODEL_FILE: &str = "model.safetensors";
 pub(crate) const COSYVOICE3_CONFIG_FILE: &str = "config.json";
 pub(crate) const COSYVOICE3_TOKENIZER_FILE: &str = "tokenizer.json";

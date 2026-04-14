@@ -322,6 +322,7 @@
         { value: "kokoro_82m", label: "Kokoro-82M" },
         { value: "cosyvoice3_0_5b_4bit", label: "Fun-CosyVoice3-0.5B (4-bit)" },
         { value: "cosyvoice3_0_5b_8bit", label: "Fun-CosyVoice3-0.5B (8-bit)" },
+        { value: "cosyvoice3_0_5b_fp16", label: "Fun-CosyVoice3-0.5B (fp16)" },
         { value: "expressiva_1b", label: "CSM Expressiva 1B" },
     ];
     const sttModelOptions: Array<SelectOption<SttModelVariant>> = $derived([
@@ -358,8 +359,10 @@
               : selectedCsmModel === "cosyvoice2_0_5b"
                 ? "CosyVoice2-0.5B produces high quality audio with higher usage of memory. Quantization is not used for this model."
                 : selectedCsmModel === "cosyvoice3_0_5b_8bit"
-                  ? "Fun-CosyVoice3-0.5B (8-bit) provides the most realistic voice quality among the available backends."
-                  : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM. Quantization is not used for this model.",
+                  ? "Fun-CosyVoice3-0.5B (8-bit) provides a balance between realistic voice quality and RAM usage."
+                  : selectedCsmModel === "cosyvoice3_0_5b_fp16"
+                    ? "Fun-CosyVoice3-0.5B (fp16) provides the highest possible voice quality. Quantization is not used for this model."
+                    : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM. Quantization is not used for this model.",
     );
     const selectedSttModelLabel = $derived(
         sttModelOptions.find((option) => option.value === selectedSttModel)
@@ -464,7 +467,8 @@
             if (
                 isCsmLoaded &&
                 (selectedCsmModel === "cosyvoice3_0_5b_8bit" ||
-                    selectedCsmModel === "cosyvoice3_0_5b_4bit")
+                    selectedCsmModel === "cosyvoice3_0_5b_4bit" ||
+                    selectedCsmModel === "cosyvoice3_0_5b_fp16")
             ) {
                 void (async () => {
                     try {
@@ -1178,6 +1182,11 @@
 
     async function syncSelectedContactVoiceReference() {
         if (!selectedContact?.refAudio) {
+            try {
+                await invoke("set_csm_voice", { voice: "female" });
+            } catch (err) {
+                console.error("Failed to reset the voice reference:", err);
+            }
             return;
         }
 
