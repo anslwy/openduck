@@ -3056,6 +3056,10 @@
 
         try {
             await invoke("reset_call_session");
+            currentSessionId = await invoke<string | null>(
+                "get_current_session_id",
+            );
+            currentSessionTitle = null;
             await loadSessions();
         } catch (err) {
             console.error("Failed to clear call session:", err);
