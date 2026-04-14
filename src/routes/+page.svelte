@@ -3623,7 +3623,7 @@
 <div class="app-container" class:contacts-open={showContactsPopup}>
     <div class="background" style={selectedContactImageStyle}></div>
 
-    {#if !isPreparingRuntime}
+    {#if !isPreparingRuntime && !showContactsPopup}
         <AppHeader
             {currentSessionTitle}
             {showSessionsPopup}
