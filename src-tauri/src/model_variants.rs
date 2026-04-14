@@ -51,10 +51,11 @@ impl GemmaVariant {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CsmVoice {
     Male,
     Female,
+    Custom,
 }
 
 impl CsmVoice {
@@ -62,14 +63,16 @@ impl CsmVoice {
         match value.trim().to_ascii_lowercase().as_str() {
             "male" => Ok(Self::Male),
             "female" => Ok(Self::Female),
+            "custom" => Ok(Self::Custom),
             other => Err(format!("Unsupported CSM voice: {other}")),
         }
     }
 
-    pub(crate) fn file_name(self) -> &'static str {
+    pub(crate) fn file_name(self) -> Option<&'static str> {
         match self {
-            Self::Male => CSM_MALE_REFERENCE_AUDIO_FILE,
-            Self::Female => CSM_FEMALE_REFERENCE_AUDIO_FILE,
+            Self::Male => Some(CSM_MALE_REFERENCE_AUDIO_FILE),
+            Self::Female => Some(CSM_FEMALE_REFERENCE_AUDIO_FILE),
+            Self::Custom => None,
         }
     }
 }

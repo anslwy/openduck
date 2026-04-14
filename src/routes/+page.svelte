@@ -178,6 +178,7 @@
     let contacts = $state<ContactProfile[]>([createDefaultContact()]);
     let selectedContactId = $state(DEFAULT_CONTACT_ID);
     let showContactsPopup = $state(false);
+    let contactIdOnPopupOpen = $state<string | null>(null);
     let showOllamaConfig = $state(false);
     let ollamaBaseUrl = $state("http://127.0.0.1:11434");
     let ollamaApiKey = $state("");
@@ -213,7 +214,12 @@
     let contactsImportInput: HTMLInputElement | null = null;
     let contactIconInput: HTMLInputElement | null = null;
     let contactRefAudioInput: HTMLInputElement | null = null;
+    let refAudioPlaying = $state(false);
+    let refAudioEl: HTMLAudioElement | null = null;
     let selectedContactPromptSyncTimeout: ReturnType<
+        typeof window.setTimeout
+    > | null = null;
+    let selectedContactVoiceReferenceSyncTimeout: ReturnType<
         typeof window.setTimeout
     > | null = null;
     let syncedConversationLogHasVisibleImages: boolean | null = null;
@@ -448,6 +454,32 @@
     const selectedContactPrompt = $derived(
         selectedContact?.prompt.trim() || DEFAULT_VOICE_SYSTEM_PROMPT,
     );
+
+    $effect(() => {
+        if (showContactsPopup) {
+            contactIdOnPopupOpen = selectedContactId;
+        } else if (contactIdOnPopupOpen !== null) {
+            contactIdOnPopupOpen = null;
+
+            if (
+                isCsmLoaded &&
+                (selectedCsmModel === "cosyvoice3_0_5b_8bit" ||
+                    selectedCsmModel === "cosyvoice3_0_5b_4bit")
+            ) {
+                void (async () => {
+                    try {
+                        await handleUnloadCsm({ suppressAlert: true });
+                        await handleLoadCsm();
+                    } catch (err) {
+                        console.error(
+                            "Failed to automatically reload the speech model:",
+                            err,
+                        );
+                    }
+                })();
+            }
+        }
+    });
     const selectedContactIconUrl = $derived(
         selectedContact?.iconDataUrl ?? "/icon.png",
     );
@@ -1144,6 +1176,35 @@
         }, 160);
     }
 
+    async function syncSelectedContactVoiceReference() {
+        if (!selectedContact?.refAudio) {
+            return;
+        }
+
+        try {
+            await invoke("set_csm_reference_voice", {
+                refAudioDataUrl: selectedContact.refAudio,
+                refText: selectedContact.refText,
+            });
+        } catch (err) {
+            console.error(
+                "Failed to sync the selected contact voice reference:",
+                err,
+            );
+        }
+    }
+
+    function queueSelectedContactVoiceReferenceSync() {
+        if (selectedContactVoiceReferenceSyncTimeout) {
+            clearTimeout(selectedContactVoiceReferenceSyncTimeout);
+        }
+
+        selectedContactVoiceReferenceSyncTimeout = window.setTimeout(() => {
+            selectedContactVoiceReferenceSyncTimeout = null;
+            void syncSelectedContactVoiceReference();
+        }, 320);
+    }
+
     function updateContactById(
         contactId: string,
         updater: (contact: ContactProfile) => ContactProfile,
@@ -1439,6 +1500,7 @@
         selectedContactId = contactId;
         persistContactsMetadata();
         queueSelectedContactPromptSync();
+        queueSelectedContactVoiceReferenceSync();
     }
 
     function createNewContact() {
@@ -1548,8 +1610,12 @@
                 prompt: nextPrompt,
                 hasCustomIcon: Boolean(iconDataUrl),
                 iconDataUrl,
-                refAudio: typeof parsed.refAudio === "string" ? parsed.refAudio : null,
-                refText: typeof parsed.refText === "string" ? parsed.refText : null,
+                refAudio:
+                    typeof parsed.refAudio === "string"
+                        ? parsed.refAudio
+                        : null,
+                refText:
+                    typeof parsed.refText === "string" ? parsed.refText : null,
             };
 
             if (iconDataUrl) {
@@ -1640,6 +1706,7 @@
                 refAudio,
             }));
             persistContactsMetadata();
+            queueSelectedContactVoiceReferenceSync();
         } catch (err) {
             console.error("Failed to save the voice reference audio:", err);
             alert(
@@ -1658,6 +1725,13 @@
             refAudio: null,
         }));
         persistContactsMetadata();
+
+        void invoke("set_csm_voice", { voice: "female" }).catch((err) => {
+            console.error(
+                "Failed to reset CSM voice after clearing reference:",
+                err,
+            );
+        });
     }
 
     function handlePlaySelectedContactRefAudio() {
@@ -1665,9 +1739,34 @@
             return;
         }
 
-        const audio = new Audio(selectedContact.refAudio);
-        audio.play().catch((err) => {
+        if (refAudioPlaying && refAudioEl) {
+            refAudioEl.pause();
+            refAudioEl = null;
+            refAudioPlaying = false;
+            return;
+        }
+
+        if (refAudioEl) {
+            refAudioEl.pause();
+        }
+
+        refAudioEl = new Audio(selectedContact.refAudio);
+        refAudioPlaying = true;
+
+        refAudioEl.onended = () => {
+            refAudioPlaying = false;
+            refAudioEl = null;
+        };
+
+        refAudioEl.onerror = () => {
+            refAudioPlaying = false;
+            refAudioEl = null;
+        };
+
+        refAudioEl.play().catch((err) => {
             console.error("Failed to play voice reference audio:", err);
+            refAudioPlaying = false;
+            refAudioEl = null;
         });
     }
 
@@ -1682,6 +1781,7 @@
             refText: nextText,
         }));
         persistContactsMetadata();
+        queueSelectedContactVoiceReferenceSync();
     }
 
     async function handleExportSelectedContact() {
@@ -1711,6 +1811,8 @@
                         name: getContactDisplayName(selectedContact),
                         prompt: selectedContact.prompt,
                         iconDataUrl: selectedContact.iconDataUrl,
+                        refAudio: selectedContact.refAudio,
+                        refText: selectedContact.refText,
                         outputPath,
                     },
                 },
@@ -2848,6 +2950,7 @@
         }
 
         await syncSelectedContactPrompt();
+        await syncSelectedContactVoiceReference();
 
         try {
             await invoke("start_new_session");
@@ -2900,6 +3003,7 @@
         }
 
         await syncSelectedContactPrompt();
+        await syncSelectedContactVoiceReference();
 
         closeContactsPopup();
         closeConversationPopup();
@@ -3587,6 +3691,7 @@
             selectedContactId = restoredContacts.selectedContactId;
             persistContactsMetadata();
             await syncSelectedContactPrompt();
+            await syncSelectedContactVoiceReference();
             await restoreModelPreferences();
             await syncOllamaConfig();
             await initializePongPlaybackPreference();
@@ -3936,7 +4041,8 @@
                     {handleSelectedContactPromptInput}
                     {handleSelectedContactRefTextInput}
                     {handleDeleteSelectedContact}
-                    handleExportSelectedContact={handleExportSelectedContact}
+                    {handleExportSelectedContact}
+                    {refAudioPlaying}
                 />
             </div>
         {/if}
@@ -3988,7 +4094,9 @@
             class:dimmed={showContactsPopup || showAboutPopup}
         >
             <div class="info">
-                <span class="username">OpenDuck</span>
+                <span class="username"
+                    >{selectedContact?.name.trim() || "OpenDuck"}</span
+                >
                 <span class="timer"
                     >{calling
                         ? formattedTime

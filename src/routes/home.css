@@ -972,7 +972,7 @@ main.idle-layout {
 }
 
 .contact-field-grow {
-    flex: 1;
+    flex: none;
     min-height: 0;
 }
 
@@ -1021,7 +1021,6 @@ main.idle-layout {
 
 .contact-textarea {
     min-height: 160px;
-    height: 100%;
     max-height: none;
     resize: none;
     line-height: 1.45;

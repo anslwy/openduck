@@ -298,6 +298,8 @@ struct AppState {
     loaded_stt_model: Mutex<Option<SttModelVariant>>,
     selected_csm_voice: Mutex<CsmVoice>,
     selected_csm_quantized: Mutex<bool>,
+    csm_reference_audio_path: Mutex<Option<PathBuf>>,
+    csm_reference_text: Mutex<Option<String>>,
     next_csm_request_id: AtomicU64,
     next_stt_request_id: AtomicU64,
     next_generation_id: AtomicU64,
@@ -425,6 +427,8 @@ struct ContactExportPayload {
     name: String,
     prompt: String,
     icon_data_url: Option<String>,
+    ref_audio: Option<String>,
+    ref_text: Option<String>,
     output_path: String,
 }
 
@@ -720,6 +724,8 @@ fn export_contact_profile(payload: ContactExportPayload) -> Result<ContactExport
         "name": payload.name.trim(),
         "prompt": payload.prompt,
         "iconDataUrl": payload.icon_data_url,
+        "refAudio": payload.ref_audio,
+        "refText": payload.ref_text,
     });
     let encoded = serde_json::to_vec_pretty(&export_json).map_err(|err| err.to_string())?;
 
@@ -1766,14 +1772,52 @@ async fn set_csm_voice(
     voice: String,
 ) -> Result<(), String> {
     let selected_voice = CsmVoice::from_key(&voice)?;
-    let context_audio = resolve_csm_context_audio_file(&app_handle, selected_voice)?;
+    let context_audio = resolve_csm_context_audio_file(&app_handle, state.inner(), selected_voice)?;
+
+    let context_text = if selected_voice == CsmVoice::Custom {
+        state.csm_reference_text.lock().unwrap().clone()
+    } else {
+        None
+    };
 
     {
         let mut selected_voice_guard = state.selected_csm_voice.lock().unwrap();
         *selected_voice_guard = selected_voice;
     }
 
-    apply_csm_voice_context(state.inner(), &context_audio).await
+    apply_csm_voice_context(state.inner(), &context_audio, context_text.as_deref()).await
+}
+
+#[tauri::command]
+async fn set_csm_reference_voice(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    ref_audio_data_url: Option<String>,
+    ref_text: Option<String>,
+) -> Result<(), String> {
+    let audio_path = if let Some(data_url) = ref_audio_data_url {
+        write_data_url_to_temp_file(&data_url)
+            .ok_or_else(|| "Failed to save custom reference audio".to_string())?
+    } else {
+        return Err("Reference audio is required for custom voice".to_string());
+    };
+
+    {
+        let mut audio_path_guard = state.csm_reference_audio_path.lock().unwrap();
+        *audio_path_guard = Some(audio_path.clone());
+    }
+
+    {
+        let mut text_guard = state.csm_reference_text.lock().unwrap();
+        *text_guard = ref_text.clone();
+    }
+
+    {
+        let mut selected_voice_guard = state.selected_csm_voice.lock().unwrap();
+        *selected_voice_guard = CsmVoice::Custom;
+    }
+
+    apply_csm_voice_context(state.inner(), &audio_path, ref_text.as_deref()).await
 }
 
 async fn start_csm_server_inner(
@@ -1814,10 +1858,17 @@ async fn start_csm_server_inner(
     let speech_site_packages = resolve_speech_site_packages(app_handle, selected_variant)?;
     let csm_script = resolve_resource_file(app_handle, "csm_stream.py")?;
     let selected_voice = *state.selected_csm_voice.lock().unwrap();
-    let startup_context_audio = if selected_variant.uses_reference_audio() {
-        Some(resolve_csm_context_audio_file(app_handle, selected_voice)?)
+
+    let (startup_context_audio, startup_context_text) = if selected_variant.uses_reference_audio() {
+        let audio = resolve_csm_context_audio_file(app_handle, state, selected_voice).ok();
+        let text = if selected_voice == CsmVoice::Custom {
+            state.csm_reference_text.lock().unwrap().clone()
+        } else {
+            None
+        };
+        (audio, text)
     } else {
-        None
+        (None, None)
     };
 
     info!("Starting CSM worker with {}", python_executable.display());
@@ -1842,6 +1893,10 @@ async fn start_csm_server_inner(
 
     if let Some(context_audio) = &startup_context_audio {
         command.arg("--context-audio").arg(context_audio);
+    }
+
+    if let Some(context_text) = &startup_context_text {
+        command.arg("--context-text").arg(context_text);
     }
 
     let should_quantize_csm = *state.selected_csm_quantized.lock().unwrap();
@@ -2568,7 +2623,7 @@ fn start_response_generation(
                     response_text.clone(),
                     persisted_image_path,
                 );
-                
+
                 let session_title = {
                     let state = app_handle_for_task.state::<AppState>();
                     let guard = state.current_session_title.lock().unwrap();
@@ -3350,7 +3405,11 @@ async fn reset_csm_reference_context(app_handle: &tauri::AppHandle) -> Result<()
     Ok(())
 }
 
-async fn apply_csm_voice_context(state: &AppState, context_audio: &Path) -> Result<(), String> {
+async fn apply_csm_voice_context(
+    state: &AppState,
+    context_audio: &Path,
+    context_text: Option<&str>,
+) -> Result<(), String> {
     let process = {
         let csm_process_guard = state.csm_process.lock().unwrap();
         csm_process_guard.clone()
@@ -3363,6 +3422,7 @@ async fn apply_csm_voice_context(state: &AppState, context_audio: &Path) -> Resu
     let request = serde_json::json!({
         "type": "set_context",
         "context_audio_path": context_audio.to_string_lossy(),
+        "context_text": context_text.unwrap_or(""),
     });
 
     let mut stdin = process.stdin.lock().await;
@@ -5541,7 +5601,7 @@ fn append_conversation_turn_with_save(
         final_image_path,
         user_image_data_url,
     );
-    
+
     // Auto-title if it's the first turn and no title is set
     {
         let mut title_guard = state.current_session_title.lock().unwrap();
@@ -6792,7 +6852,7 @@ fn save_current_session(app_handle: &AppHandle, state: &AppState) -> Result<(), 
     };
 
     let session_file = resolve_session_file(app_handle, &session_id)?;
-    
+
     let (turns, title) = {
         let turns_guard = state.conversation_turns.lock().unwrap();
         let title_guard = state.current_session_title.lock().unwrap();
@@ -7190,35 +7250,45 @@ fn resolve_existing_path_dev_first(
 
 fn resolve_csm_context_audio_file(
     app_handle: &tauri::AppHandle,
+    state: &AppState,
     voice: CsmVoice,
 ) -> Result<PathBuf, String> {
-    let reference_audio_file = voice.file_name();
+    if voice == CsmVoice::Custom {
+        return state
+            .csm_reference_audio_path
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "No custom reference audio set".to_string());
+    }
+
+    let file_name = voice.file_name().unwrap();
     let mut candidates = Vec::new();
 
     if let Ok(current_dir) = std::env::current_dir() {
-        candidates.push(current_dir.join(reference_audio_file));
+        candidates.push(current_dir.join(file_name));
         candidates.push(
             current_dir
                 .join("src-tauri")
                 .join("..")
-                .join(reference_audio_file),
+                .join(file_name),
         );
 
         if current_dir.ends_with("src-tauri") {
-            candidates.push(current_dir.join("..").join(reference_audio_file));
+            candidates.push(current_dir.join("..").join(file_name));
         }
     }
 
     if let Ok(resource_dir) = app_handle.path().resource_dir() {
-        candidates.push(resource_dir.join(reference_audio_file));
-        candidates.push(resource_dir.join("_up_").join(reference_audio_file));
-        candidates.push(resource_dir.join("resources").join(reference_audio_file));
+        candidates.push(resource_dir.join(file_name));
+        candidates.push(resource_dir.join("_up_").join(file_name));
+        candidates.push(resource_dir.join("resources").join(file_name));
     }
 
     candidates
         .into_iter()
         .find(|candidate| candidate.exists())
-        .ok_or_else(|| format!("Unable to locate {}", reference_audio_file))
+        .ok_or_else(|| format!("Unable to locate {}", file_name))
 }
 
 fn reap_stale_model_processes(app_handle: &tauri::AppHandle) {
@@ -7822,6 +7892,8 @@ pub fn run() {
             loaded_stt_model: Mutex::new(None),
             selected_csm_voice: Mutex::new(CsmVoice::Female),
             selected_csm_quantized: Mutex::new(default_csm_quantized),
+            csm_reference_audio_path: Mutex::new(None),
+            csm_reference_text: Mutex::new(None),
             next_csm_request_id: AtomicU64::new(1),
             next_stt_request_id: AtomicU64::new(1),
             next_generation_id: AtomicU64::new(1),
@@ -7866,6 +7938,7 @@ pub fn run() {
             restart_app,
             refresh_runtime_caches,
             set_voice_system_prompt,
+            set_csm_reference_voice,
             export_contact_profile,
             reset_call_session,
             ensure_runtime_dependencies,
