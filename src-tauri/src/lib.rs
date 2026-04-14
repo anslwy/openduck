@@ -329,7 +329,24 @@ struct AppState {
     ollama_base_url: Mutex<String>,
     ollama_api_key: Mutex<Option<String>>,
     next_conversation_entry_id: AtomicU64,
+    last_tray_icon_variant: Mutex<Option<TrayIconVariant>>,
+    last_tray_menu_state: Mutex<Option<TrayMenuState>>,
+    last_tray_title: Mutex<Option<String>>,
     is_quitting: Mutex<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TrayMenuState {
+    call_in_progress: bool,
+    call_muted: bool,
+    tray_pong_playback_enabled: bool,
+    screen_capture_in_progress: bool,
+    has_pending_screen_capture: bool,
+    has_conversation_image_history: bool,
+    gemma_loaded: bool,
+    stt_loaded: bool,
+    csm_loaded: bool,
+    memory_snapshot_summary: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -4633,6 +4650,41 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
         }
     };
 
+    let summary_text = if let Some(snapshot) = memory_snapshot.as_ref() {
+        if snapshot.total_bytes > 0 {
+            format!("Memory Used: {}", format_memory_bytes(snapshot.total_bytes))
+        } else if any_models_loaded {
+            "Memory Used: unavailable".to_string()
+        } else {
+            "No models loaded".to_string()
+        }
+    } else if any_models_loaded {
+        "Memory Used: unavailable".to_string()
+    } else {
+        "No models loaded".to_string()
+    };
+
+    let menu_state = TrayMenuState {
+        call_in_progress,
+        call_muted,
+        tray_pong_playback_enabled,
+        screen_capture_in_progress,
+        has_pending_screen_capture,
+        has_conversation_image_history,
+        gemma_loaded,
+        stt_loaded,
+        csm_loaded,
+        memory_snapshot_summary: summary_text.clone(),
+    };
+
+    {
+        let mut last_menu_state_guard = state.last_tray_menu_state.lock().unwrap();
+        if *last_menu_state_guard == Some(menu_state.clone()) {
+            return;
+        }
+        *last_menu_state_guard = Some(menu_state);
+    }
+
     let mut builder = MenuBuilder::new(app_handle).text(TRAY_SHOW_MENU_ID, "Show OpenDuck");
     if call_in_progress {
         let look_at_screen_label = if screen_capture_in_progress {
@@ -4710,20 +4762,6 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
         }
     }
     builder = builder.separator();
-
-    let summary_text = if let Some(snapshot) = memory_snapshot.as_ref() {
-        if snapshot.total_bytes > 0 {
-            format!("Memory Used: {}", format_memory_bytes(snapshot.total_bytes))
-        } else if any_models_loaded {
-            "Memory Used: unavailable".to_string()
-        } else {
-            "No models loaded".to_string()
-        }
-    } else if any_models_loaded {
-        "Memory Used: unavailable".to_string()
-    } else {
-        "No models loaded".to_string()
-    };
 
     let summary_item = match MenuItemBuilder::with_id(TRAY_MEMORY_SUMMARY_MENU_ID, summary_text)
         .enabled(false)
@@ -5785,11 +5823,20 @@ fn current_tray_title(app_handle: &AppHandle) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn update_tray_timer_title(app_handle: &AppHandle, title: Option<&str>) {
+    let state = app_handle.state::<AppState>();
+    {
+        let mut last_title_guard = state.last_tray_title.lock().unwrap();
+        if *last_title_guard == title.map(|s| s.to_string()) {
+            return;
+        }
+        *last_title_guard = title.map(|s| s.to_string());
+    }
+
     let Some(tray) = app_handle.tray_by_id(TRAY_ICON_ID) else {
         return;
     };
 
-    if let Err(err) = tray.set_title(Some(title.unwrap_or(""))) {
+    if let Err(err) = tray.set_title(title) {
         error!("Failed to update tray title: {}", err);
     }
 }
@@ -5829,6 +5876,14 @@ fn refresh_tray_icon(app_handle: &AppHandle) {
             }
         }
     };
+
+    {
+        let mut last_variant_guard = state.last_tray_icon_variant.lock().unwrap();
+        if *last_variant_guard == Some(variant) {
+            return;
+        }
+        *last_variant_guard = Some(variant);
+    }
 
     let icon = match tray_icon_image(variant) {
         Ok(icon) => icon,
@@ -7936,6 +7991,9 @@ pub fn run() {
             ollama_base_url: Mutex::new("http://127.0.0.1:11434".to_string()),
             ollama_api_key: Mutex::new(None),
             next_conversation_entry_id: AtomicU64::new(1),
+            last_tray_icon_variant: Mutex::new(None),
+            last_tray_menu_state: Mutex::new(None),
+            last_tray_title: Mutex::new(None),
             is_quitting: Mutex::new(false),
         })
         .plugin(tauri_plugin_dialog::init())
