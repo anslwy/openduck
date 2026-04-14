@@ -259,7 +259,7 @@
         isPreparingRuntime || runtimeSetupError !== null,
     );
     const conversationLogHasVisibleImages = $derived(
-        conversationLogEntries.some((entry) => entry.imageUrl !== null),
+        conversationLogEntries.some((entry) => entry.imageUrls.length > 0),
     );
     const modelsReady = $derived(
         isGemmaLoaded && isCsmLoaded && effectiveSttLoaded,
@@ -561,11 +561,10 @@
     function appendConversationLogEntry(
         role: ConversationLogEntry["role"],
         text: string,
-        imageUrl: string | null = null,
+        imageUrls: string[] = [],
     ) {
         const normalizedText = text.trim();
-        const normalizedImageUrl = imageUrl?.trim() || null;
-        if (!normalizedText && !normalizedImageUrl) {
+        if (!normalizedText && imageUrls.length === 0) {
             return null;
         }
 
@@ -576,7 +575,7 @@
                 id: entryId,
                 role,
                 text: normalizedText,
-                imageUrl: normalizedImageUrl,
+                imageUrls: imageUrls,
                 contextEntryId: null,
             },
         ];
@@ -602,6 +601,7 @@
             activeAssistantConversationEntryId = appendConversationLogEntry(
                 "assistant",
                 normalizedText,
+                [],
             );
             return;
         }
@@ -677,7 +677,7 @@
                 void invoke("update_conversation_context_entry", {
                     entryId: payload.userEntryId,
                     text: userEntry.text,
-                    clearImage: false,
+                    clearImages: false,
                 });
             }
             if (assistantEntry.text !== payload.assistantText) {
@@ -688,7 +688,7 @@
                 void invoke("update_conversation_context_entry", {
                     entryId: payload.assistantEntryId,
                     text: assistantEntry.text,
-                    clearImage: false,
+                    clearImages: false,
                 });
             }
         }
@@ -731,20 +731,14 @@
     }
 
     function applyScreenCaptureEvent(payload: ScreenCaptureEvent) {
-        const shouldShow =
-            payload.phase === "capturing" ||
-            payload.phase === "error" ||
-            payload.hasPendingAttachment;
-
-        if (!shouldShow) {
-            resetScreenCaptureStatus();
-            return;
-        }
-
         screenCapturePhase = payload.phase;
         screenCaptureMessage = payload.message.trim();
         screenCaptureHasPendingAttachment = payload.hasPendingAttachment;
-        screenCaptureFileName = payload.fileName?.trim() || null;
+        if (payload.attachmentCount > 1) {
+            screenCaptureFileName = `${payload.attachmentCount} attachments`;
+        } else {
+            screenCaptureFileName = payload.fileName?.trim() || null;
+        }
     }
 
     async function handleClearPendingScreenCapture() {
@@ -952,13 +946,13 @@
         }
 
         const normalizedText = nextText.trim();
-        const nextImageUrl = clearImage ? null : entry.imageUrl;
-        if (!normalizedText && !nextImageUrl) {
+        const nextImageUrls = clearImage ? [] : entry.imageUrls;
+        if (!normalizedText && nextImageUrls.length === 0) {
             alert("Conversation messages need text or an attached image.");
             return false;
         }
 
-        if (normalizedText === entry.text && nextImageUrl === entry.imageUrl) {
+        if (normalizedText === entry.text && nextImageUrls === entry.imageUrls) {
             return true;
         }
 
@@ -979,7 +973,7 @@
                 await invoke("update_conversation_context_entry", {
                     entryId: entry.contextEntryId,
                     text: normalizedText,
-                    clearImage,
+                    clearImages: clearImage,
                 });
 
                 // Success, update local state
@@ -989,7 +983,7 @@
                             ? {
                                   ...candidate,
                                   text: normalizedText,
-                                  imageUrl: nextImageUrl,
+                                  imageUrls: nextImageUrls,
                               }
                             : candidate,
                 );
@@ -1004,47 +998,47 @@
                                 ? {
                                       ...candidate,
                                       text: normalizedText,
-                                      imageUrl: nextImageUrl,
+                                      imageUrls: nextImageUrls,
                                       contextEntryId: null,
                                   }
-                                : candidate,
-                    );
-                    return true;
-                }
+                          : candidate,
+                  );
+                  return true;
+              }
 
-                console.error("Failed to update conversation entry:", err);
-                alert(`Failed to update the conversation entry.\n${errorMsg}`);
-                return false;
-            } finally {
-                isSavingConversationLogEntryEdit = false;
-            }
-        } else {
-            // No context ID. Just update locally.
-            // If it's currently being responded to, markConversationTurnAsContextBacked will sync it later.
-            conversationLogEntries = conversationLogEntries.map((candidate) =>
-                candidate.id === entryId
-                    ? {
-                          ...candidate,
-                          text: normalizedText,
-                          imageUrl: nextImageUrl,
-                      }
-                    : candidate,
-            );
-            return true;
-        }
-    }
+              console.error("Failed to update conversation entry:", err);
+              alert(`Failed to update the conversation entry.\n${errorMsg}`);
+              return false;
+          } finally {
+              isSavingConversationLogEntryEdit = false;
+          }
+      } else {
+          // No context ID. Just update locally.
+          // If it's currently being responded to, markConversationTurnAsContextBacked will sync it later.
+          conversationLogEntries = conversationLogEntries.map((candidate) =>
+              candidate.id === entryId
+                  ? {
+                        ...candidate,
+                        text: normalizedText,
+                        imageUrls: nextImageUrls,
+                    }
+                  : candidate,
+          );
+          return true;
+      }
+  }
 
-    async function clearConversationLogImages() {
-        const hasVisibleImages = conversationLogEntries.some(
-            (entry) => entry.imageUrl !== null,
-        );
-        if (!hasVisibleImages) {
-            return;
-        }
+  async function clearConversationLogImages() {
+      const hasVisibleImages = conversationLogEntries.some(
+          (entry) => entry.imageUrls.length > 0,
+      );
+      if (!hasVisibleImages) {
+          return;
+      }
 
-        const hasContextImages = conversationLogEntries.some(
-            (entry) => entry.contextEntryId !== null && entry.imageUrl !== null,
-        );
+      const hasContextImages = conversationLogEntries.some(
+          (entry) => entry.contextEntryId !== null && entry.imageUrls.length > 0,
+      );
 
         isClearingConversationLogImages = true;
 
@@ -1064,7 +1058,7 @@
     function clearConversationLogImageHistoryEntries() {
         conversationLogEntries = conversationLogEntries.map((entry) => ({
             ...entry,
-            imageUrl: null,
+            imageUrls: [],
         }));
     }
 
@@ -1364,17 +1358,23 @@
             currentSessionId = session.id;
             resetConversationLog();
             for (const turn of turns) {
+                // Prefer data URLs if available, otherwise fall back to paths.
+                // We avoid combining them to prevent duplicate images in the UI.
+                let imageUrls = [...turn.user_image_data_urls];
+                if (imageUrls.length === 0 && turn.image_paths.length > 0) {
+                    for (const path of turn.image_paths) {
+                        imageUrls.push(convertFileSrc(path));
+                    }
+                }
                 const userEntryId = appendConversationLogEntry(
                     "user",
                     turn.user_text,
-                    turn.user_image_data_url ||
-                        (turn.image_path
-                            ? convertFileSrc(turn.image_path)
-                            : null),
+                    imageUrls,
                 );
                 const assistantEntryId = appendConversationLogEntry(
                     "assistant",
                     turn.assistant_text,
+                    [],
                 );
                 // Mark them as context backed immediately
                 conversationLogEntries = conversationLogEntries.map((entry) => {
@@ -3626,11 +3626,23 @@
                                 return;
                             }
 
+                            // Use data URLs if available for immediate display,
+                            // as they are more reliable during file move operations.
+                            let imageUrls = [...payload.imageDataUrls];
+                            if (
+                                imageUrls.length === 0 &&
+                                payload.imagePaths.length > 0
+                            ) {
+                                for (const path of payload.imagePaths) {
+                                    imageUrls.push(convertFileSrc(path));
+                                }
+                            }
+
                             pendingConversationUserLogEntryId =
                                 appendConversationLogEntry(
                                     "user",
                                     payload.text,
-                                    payload.imageDataUrl ?? null,
+                                    imageUrls,
                                 );
                         },
                     ),

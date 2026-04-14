@@ -55,8 +55,8 @@ pub(crate) struct CallStageEvent {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TranscriptEvent {
     pub(crate) text: String,
-    pub(crate) image_path: Option<String>,
-    pub(crate) image_data_url: Option<String>,
+    pub(crate) image_paths: Vec<String>,
+    pub(crate) image_data_urls: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -72,6 +72,7 @@ pub(crate) struct ScreenCaptureEvent {
     pub(crate) phase: String,
     pub(crate) message: String,
     pub(crate) has_pending_attachment: bool,
+    pub(crate) attachment_count: usize,
     pub(crate) file_name: Option<String>,
 }
 
@@ -187,12 +188,14 @@ pub(crate) fn emit_assistant_response(app_handle: &AppHandle, payload: Assistant
 pub(crate) fn emit_screen_capture_event(app_handle: &AppHandle, phase: &str, message: &str) {
     let state = app_handle.state::<AppState>();
     let file_name = pending_screen_capture_file_name(state.inner());
+    let attachment_count = crate::pending_screen_capture_count(state.inner());
     if let Err(err) = app_handle.emit(
         SCREEN_CAPTURE_EVENT,
         ScreenCaptureEvent {
             phase: phase.to_string(),
             message: message.to_string(),
-            has_pending_attachment: file_name.is_some(),
+            has_pending_attachment: attachment_count > 0,
+            attachment_count,
             file_name,
         },
     ) {

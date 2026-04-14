@@ -46,7 +46,7 @@
     
     const isBusy = $derived(popupActionsBusy || isSavingConversationLogEntryEdit || isClearingConversationLogImages);
     const hasClearableConversationImages = $derived(
-        conversationLogEntries.some((entry) => entry.imageUrl !== null),
+        conversationLogEntries.some((entry) => entry.imageUrls.length > 0),
     );
 
     $effect(() => {
@@ -202,14 +202,18 @@
                     <div class="conversation-entry-content" data-role={entry.role}>
                         <div class="conversation-bubble" data-role={entry.role}>
                             {#if editingEntryId === entry.id}
-                                {#if entry.imageUrl && !editingImageRemoved}
+                                {#if entry.imageUrls.length > 0 && !editingImageRemoved}
                                     <div class="conversation-attachment-shell">
-                                        <img
-                                            class="conversation-attachment-image"
-                                            src={entry.imageUrl}
-                                            alt="Attached screen capture"
-                                            loading="lazy"
-                                        />
+                                        <div class="conversation-attachment-images">
+                                            {#each entry.imageUrls as imageUrl}
+                                                <img
+                                                    class="conversation-attachment-image"
+                                                    src={imageUrl}
+                                                    alt="Attached screen capture"
+                                                    loading="lazy"
+                                                />
+                                            {/each}
+                                        </div>
                                         <button
                                             type="button"
                                             class="conversation-attachment-remove-btn"
@@ -218,7 +222,7 @@
                                             }}
                                             disabled={isBusy}
                                         >
-                                            Remove image
+                                            Remove images
                                         </button>
                                     </div>
                                 {/if}
@@ -231,13 +235,17 @@
                                     disabled={isBusy}
                                 ></textarea>
                             {:else}
-                                {#if entry.imageUrl}
-                                    <img
-                                        class="conversation-attachment-image"
-                                        src={entry.imageUrl}
-                                        alt="Attached screen capture"
-                                        loading="lazy"
-                                    />
+                                {#if entry.imageUrls.length > 0}
+                                    <div class="conversation-attachment-images">
+                                        {#each entry.imageUrls as imageUrl}
+                                            <img
+                                                class="conversation-attachment-image"
+                                                src={imageUrl}
+                                                alt="Attached screen capture"
+                                                loading="lazy"
+                                            />
+                                        {/each}
+                                    </div>
                                 {/if}
                                 {#if entry.text}
                                     <div class="conversation-entry-text">

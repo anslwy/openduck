@@ -137,7 +137,14 @@ struct ConversationTurn {
     assistant_entry_id: u64,
     user_text: String,
     assistant_text: String,
+    #[serde(default)]
+    image_paths: Vec<PathBuf>,
+    #[serde(default)]
+    user_image_data_urls: Vec<String>,
+
+    #[serde(skip_serializing, default)]
     image_path: Option<PathBuf>,
+    #[serde(skip_serializing, default)]
     user_image_data_url: Option<String>,
 }
 
@@ -306,7 +313,7 @@ struct AppState {
     active_generation: Mutex<Option<ActiveGeneration>>,
     conversation_turns: Mutex<VecDeque<ConversationTurn>>,
     conversation_image_paths: Mutex<Vec<PathBuf>>,
-    pending_screen_capture: Mutex<Option<PathBuf>>,
+    pending_screen_captures: Mutex<Vec<PathBuf>>,
     screen_capture_in_progress: Mutex<bool>,
     transient_tray_title: Mutex<Option<String>>,
     transient_tray_icon: Mutex<Option<TrayIconVariant>>,
@@ -835,7 +842,7 @@ fn delete_conversation_context_entry(
     state: State<'_, AppState>,
     entry_id: u64,
 ) -> Result<Option<u64>, String> {
-    let mut removed_image_path = None;
+    let mut removed_image_paths = Vec::new();
     let mut other_entry_id = None;
     let mut updated = false;
 
@@ -858,7 +865,7 @@ fn delete_conversation_context_entry(
 
         if let Some(i) = index_to_remove {
             let removed_turn = conversation_turns.remove(i).unwrap();
-            removed_image_path = removed_turn.image_path;
+            removed_image_paths = removed_turn.image_paths;
             updated = true;
             info!("Deleted conversation turn containing entry {}. Other entry in turn was {}.", entry_id, other_entry_id.unwrap_or(0));
         }
@@ -869,7 +876,7 @@ fn delete_conversation_context_entry(
         return Err("Conversation entry is no longer part of the active context.".to_string());
     }
 
-    if let Some(image_path) = removed_image_path {
+    for image_path in removed_image_paths {
         unregister_conversation_image_path(state.inner(), &image_path);
         remove_temp_image_file(&image_path);
     }
@@ -887,10 +894,10 @@ fn update_conversation_context_entry(
     state: State<'_, AppState>,
     entry_id: u64,
     text: String,
-    clear_image: bool,
+    clear_images: bool,
 ) -> Result<(), String> {
     let normalized_text = text.trim().to_string();
-    let mut removed_image_path = None;
+    let mut removed_image_paths = Vec::new();
     let mut updated = false;
 
     {
@@ -898,17 +905,17 @@ fn update_conversation_context_entry(
 
         for turn in conversation_turns.iter_mut() {
             if turn.user_entry_id == entry_id {
-                let keep_existing_image = turn.image_path.is_some() && !clear_image;
-                if normalized_text.is_empty() && !keep_existing_image {
+                let keep_existing_images = !turn.image_paths.is_empty() && !clear_images;
+                if normalized_text.is_empty() && !keep_existing_images {
                     return Err(
                         "Conversation user entries need text or an attached image.".to_string()
                     );
                 }
 
                 turn.user_text = normalized_text.clone();
-                if clear_image {
-                    removed_image_path = turn.image_path.take();
-                    turn.user_image_data_url = None;
+                if clear_images {
+                    removed_image_paths = std::mem::take(&mut turn.image_paths);
+                    turn.user_image_data_urls.clear();
                 }
                 updated = true;
                 info!("Updated user entry {} with text: {:?}", entry_id, turn.user_text);
@@ -916,7 +923,7 @@ fn update_conversation_context_entry(
             }
 
             if turn.assistant_entry_id == entry_id {
-                if clear_image {
+                if clear_images {
                     return Err("Assistant entries do not contain removable images.".to_string());
                 }
                 if normalized_text.is_empty() {
@@ -932,13 +939,15 @@ fn update_conversation_context_entry(
     }
 
     if !updated {
-        warn!("Attempted to update entry {}, but it was not found in the active context.", entry_id);
-        return Err("Conversation entry is no longer part of the active context.".to_string());
+        return Err(format!(
+            "Entry ID {} is no longer part of the active context.",
+            entry_id
+        ));
     }
 
-    if let Some(image_path) = removed_image_path {
-        unregister_conversation_image_path(state.inner(), &image_path);
-        remove_temp_image_file(&image_path);
+    for path in removed_image_paths {
+        unregister_conversation_image_path(state.inner(), &path);
+        remove_temp_image_file(&path);
     }
 
     if let Err(err) = save_current_session(&app_handle, state.inner()) {
@@ -968,10 +977,8 @@ fn clear_conversation_context_images_inner(state: &AppState) -> usize {
         let mut removed_paths = Vec::new();
 
         for turn in conversation_turns.iter_mut() {
-            turn.user_image_data_url = None;
-            if let Some(image_path) = turn.image_path.take() {
-                removed_paths.push(image_path);
-            }
+            turn.user_image_data_urls.clear();
+            removed_paths.extend(std::mem::take(&mut turn.image_paths));
         }
 
         removed_paths
@@ -988,8 +995,8 @@ fn clear_conversation_context_images_inner(state: &AppState) -> usize {
         .unwrap()
         .retain(|candidate| !removed_image_path_set.contains(candidate));
 
-    for image_path in removed_image_paths {
-        remove_temp_image_file(&image_path);
+    for image_path in &removed_image_paths {
+        remove_temp_image_file(image_path);
     }
 
     removed_image_path_set.len()
@@ -1001,7 +1008,7 @@ fn has_conversation_image_history(state: &AppState) -> bool {
         .lock()
         .unwrap()
         .iter()
-        .any(|turn| turn.image_path.is_some())
+        .any(|turn| !turn.image_paths.is_empty() || !turn.user_image_data_urls.is_empty())
 }
 
 fn set_conversation_log_has_visible_images_state(
@@ -2538,9 +2545,9 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                 }
 
                 emit_call_stage(&app_handle_for_task, "thinking", "Thinking");
-                let latest_screen_capture_path =
-                    take_pending_screen_capture(app_handle_for_task.state::<AppState>().inner());
-                if latest_screen_capture_path.is_some() {
+                let latest_screen_capture_paths =
+                    take_pending_screen_captures(app_handle_for_task.state::<AppState>().inner());
+                if !latest_screen_capture_paths.is_empty() {
                     set_conversation_log_has_visible_images_state(
                         &app_handle_for_task,
                         app_handle_for_task.state::<AppState>().inner(),
@@ -2549,7 +2556,7 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                     emit_screen_capture_event(
                         &app_handle_for_task,
                         "consumed",
-                        "Screen region attached to this turn.",
+                        "Screens attached to this turn.",
                     );
                     refresh_tray_presentation(&app_handle_for_task);
                 }
@@ -2557,12 +2564,14 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                     &app_handle_for_task,
                     TranscriptEvent {
                         text: user_text.clone(),
-                        image_path: latest_screen_capture_path
-                            .as_ref()
-                            .map(|path| path.to_string_lossy().into_owned()),
-                        image_data_url: latest_screen_capture_path
-                            .as_deref()
-                            .and_then(load_image_data_url),
+                        image_paths: latest_screen_capture_paths
+                            .iter()
+                            .map(|path| path.to_string_lossy().into_owned())
+                            .collect(),
+                        image_data_urls: latest_screen_capture_paths
+                            .iter()
+                            .filter_map(|path| load_image_data_url(path))
+                            .collect(),
                     },
                 );
                 start_response_generation(
@@ -2573,7 +2582,7 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                     gemma_model,
                     user_text,
                     audio_path,
-                    latest_screen_capture_path,
+                    latest_screen_capture_paths,
                 );
             }
             Err(err) => {
@@ -2604,19 +2613,24 @@ fn start_response_generation(
     gemma_model: String,
     user_text: String,
     latest_audio_path: PathBuf,
-    latest_image_path: Option<PathBuf>,
+    latest_image_paths: Vec<PathBuf>,
 ) {
     let app_handle_for_task = app_handle.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let latest_audio_file = TempAudioFile::new(latest_audio_path);
-        let mut latest_image_file = latest_image_path.map(TempImageFile::new);
+        let latest_image_files: Vec<TempImageFile> =
+            latest_image_paths.into_iter().map(TempImageFile::new).collect();
         match stream_gemma_response_to_csm(
             &app_handle_for_task,
             server_port,
             &gemma_model,
             &user_text,
             Some(latest_audio_file.path()),
-            latest_image_file.as_ref().map(TempImageFile::path),
+            latest_image_files
+                .iter()
+                .map(TempImageFile::path)
+                .collect::<Vec<_>>()
+                .as_slice(),
         )
         .await
         {
@@ -2632,13 +2646,16 @@ fn start_response_generation(
                     return;
                 }
 
-                let persisted_image_path = latest_image_file.take().map(TempImageFile::release);
+                let persisted_image_paths: Vec<PathBuf> = latest_image_files
+                    .into_iter()
+                    .map(TempImageFile::release)
+                    .collect();
                 let (user_entry_id, assistant_entry_id) = append_conversation_turn_with_save(
                     &app_handle_for_task,
                     app_handle_for_task.state::<AppState>().inner(),
                     user_text.clone(),
                     response_text.clone(),
-                    persisted_image_path,
+                    persisted_image_paths,
                 );
 
                 let session_title = {
@@ -2923,7 +2940,7 @@ async fn stream_gemma_response_to_csm(
     gemma_model: &str,
     user_text: &str,
     latest_audio_path: Option<&Path>,
-    latest_image_path: Option<&Path>,
+    latest_image_paths: &[&Path],
 ) -> Result<(u64, String), String> {
     start_csm_server_inner(app_handle, app_handle.state::<AppState>().inner()).await?;
 
@@ -2942,9 +2959,9 @@ async fn stream_gemma_response_to_csm(
         (session_id, turns)
     };
     let has_latest_audio = latest_audio_path.is_some();
-    let has_any_image_context = latest_image_path.is_some()
+    let has_any_image_context = !latest_image_paths.is_empty()
         || conversation_turns.iter().any(|turn| {
-            turn.image_path.is_some() || turn.user_image_data_url.is_some()
+            !turn.image_paths.is_empty() || !turn.user_image_data_urls.is_empty()
         });
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
@@ -2965,8 +2982,8 @@ async fn stream_gemma_response_to_csm(
     for turn in &conversation_turns {
         messages.push(build_user_turn_message(
             &turn.user_text,
-            turn.image_path.as_deref(),
-            turn.user_image_data_url.as_deref(),
+            &turn.image_paths,
+            &turn.user_image_data_urls,
         ));
         messages.push(ChatMessage {
             role: "assistant".to_string(),
@@ -2979,7 +2996,7 @@ async fn stream_gemma_response_to_csm(
     messages.push(build_latest_user_turn_message(
         user_text,
         latest_audio_path,
-        latest_image_path,
+        latest_image_paths,
     ));
 
     let mut request = ChatRequest {
@@ -3492,32 +3509,23 @@ fn build_input_image_content(image_path: &Path) -> ChatContent {
 
 fn build_user_turn_message(
     user_text: &str,
-    image_path: Option<&Path>,
-    image_data_url: Option<&str>,
+    image_paths: &[PathBuf],
+    user_image_data_urls: &[String],
 ) -> ChatMessage {
     let mut content = Vec::new();
-
-    let mut attached_image_url = None;
-    if let Some(path) = image_path {
-        if path.exists() {
-            attached_image_url = Some(path.to_string_lossy().into_owned());
+    for image_data_url in user_image_data_urls {
+        content.push(ChatContent::InputImage {
+            image_url: image_data_url.clone(),
+        });
+    }
+    for image_path in image_paths {
+        if let Some(image_data_url) = load_image_data_url(image_path) {
+            content.push(ChatContent::InputImage { image_url: image_data_url });
         }
     }
-
-    if attached_image_url.is_none() {
-        if let Some(data_url) = image_data_url {
-            attached_image_url = Some(data_url.to_string());
-        }
-    }
-
-    if let Some(image_url) = attached_image_url {
-        content.push(ChatContent::InputImage { image_url });
-    }
-
     content.push(ChatContent::Text {
         text: user_text.to_string(),
     });
-
     ChatMessage {
         role: "user".to_string(),
         content,
@@ -3542,10 +3550,36 @@ fn build_llm_system_prompt(
 
 fn build_latest_user_turn_message(
     user_text: &str,
-    _latest_audio_path: Option<&Path>,
-    latest_image_path: Option<&Path>,
+    latest_audio_path: Option<&Path>,
+    latest_image_paths: &[&Path],
 ) -> ChatMessage {
-    build_user_turn_message(user_text, latest_image_path, None)
+    let mut content = Vec::new();
+
+    for image_path in latest_image_paths {
+        if let Some(image_data_url) = load_image_data_url(image_path) {
+            content.push(ChatContent::InputImage {
+                image_url: image_data_url,
+            });
+        }
+    }
+
+    if let Some(audio_path) = latest_audio_path {
+        if let Ok(audio_data) = std::fs::read(audio_path) {
+            content.push(ChatContent::InputAudio {
+                input_audio: InputAudio {
+                    data: BASE64_STANDARD.encode(audio_data),
+                    format: "wav".to_string(),
+                },
+            });
+        }
+    }
+    content.push(ChatContent::Text {
+        text: user_text.to_string(),
+    });
+    ChatMessage {
+        role: "user".to_string(),
+        content,
+    }
 }
 
 enum ParsedGemmaStreamEvent {
@@ -4689,8 +4723,6 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     if call_in_progress {
         let look_at_screen_label = if screen_capture_in_progress {
             "Selecting Screen..."
-        } else if has_pending_screen_capture {
-            "Replace Screen Region"
         } else {
             "Look at Screen Region"
         };
@@ -5568,15 +5600,14 @@ fn append_conversation_turn(
     state: &AppState,
     user_text: String,
     assistant_text: String,
-    image_path: Option<PathBuf>,
-    user_image_data_url: Option<String>,
+    image_paths: Vec<PathBuf>,
+    user_image_data_urls: Vec<String>,
 ) -> (u64, u64) {
-    if let Some(image_path) = image_path.as_ref() {
-        state
-            .conversation_image_paths
-            .lock()
-            .unwrap()
-            .push(image_path.clone());
+    {
+        let mut conversation_image_paths = state.conversation_image_paths.lock().unwrap();
+        for image_path in &image_paths {
+            conversation_image_paths.push(image_path.clone());
+        }
     }
 
     let user_entry_id = state
@@ -5591,13 +5622,15 @@ fn append_conversation_turn(
         assistant_entry_id,
         user_text,
         assistant_text,
-        image_path,
-        user_image_data_url,
+        image_paths,
+        user_image_data_urls,
+        image_path: None,
+        user_image_data_url: None,
     });
 
     while turns.len() > MAX_CONVERSATION_TURNS {
         if let Some(removed_turn) = turns.pop_front() {
-            if let Some(removed_image_path) = removed_turn.image_path {
+            for removed_image_path in removed_turn.image_paths {
                 unregister_conversation_image_path(state, &removed_image_path);
                 remove_temp_image_file(&removed_image_path);
             }
@@ -5612,32 +5645,44 @@ fn append_conversation_turn_with_save(
     state: &AppState,
     user_text: String,
     assistant_text: String,
-    image_path: Option<PathBuf>,
+    image_paths: Vec<PathBuf>,
 ) -> (u64, u64) {
-    let mut final_image_path = image_path;
-    let mut user_image_data_url = None;
-    if let Some(path) = final_image_path.as_ref() {
-        user_image_data_url = load_image_data_url(path);
-        if let Ok(session_id) = state.current_session_id.lock().unwrap().as_ref().ok_or("No session") {
+    let mut final_image_paths = Vec::new();
+    let mut user_image_data_urls = Vec::new();
+
+    for path in image_paths {
+        let mut current_path = path;
+        if let Some(data_url) = load_image_data_url(&current_path) {
+            user_image_data_urls.push(data_url);
+        }
+
+        if let Ok(session_id) = state
+            .current_session_id
+            .lock()
+            .unwrap()
+            .as_ref()
+            .ok_or("No session")
+        {
             if let Ok(images_dir) = resolve_session_images_dir(app_handle, session_id) {
-                if let Some(file_name) = path.file_name() {
+                if let Some(file_name) = current_path.file_name() {
                     let dest_path = images_dir.join(file_name);
-                    if let Err(err) = std::fs::rename(path, &dest_path) {
+                    if let Err(err) = std::fs::rename(&current_path, &dest_path) {
                         error!("Failed to move image to session directory: {}", err);
                     } else {
-                        final_image_path = Some(dest_path);
+                        current_path = dest_path;
                     }
                 }
             }
         }
+        final_image_paths.push(current_path);
     }
 
     let res = append_conversation_turn(
         state,
         user_text,
         assistant_text,
-        final_image_path,
-        user_image_data_url,
+        final_image_paths,
+        user_image_data_urls,
     );
 
     // Auto-title if it's the first turn and no title is set
@@ -5659,17 +5704,21 @@ fn append_conversation_turn_with_save(
 }
 
 fn has_pending_screen_capture(state: &AppState) -> bool {
-    state.pending_screen_capture.lock().unwrap().is_some()
+    !state.pending_screen_captures.lock().unwrap().is_empty()
 }
 
-fn pending_screen_capture_file_name(state: &AppState) -> Option<String> {
+pub(crate) fn pending_screen_capture_file_name(state: &AppState) -> Option<String> {
     state
-        .pending_screen_capture
+        .pending_screen_captures
         .lock()
         .unwrap()
-        .as_ref()
+        .last()
         .and_then(|path| path.file_name())
         .map(|name| name.to_string_lossy().into_owned())
+}
+
+pub(crate) fn pending_screen_capture_count(state: &AppState) -> usize {
+    state.pending_screen_captures.lock().unwrap().len()
 }
 
 fn truncate_tray_label(text: &str, max_chars: usize) -> String {
@@ -5696,28 +5745,21 @@ fn truncate_tray_label(text: &str, max_chars: usize) -> String {
     format!("{prefix}...{suffix}")
 }
 
-fn replace_pending_screen_capture(state: &AppState, path: PathBuf) {
-    let previous = {
-        let mut pending_screen_capture_guard = state.pending_screen_capture.lock().unwrap();
-        pending_screen_capture_guard.replace(path)
-    };
-    if let Some(previous_path) = previous {
-        remove_temp_image_file(&previous_path);
-    }
+fn add_pending_screen_capture(state: &AppState, path: PathBuf) {
+    state.pending_screen_captures.lock().unwrap().push(path);
 }
 
-fn take_pending_screen_capture(state: &AppState) -> Option<PathBuf> {
-    state.pending_screen_capture.lock().unwrap().take()
+fn take_pending_screen_captures(state: &AppState) -> Vec<PathBuf> {
+    std::mem::take(&mut *state.pending_screen_captures.lock().unwrap())
 }
 
 fn clear_pending_screen_capture_state(state: &AppState) -> bool {
-    let previous = state.pending_screen_capture.lock().unwrap().take();
-    if let Some(previous_path) = previous {
+    let previous = std::mem::take(&mut *state.pending_screen_captures.lock().unwrap());
+    let had_pending = !previous.is_empty();
+    for previous_path in previous {
         remove_temp_image_file(&previous_path);
-        return true;
     }
-
-    false
+    had_pending
 }
 
 fn current_conversation_session_id(state: &AppState) -> u64 {
@@ -6087,7 +6129,7 @@ async fn capture_screen_selection_inner(app_handle: &AppHandle) -> Result<(), St
 
     match capture_result {
         Ok(Some(path)) => {
-            replace_pending_screen_capture(state.inner(), path);
+            add_pending_screen_capture(state.inner(), path);
             emit_screen_capture_event(
                 app_handle,
                 "ready",
@@ -6164,7 +6206,7 @@ async fn capture_entire_screen_inner(app_handle: &AppHandle) -> Result<(), Strin
 
     match capture_result {
         Ok(Some(path)) => {
-            replace_pending_screen_capture(state.inner(), path);
+            add_pending_screen_capture(state.inner(), path);
             emit_screen_capture_event(
                 app_handle,
                 "ready",
@@ -6986,7 +7028,21 @@ async fn load_session(app_handle: AppHandle, state: State<'_, AppState>, session
     }
 
     let content = std::fs::read_to_string(session_file).map_err(|err| err.to_string())?;
-    let data: SessionData = serde_json::from_str(&content).map_err(|err| err.to_string())?;
+    let mut data: SessionData = serde_json::from_str(&content).map_err(|err| err.to_string())?;
+
+    // Migrate old single-image turns to the new multi-image format
+    for turn in &mut data.turns {
+        if let Some(path) = turn.image_path.take() {
+            if !turn.image_paths.contains(&path) {
+                turn.image_paths.push(path);
+            }
+        }
+        if let Some(data_url) = turn.user_image_data_url.take() {
+            if !turn.user_image_data_urls.contains(&data_url) {
+                turn.user_image_data_urls.push(data_url);
+            }
+        }
+    }
 
     {
         let mut turns_guard = state.conversation_turns.lock().unwrap();
@@ -7968,7 +8024,7 @@ pub fn run() {
             active_generation: Mutex::new(None),
             conversation_turns: Mutex::new(VecDeque::new()),
             conversation_image_paths: Mutex::new(Vec::new()),
-            pending_screen_capture: Mutex::new(None),
+            pending_screen_captures: Mutex::new(Vec::new()),
             screen_capture_in_progress: Mutex::new(false),
             transient_tray_title: Mutex::new(None),
             transient_tray_icon: Mutex::new(None),

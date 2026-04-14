@@ -46,7 +46,8 @@ export type CallStageEvent = {
 
 export type TranscriptEvent = {
     text: string;
-    imageDataUrl?: string | null;
+    imagePaths: string[];
+    imageDataUrls: string[];
 };
 
 export type AssistantResponseEvent = {
@@ -67,6 +68,7 @@ export type ScreenCaptureEvent = {
     phase: ScreenCapturePhase;
     message: string;
     hasPendingAttachment: boolean;
+    attachmentCount: number;
     fileName?: string | null;
 };
 
@@ -132,7 +134,7 @@ export type ConversationLogEntry = {
     id: number;
     role: "user" | "assistant";
     text: string;
-    imageUrl: string | null;
+    imageUrls: string[];
     contextEntryId: number | null;
 };
 
@@ -217,8 +219,8 @@ export type SessionMetadata = {
 export type ConversationTurn = {
     user_entry_id: number;
     assistant_entry_id: number;
-    user_text: string;
-    assistant_text: string;
-    image_path?: string | null;
-    user_image_data_url?: string | null;
+    user_text: String;
+    assistant_text: String;
+    image_paths: string[];
+    user_image_data_urls: string[];
 };
