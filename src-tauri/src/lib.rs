@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::Menu;
@@ -215,6 +215,7 @@ impl Drop for TempImageFile {
 struct ActiveGeneration {
     id: u64,
     handle: tauri::async_runtime::JoinHandle<()>,
+    cancellation_token: Arc<AtomicBool>,
 }
 
 #[derive(Deserialize)]
@@ -2331,44 +2332,56 @@ fn suppress_playback_echo(mut payload: AudioPayload) -> PreparedAudioChunk {
 }
 
 #[tauri::command]
-fn receive_audio_chunk(
+async fn receive_audio_chunk(
     payload: AudioPayload,
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
-) {
+) -> Result<(), String> {
     if payload.data.is_empty() {
-        return;
+        return Ok(());
     }
 
     let capture_sample_rate = resolve_capture_sample_rate(payload.sample_rate);
     let prepared_chunk = suppress_playback_echo(payload);
     if prepared_chunk.samples.is_empty() {
-        return;
+        return Ok(());
     }
     let silence_chunks_required =
         required_silence_chunks(capture_sample_rate, prepared_chunk.samples.len());
+
+    let mut detected_speech = false;
+    {
+        let mut silent_count = state.silent_chunks_count.lock().unwrap();
+        let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
+        let mut is_speaking = state.is_speaking.lock().unwrap();
+
+        let rms = prepared_chunk.rms;
+
+        if rms > SILENCE_THRESHOLD {
+            *speaking_count += 1;
+            *silent_count = 0;
+        } else {
+            *silent_count += 1;
+            if *silent_count > 5 {
+                *speaking_count = 0;
+            }
+        }
+
+        if !*is_speaking && *speaking_count >= MIN_SPEAKING_CHUNKS {
+            *is_speaking = true;
+            detected_speech = true;
+            info!("Speech detected, immediately interrupting active generation");
+        }
+    }
+
+    if detected_speech {
+        interrupt_active_generation(&app_handle).await;
+    }
 
     let mut buffer = state.audio_buffer.lock().unwrap();
     let mut silent_count = state.silent_chunks_count.lock().unwrap();
     let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
     let mut is_speaking = state.is_speaking.lock().unwrap();
-
-    let rms = prepared_chunk.rms;
-
-    if rms > SILENCE_THRESHOLD {
-        *speaking_count += 1;
-        *silent_count = 0;
-    } else {
-        *silent_count += 1;
-        if *silent_count > 5 {
-            *speaking_count = 0;
-        }
-    }
-
-    if !*is_speaking && *speaking_count >= MIN_SPEAKING_CHUNKS {
-        *is_speaking = true;
-        info!("Speech detected");
-    }
 
     if *is_speaking {
         buffer.extend_from_slice(&prepared_chunk.samples);
@@ -2383,6 +2396,7 @@ fn receive_audio_chunk(
             *speaking_count = 0;
         }
     }
+    Ok(())
 }
 
 fn required_silence_chunks(sample_rate: u32, chunk_sample_count: usize) -> usize {
@@ -2616,6 +2630,8 @@ fn start_response_generation(
     latest_image_paths: Vec<PathBuf>,
 ) {
     let app_handle_for_task = app_handle.clone();
+    let cancellation_token = Arc::new(AtomicBool::new(false));
+    let cancellation_token_for_task = cancellation_token.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let latest_audio_file = TempAudioFile::new(latest_audio_path);
         let latest_image_files: Vec<TempImageFile> =
@@ -2631,6 +2647,7 @@ fn start_response_generation(
                 .map(TempImageFile::path)
                 .collect::<Vec<_>>()
                 .as_slice(),
+            cancellation_token_for_task,
         )
         .await
         {
@@ -2696,6 +2713,7 @@ fn start_response_generation(
         app_handle.state::<AppState>().inner(),
         generation_id,
         handle,
+        cancellation_token,
     ) {
         warn!(
             "Skipping response generation {} because a newer generation is already active",
@@ -2941,6 +2959,7 @@ async fn stream_gemma_response_to_csm(
     user_text: &str,
     latest_audio_path: Option<&Path>,
     latest_image_paths: &[&Path],
+    cancellation_token: Arc<AtomicBool>,
 ) -> Result<(u64, String), String> {
     start_csm_server_inner(app_handle, app_handle.state::<AppState>().inner()).await?;
 
@@ -3085,6 +3104,14 @@ async fn stream_gemma_response_to_csm(
         .await
         .map_err(|e| format!("Failed while reading Gemma stream: {e}"))?
     {
+        if cancellation_token.load(Ordering::Relaxed) {
+            info!("Gemma stream cancelled by user request");
+            if !raw_response_text.is_empty() {
+                raw_response_text.push_str(" [Interrupted]");
+            }
+            saw_stream_done = true;
+            break;
+        }
         raw_body.extend_from_slice(&chunk);
         sse_buffer.extend(chunk.iter().copied().filter(|byte| *byte != b'\r'));
 
@@ -5510,7 +5537,26 @@ async fn cancel_active_generation(app_handle: &tauri::AppHandle, stop_csm_worker
 
     if let Some(active_generation) = active_generation {
         info!("Interrupting active generation {}", active_generation.id);
-        active_generation.handle.abort();
+        active_generation.cancellation_token.store(true, Ordering::Relaxed);
+        // We give it a moment to handle cancellation gracefully (e.g. saving partial history)
+        // but we still abort to ensure it doesn't hang forever if the loop is blocked.
+        let handle = active_generation.handle;
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            handle.abort();
+        });
+    } else {
+        // If no active generation, check if we should mark the last turn as interrupted
+        // (this covers cases where LLM finished but TTS was still playing)
+        let mut turns = state.conversation_turns.lock().unwrap();
+        if let Some(last_turn) = turns.back_mut() {
+            if !last_turn.assistant_text.contains("[Interrupted]") {
+                info!("Marking last assistant turn as interrupted in history");
+                last_turn.assistant_text.push_str(" [Interrupted]");
+                drop(turns);
+                let _ = save_current_session(app_handle, state.inner());
+            }
+        }
     }
 
     set_tts_playback_active_state(app_handle, false);
@@ -5563,6 +5609,7 @@ fn register_active_generation_if_newer(
     state: &AppState,
     generation_id: u64,
     handle: tauri::async_runtime::JoinHandle<()>,
+    cancellation_token: Arc<AtomicBool>,
 ) -> bool {
     let mut active_generation_guard = state.active_generation.lock().unwrap();
 
@@ -5576,12 +5623,16 @@ fn register_active_generation_if_newer(
     }
 
     if let Some(previous_generation) = active_generation_guard.take() {
+        previous_generation
+            .cancellation_token
+            .store(true, Ordering::Relaxed);
         previous_generation.handle.abort();
     }
 
     *active_generation_guard = Some(ActiveGeneration {
         id: generation_id,
         handle,
+        cancellation_token,
     });
     true
 }
