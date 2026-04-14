@@ -3739,6 +3739,11 @@
         const handleClickOutside = (event: MouseEvent) => {
             const target = event.target as HTMLElement;
 
+            // If the image preview is open, don't close other popups
+            if (previewImageUrl) {
+                return;
+            }
+
             // Check Sessions Popup
             if (
                 showSessionsPopup &&
