@@ -4331,14 +4331,14 @@ mod tests {
 
     #[test]
     fn required_silence_chunks_scales_with_sample_rate() {
-        assert_eq!(required_silence_chunks(44_100, 128), 517);
-        assert_eq!(required_silence_chunks(48_000, 128), 563);
+        assert_eq!(required_silence_chunks(44_100, 128), 862);
+        assert_eq!(required_silence_chunks(48_000, 128), 938);
     }
 
     #[test]
     fn required_silence_chunks_respects_chunk_size() {
-        assert_eq!(required_silence_chunks(48_000, 256), 282);
-        assert_eq!(required_silence_chunks(48_000, 1024), 71);
+        assert_eq!(required_silence_chunks(48_000, 256), 469);
+        assert_eq!(required_silence_chunks(48_000, 1024), 118);
     }
 
     #[test]
