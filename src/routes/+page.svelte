@@ -31,11 +31,16 @@
         DEFAULT_CONTACT_ID,
         DEFAULT_CSM_MODEL,
         DEFAULT_GEMMA_VARIANT,
+        DEFAULT_OLLAMA_MODEL,
         DEFAULT_STT_MODEL,
         DEFAULT_VOICE_SYSTEM_PROMPT,
         MODEL_PREFERENCES_STORAGE_KEY,
         MODEL_PRESETS,
         PONG_PLAYBACK_STORAGE_KEY,
+        GLOBAL_SHORTCUT_STORAGE_KEY,
+        GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
+        DEFAULT_GLOBAL_SHORTCUT,
+        DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
     } from "$lib/openduck/config";
     import {
         formatDownloadPercent,
@@ -175,6 +180,10 @@
     let activePongSource = $state<AudioBufferSourceNode | null>(null);
     let activePongGainNode = $state<GainNode | null>(null);
     let pongPlaybackEnabled = $state(true);
+    let globalShortcut = $state(DEFAULT_GLOBAL_SHORTCUT);
+    let globalShortcutEntireScreen = $state(
+        DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
+    );
     let contacts = $state<ContactProfile[]>([createDefaultContact()]);
     let selectedContactId = $state(DEFAULT_CONTACT_ID);
     let showContactsPopup = $state(false);
@@ -862,6 +871,160 @@
         }
 
         applyPongPlaybackPreference(effectiveEnabled);
+    }
+
+    function persistGlobalShortcutPreference(shortcut: string) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload = {
+            version: 1,
+            shortcut,
+        };
+        window.localStorage.setItem(
+            GLOBAL_SHORTCUT_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function loadGlobalShortcutPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_GLOBAL_SHORTCUT;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            GLOBAL_SHORTCUT_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_GLOBAL_SHORTCUT;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                shortcut?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.shortcut !== "string") {
+                return DEFAULT_GLOBAL_SHORTCUT;
+            }
+
+            return parsed.shortcut;
+        } catch (err) {
+            console.error("Failed to restore global shortcut preference:", err);
+            return DEFAULT_GLOBAL_SHORTCUT;
+        }
+    }
+
+    async function applyGlobalShortcutPreference(shortcut: string) {
+        try {
+            const effectiveShortcut = await invoke<string>(
+                "set_global_shortcut_look_at_screen_region",
+                { shortcutStr: shortcut },
+            );
+            globalShortcut = effectiveShortcut;
+            persistGlobalShortcutPreference(effectiveShortcut);
+        } catch (err) {
+            console.error("Failed to apply global shortcut preference:", err);
+            // If failed to apply, we don't update the state or persist
+            alert(`Failed to set shortcut: ${err}`);
+        }
+    }
+
+    async function initializeGlobalShortcutPreference() {
+        const storedShortcut = loadGlobalShortcutPreferenceFromStorage();
+        try {
+            const effectiveShortcut = await invoke<string>(
+                "initialize_global_shortcut_look_at_screen_region",
+                { shortcutStr: storedShortcut },
+            );
+            globalShortcut = effectiveShortcut;
+        } catch (err) {
+            console.error(
+                "Failed to initialize global shortcut preference:",
+                err,
+            );
+        }
+    }
+
+    function persistGlobalShortcutEntireScreenPreference(shortcut: string) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload = {
+            version: 1,
+            shortcut,
+        };
+        window.localStorage.setItem(
+            GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function loadGlobalShortcutEntireScreenPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                shortcut?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.shortcut !== "string") {
+                return DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN;
+            }
+
+            return parsed.shortcut;
+        } catch (err) {
+            console.error(
+                "Failed to restore global shortcut (entire screen) preference:",
+                err,
+            );
+            return DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN;
+        }
+    }
+
+    async function applyGlobalShortcutEntireScreenPreference(shortcut: string) {
+        try {
+            const effectiveShortcut = await invoke<string>(
+                "set_global_shortcut_look_at_entire_screen",
+                { shortcutStr: shortcut },
+            );
+            globalShortcutEntireScreen = effectiveShortcut;
+            persistGlobalShortcutEntireScreenPreference(effectiveShortcut);
+        } catch (err) {
+            console.error(
+                "Failed to apply global shortcut (entire screen) preference:",
+                err,
+            );
+            alert(`Failed to set shortcut: ${err}`);
+        }
+    }
+
+    async function initializeGlobalShortcutEntireScreenPreference() {
+        const storedShortcut =
+            loadGlobalShortcutEntireScreenPreferenceFromStorage();
+        try {
+            const effectiveShortcut = await invoke<string>(
+                "initialize_global_shortcut_look_at_entire_screen",
+                { shortcutStr: storedShortcut },
+            );
+            globalShortcutEntireScreen = effectiveShortcut;
+        } catch (err) {
+            console.error(
+                "Failed to initialize global shortcut (entire screen) preference:",
+                err,
+            );
+        }
     }
 
     async function deleteConversationLogEntry(entryId: number) {
@@ -3726,6 +3889,8 @@
             await restoreModelPreferences();
             await syncOllamaConfig();
             await initializePongPlaybackPreference();
+            await initializeGlobalShortcutPreference();
+            await initializeGlobalShortcutEntireScreenPreference();
             await loadSessions();
             await ensureRuntimeDependencies();
             await syncModelStatus();
@@ -3837,7 +4002,7 @@
 <div class="app-container" class:contacts-open={showContactsPopup}>
     <div class="background" style={selectedContactImageStyle}></div>
 
-    {#if !isPreparingRuntime && !showContactsPopup}
+    {#if !isPreparingRuntime && !showContactsPopup && !showAboutPopup}
         <AppHeader
             {currentSessionTitle}
             {showSessionsPopup}
@@ -4167,6 +4332,10 @@
                     installAvailableUpdate={installAppUpdate}
                     {restartToApplyUpdate}
                     {closeAboutPopup}
+                    {globalShortcut}
+                    {globalShortcutEntireScreen}
+                    onUpdateGlobalShortcut={applyGlobalShortcutPreference}
+                    onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
                 />
             </div>
         {/if}
@@ -4244,7 +4413,7 @@
                         class="icon-btn about-btn"
                         class:active={showAboutPopup}
                         onclick={toggleAboutPopup}
-                        aria-label="Show app info"
+                        aria-label="Settings"
                         aria-controls="about-popup"
                         aria-expanded={showAboutPopup}
                     >
@@ -4260,9 +4429,10 @@
                             stroke-linejoin="round"
                             aria-hidden="true"
                         >
-                            <circle cx="12" cy="12" r="9" />
-                            <path d="M12 10v6" />
-                            <path d="M12 7h.01" />
+                            <path
+                                d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+                            />
+                            <circle cx="12" cy="12" r="3" />
                         </svg>
                     </button>
                 {/if}

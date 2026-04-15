@@ -583,6 +583,40 @@ main.idle-layout {
     align-items: start;
 }
 
+.shortcut-row {
+    align-items: center;
+}
+
+.shortcut-input-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.shortcut-input {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #fff;
+    padding: 6px 10px;
+    font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+    font-size: 0.9rem;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.shortcut-input:focus {
+    outline: none;
+    border-color: rgba(255, 205, 64, 0.4);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.shortcut-hint {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.72rem;
+    letter-spacing: 0.01em;
+}
+
 .about-metadata-label {
     color: rgba(255, 246, 214, 0.72);
     font-size: 0.78rem;

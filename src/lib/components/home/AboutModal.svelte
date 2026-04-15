@@ -9,6 +9,7 @@
         AppUpdateStatus,
         BuildInfo,
     } from "$lib/openduck/types";
+    import ShortcutCapture from "./ShortcutCapture.svelte";
 
     let {
         buildInfo,
@@ -20,6 +21,10 @@
         installAvailableUpdate,
         restartToApplyUpdate,
         closeAboutPopup,
+        globalShortcut,
+        globalShortcutEntireScreen,
+        onUpdateGlobalShortcut,
+        onUpdateGlobalShortcutEntireScreen,
     } = $props<{
         buildInfo: BuildInfo | null;
         buildInfoError: string | null;
@@ -30,11 +35,25 @@
         installAvailableUpdate: () => void;
         restartToApplyUpdate: () => void;
         closeAboutPopup: () => void;
+        globalShortcut: string;
+        globalShortcutEntireScreen: string;
+        onUpdateGlobalShortcut: (shortcut: string) => void;
+        onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
     }>();
 
     let copyState = $state<"idle" | "copied" | "failed">("idle");
     let copyResetTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let isRefreshing = $state(false);
+    let editedShortcut = $state(globalShortcut);
+    let editedShortcutEntireScreen = $state(globalShortcutEntireScreen);
+
+    $effect(() => {
+        editedShortcut = globalShortcut;
+    });
+
+    $effect(() => {
+        editedShortcutEntireScreen = globalShortcutEntireScreen;
+    });
 
     function clearCopyFeedback() {
         if (copyResetTimeout) {
@@ -147,7 +166,7 @@
 <button
     type="button"
     class="about-modal-backdrop"
-    aria-label="Close About OpenDuck"
+    aria-label="Close Settings"
     onclick={closeAboutPopup}
 ></button>
 
@@ -160,14 +179,14 @@
 >
     <div class="about-modal-header">
         <div class="about-modal-copy">
-            <span class="about-modal-title" id="about-modal-title">About</span>
-            <span class="about-modal-subtitle">Build and release metadata</span>
+            <span class="about-modal-title" id="about-modal-title">Settings</span>
+            <span class="about-modal-subtitle">App configuration and build metadata</span>
         </div>
         <button
             type="button"
             class="conversation-close-btn"
             onclick={closeAboutPopup}
-            aria-label="Close About OpenDuck"
+            aria-label="Close Settings"
         >
             <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -206,56 +225,30 @@
         </div>
 
         <div class="about-metadata-card">
-            {#if buildInfo.git_sha}
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label">Commit</span>
-                    <span class="about-metadata-value about-metadata-mono">
-                        {buildInfo.git_sha}
-                    </span>
+            <div class="about-metadata-row shortcut-row">
+                <span class="about-metadata-label">Look at Screen Region (During Call)</span>
+                <div class="shortcut-input-wrapper">
+                    <ShortcutCapture
+                        value={editedShortcut}
+                        onUpdate={(newValue) => {
+                            editedShortcut = newValue;
+                            onUpdateGlobalShortcut(newValue);
+                        }}
+                    />
                 </div>
-            {/if}
-            <div class="about-metadata-row">
-                <span class="about-metadata-label">Build ID</span>
-                <span class="about-metadata-value about-metadata-mono">
-                    {buildInfo.build_id ?? buildInfo.version}
-                </span>
             </div>
-            {#if buildInfo.build_channel}
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label">Channel</span>
-                    <span class="about-metadata-value"
-                        >{buildInfo.build_channel}</span
-                    >
+            <div class="about-metadata-row shortcut-row">
+                <span class="about-metadata-label">Look at Entire Screen (During Call)</span>
+                <div class="shortcut-input-wrapper">
+                    <ShortcutCapture
+                        value={editedShortcutEntireScreen}
+                        onUpdate={(newValue) => {
+                            editedShortcutEntireScreen = newValue;
+                            onUpdateGlobalShortcutEntireScreen(newValue);
+                        }}
+                    />
                 </div>
-            {/if}
-            {#if buildInfo.build_number}
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label">Build Number</span>
-                    <span class="about-metadata-value"
-                        >{buildInfo.build_number}</span
-                    >
-                </div>
-            {/if}
-            {#if buildInfo.is_dirty}
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label">Working Tree</span>
-                    <div class="about-metadata-value-stack">
-                        <span
-                            class="about-metadata-value about-metadata-warning"
-                            >Local Changes</span
-                        >
-                        {#if buildInfo.dirty_files && buildInfo.dirty_files.length > 0}
-                            <div class="about-metadata-files">
-                                {#each buildInfo.dirty_files as file}
-                                    <div class="about-metadata-file">
-                                        {file}
-                                    </div>
-                                {/each}
-                            </div>
-                        {/if}
-                    </div>
-                </div>
-            {/if}
+            </div>
         </div>
 
         <div class="about-update-card">

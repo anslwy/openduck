@@ -48,6 +48,7 @@
     ]
   },
   "plugins": {
+    "global-shortcut": null,
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZBRThCNEI3MUFEMzZGNUIKUldSYmI5TWF0N1RvK2hRUnNxRXNPY2dSVENzVFdnR3lNYzE1c2VZYUxoTVh3R1JxRUJJTFRtVkcK",
       "endpoints": []

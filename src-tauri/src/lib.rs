@@ -27,6 +27,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState, Shortcut};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
@@ -337,12 +338,19 @@ struct AppState {
     selected_ollama_model: Mutex<String>,
     ollama_base_url: Mutex<String>,
     ollama_api_key: Mutex<Option<String>>,
+    global_shortcut_look_at_screen_region: Mutex<String>,
+    global_shortcut_look_at_screen_region_hydrated: Mutex<bool>,
+    global_shortcut_look_at_screen_region_modified_before_hydration: Mutex<bool>,
+    global_shortcut_look_at_entire_screen: Mutex<String>,
+    global_shortcut_look_at_entire_screen_hydrated: Mutex<bool>,
+    global_shortcut_look_at_entire_screen_modified_before_hydration: Mutex<bool>,
     next_conversation_entry_id: AtomicU64,
     last_tray_icon_variant: Mutex<Option<TrayIconVariant>>,
     last_tray_menu_state: Mutex<Option<TrayMenuState>>,
     last_tray_title: Mutex<Option<String>>,
     is_quitting: Mutex<bool>,
     vad: Mutex<Option<vad::Silero>>,
+    screen_capture_child: Mutex<Option<std::process::Child>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -654,6 +662,221 @@ fn get_build_info() -> BuildInfo {
 }
 
 #[tauri::command]
+fn get_global_shortcut_look_at_entire_screen(state: State<'_, AppState>) -> String {
+    state
+        .global_shortcut_look_at_entire_screen
+        .lock()
+        .unwrap()
+        .clone()
+}
+
+#[tauri::command]
+fn initialize_global_shortcut_look_at_entire_screen(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    shortcut_str: String,
+) -> String {
+    let mut hydrated = state
+        .global_shortcut_look_at_entire_screen_hydrated
+        .lock()
+        .unwrap();
+    let mut modified_before_hydration = state
+        .global_shortcut_look_at_entire_screen_modified_before_hydration
+        .lock()
+        .unwrap();
+    let mut current_shortcut_str = state
+        .global_shortcut_look_at_entire_screen
+        .lock()
+        .unwrap();
+
+    if !*hydrated {
+        if !*modified_before_hydration && *current_shortcut_str != shortcut_str {
+            // Unregister old
+            if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+                let _ = app_handle.global_shortcut().unregister(old_shortcut);
+            }
+
+            // Register new
+            if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
+                if let Err(err) = app_handle.global_shortcut().register(new_shortcut) {
+                    error!("Failed to register new global shortcut: {}", err);
+                } else {
+                    *current_shortcut_str = shortcut_str;
+                }
+            }
+        }
+
+        *hydrated = true;
+        *modified_before_hydration = false;
+    }
+
+    let effective_shortcut = current_shortcut_str.clone();
+    drop(current_shortcut_str);
+    drop(modified_before_hydration);
+    drop(hydrated);
+
+    effective_shortcut
+}
+
+#[tauri::command]
+fn set_global_shortcut_look_at_entire_screen(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    shortcut_str: String,
+) -> Result<String, String> {
+    let mut current_shortcut_str = state
+        .global_shortcut_look_at_entire_screen
+        .lock()
+        .unwrap();
+
+    if *current_shortcut_str == shortcut_str {
+        return Ok(shortcut_str);
+    }
+
+    // Try to parse the new shortcut first to validate it
+    let new_shortcut = shortcut_str
+        .parse::<Shortcut>()
+        .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+    // Unregister old
+    if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+        let _ = app_handle.global_shortcut().unregister(old_shortcut);
+    }
+
+    // Register new
+    app_handle
+        .global_shortcut()
+        .register(new_shortcut)
+        .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+
+    *current_shortcut_str = shortcut_str.clone();
+
+    let hydrated = state
+        .global_shortcut_look_at_entire_screen_hydrated
+        .lock()
+        .unwrap();
+    if !*hydrated {
+        let mut modified_before_hydration = state
+            .global_shortcut_look_at_entire_screen_modified_before_hydration
+            .lock()
+            .unwrap();
+        *modified_before_hydration = true;
+    }
+
+    refresh_tray_menu(&app_handle);
+
+    Ok(shortcut_str)
+}
+
+#[tauri::command]
+fn get_global_shortcut_look_at_screen_region(state: State<'_, AppState>) -> String {
+    state
+        .global_shortcut_look_at_screen_region
+        .lock()
+        .unwrap()
+        .clone()
+}
+
+#[tauri::command]
+fn initialize_global_shortcut_look_at_screen_region(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    shortcut_str: String,
+) -> String {
+    let mut hydrated = state
+        .global_shortcut_look_at_screen_region_hydrated
+        .lock()
+        .unwrap();
+    let mut modified_before_hydration = state
+        .global_shortcut_look_at_screen_region_modified_before_hydration
+        .lock()
+        .unwrap();
+    let mut current_shortcut_str = state
+        .global_shortcut_look_at_screen_region
+        .lock()
+        .unwrap();
+
+    if !*hydrated {
+        if !*modified_before_hydration && *current_shortcut_str != shortcut_str {
+            // Unregister old
+            if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+                let _ = app_handle.global_shortcut().unregister(old_shortcut);
+            }
+
+            // Register new
+            if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
+                if let Err(err) = app_handle.global_shortcut().register(new_shortcut) {
+                    error!("Failed to register new global shortcut: {}", err);
+                } else {
+                    *current_shortcut_str = shortcut_str;
+                }
+            }
+        }
+
+        *hydrated = true;
+        *modified_before_hydration = false;
+    }
+
+    let effective_shortcut = current_shortcut_str.clone();
+    drop(current_shortcut_str);
+    drop(modified_before_hydration);
+    drop(hydrated);
+
+    effective_shortcut
+}
+
+#[tauri::command]
+fn set_global_shortcut_look_at_screen_region(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    shortcut_str: String,
+) -> Result<String, String> {
+    let mut current_shortcut_str = state
+        .global_shortcut_look_at_screen_region
+        .lock()
+        .unwrap();
+
+    if *current_shortcut_str == shortcut_str {
+        return Ok(shortcut_str);
+    }
+
+    // Try to parse the new shortcut first to validate it
+    let new_shortcut = shortcut_str
+        .parse::<Shortcut>()
+        .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+    // Unregister old
+    if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+        let _ = app_handle.global_shortcut().unregister(old_shortcut);
+    }
+
+    // Register new
+    app_handle
+        .global_shortcut()
+        .register(new_shortcut)
+        .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+
+    *current_shortcut_str = shortcut_str.clone();
+
+    let hydrated = state
+        .global_shortcut_look_at_screen_region_hydrated
+        .lock()
+        .unwrap();
+    if !*hydrated {
+        let mut modified_before_hydration = state
+            .global_shortcut_look_at_screen_region_modified_before_hydration
+            .lock()
+            .unwrap();
+        *modified_before_hydration = true;
+    }
+
+    refresh_tray_menu(&app_handle);
+
+    Ok(shortcut_str)
+}
+
+
+#[tauri::command]
 async fn check_for_app_update(
     app_handle: AppHandle,
     pending_update: State<'_, PendingAppUpdate>,
@@ -718,6 +941,7 @@ async fn refresh_runtime_caches(
     info!("Restarting application...");
     app_handle.restart();
 
+    #[allow(unreachable_code)]
     Ok(())
 }
 
@@ -1817,7 +2041,7 @@ async fn set_csm_voice(
 
 #[tauri::command]
 async fn set_csm_reference_voice(
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
     ref_audio_data_url: Option<String>,
     ref_text: Option<String>,
@@ -4773,10 +4997,13 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
 
     let mut builder = MenuBuilder::new(app_handle).text(TRAY_SHOW_MENU_ID, "Show OpenDuck");
     if call_in_progress {
+        let region_shortcut_str = state.global_shortcut_look_at_screen_region.lock().unwrap().clone();
+        let entire_shortcut_str = state.global_shortcut_look_at_entire_screen.lock().unwrap().clone();
+
         let look_at_screen_label = if screen_capture_in_progress {
-            "Selecting Screen..."
+            "Selecting Screen...".to_string()
         } else {
-            "Look at Screen Region"
+            format!("Look at Screen Region ({})", region_shortcut_str)
         };
         let look_at_screen_item =
             match MenuItemBuilder::with_id(TRAY_LOOK_AT_SCREEN_MENU_ID, look_at_screen_label)
@@ -4793,7 +5020,7 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
 
         let look_at_entire_screen_item = match MenuItemBuilder::with_id(
             TRAY_LOOK_AT_ENTIRE_SCREEN_MENU_ID,
-            "Look at Entire Screen",
+            format!("Look at Entire Screen ({})", entire_shortcut_str),
         )
         .enabled(!screen_capture_in_progress)
         .build(app_handle)
@@ -6187,7 +6414,7 @@ async fn capture_screen_selection_inner(app_handle: &AppHandle) -> Result<(), St
     };
     emit_screen_capture_event(app_handle, "capturing", capture_prompt);
 
-    let capture_result = run_interactive_screen_capture().await;
+    let capture_result = run_interactive_screen_capture(app_handle).await;
 
     {
         let mut in_progress_guard = state.screen_capture_in_progress.lock().unwrap();
@@ -6306,25 +6533,62 @@ async fn capture_entire_screen_inner(app_handle: &AppHandle) -> Result<(), Strin
 }
 
 #[cfg(target_os = "macos")]
-async fn run_interactive_screen_capture() -> Result<Option<PathBuf>, String> {
+async fn run_interactive_screen_capture(app_handle: &AppHandle) -> Result<Option<PathBuf>, String> {
     let capture_path = create_temp_screen_capture_path();
-    let (capture_path, output) = tauri::async_runtime::spawn_blocking(move || {
-        std::process::Command::new("/usr/sbin/screencapture")
-            .args(["-i", "-x"])
-            .arg(&capture_path)
-            .output()
-            .map(|output| (capture_path, output))
-            .map_err(|err| format!("Failed to launch screencapture: {err}"))
+
+    let child = std::process::Command::new("/usr/sbin/screencapture")
+        .args(["-i", "-x"])
+        .arg(&capture_path)
+        .spawn()
+        .map_err(|err| format!("Failed to launch screencapture: {err}"))?;
+
+    {
+        let state = app_handle.state::<AppState>();
+        let mut child_guard = state.screen_capture_child.lock().unwrap();
+        *child_guard = Some(child);
+    }
+
+    // We need to wait for the child process to finish.
+    // Since we used std::process::Command, we use a loop or spawn_blocking to wait.
+    // Actually, it's better to use tokio::process::Command if we want to be truly async,
+    // but here we can just use spawn_blocking to wait for the child we just spawned.
+    let app_handle_clone = app_handle.clone();
+
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle_clone.state::<AppState>();
+        // We need to get the child back to wait for it, or just wait for it if we have it.
+        // But we want to be able to kill it from elsewhere.
+        // std::process::Child::wait() is blocking.
+
+        let child = {
+            let mut child_guard = state.screen_capture_child.lock().unwrap();
+            child_guard.take()
+        };
+
+        if let Some(mut child) = child {
+            let status = child.wait().map_err(|err| format!("Failed to wait for screencapture: {err}"))?;
+            // screencapture doesn't output much to stdout/stderr in interactive mode unless it fails.
+            // We just care about the status and if the file exists.
+            Ok::<std::process::ExitStatus, String>(status)
+        } else {
+            Err("Screen capture child process was lost.".to_string())
+        }
     })
     .await
-    .map_err(|err| format!("Screen capture task failed: {err}"))??;
+    .map_err(|err| format!("Screen capture wait task failed: {err}"))??;
 
-    if output.status.success() {
+    if output.success() {
         if let Ok(metadata) = std::fs::metadata(&capture_path) {
             if metadata.len() > 0 {
                 // Resize image to max 1024px width/height to avoid large payload issues with LLM providers
                 let _ = std::process::Command::new("/usr/bin/sips")
-                    .args(["-Z", "1024", &capture_path.to_string_lossy(), "--out", &capture_path.to_string_lossy()])
+                    .args([
+                        "-Z",
+                        "1024",
+                        &capture_path.to_string_lossy(),
+                        "--out",
+                        &capture_path.to_string_lossy(),
+                    ])
                     .output();
                 return Ok(Some(capture_path));
             }
@@ -6333,24 +6597,13 @@ async fn run_interactive_screen_capture() -> Result<Option<PathBuf>, String> {
         return Ok(None);
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !capture_path.exists() && (stderr.is_empty() || output.status.code() == Some(1)) {
+    if !capture_path.exists() && (output.code() == Some(1) || output.code().is_none()) {
         return Ok(None);
     }
 
     remove_temp_image_file(&capture_path);
 
-    if stderr.is_empty() {
-        Err(format!(
-            "screencapture exited with status {}.",
-            output.status
-        ))
-    } else {
-        Err(format!(
-            "screencapture exited with status {}: {}",
-            output.status, stderr
-        ))
-    }
+    Err(format!("screencapture exited with status {}.", output))
 }
 
 #[cfg(target_os = "macos")]
@@ -6398,7 +6651,7 @@ async fn run_entire_screen_capture() -> Result<Option<PathBuf>, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn run_interactive_screen_capture() -> Result<Option<PathBuf>, String> {
+async fn run_interactive_screen_capture(_app_handle: &AppHandle) -> Result<Option<PathBuf>, String> {
     Err("Interactive screen capture is only supported on macOS right now.".to_string())
 }
 
@@ -8061,7 +8314,50 @@ pub fn run() {
             handle_app_menu_event(app_handle, event.id().as_ref());
         })
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        let state = app.state::<AppState>();
+                        let region_shortcut_str =
+                            state.global_shortcut_look_at_screen_region.lock().unwrap().clone();
+                        let entire_shortcut_str =
+                            state.global_shortcut_look_at_entire_screen.lock().unwrap().clone();
+
+                        if let Ok(region_shortcut) = region_shortcut_str.parse::<Shortcut>() {
+                            if shortcut == &region_shortcut {
+                                let app_handle = app.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = capture_screen_selection_inner(&app_handle).await;
+                                });
+                                return;
+                            }
+                        }
+
+                        if let Ok(entire_shortcut) = entire_shortcut_str.parse::<Shortcut>() {
+                            if shortcut == &entire_shortcut {
+                                let app_handle = app.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = capture_entire_screen_inner(&app_handle).await;
+                                });
+                                return;
+                            }
+                        }
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
+            let state = app.state::<AppState>();
+            let region_shortcut_str = state.global_shortcut_look_at_screen_region.lock().unwrap().clone();
+            if let Ok(shortcut) = region_shortcut_str.parse::<Shortcut>() {
+                let _ = app.global_shortcut().register(shortcut);
+            }
+            let entire_shortcut_str = state.global_shortcut_look_at_entire_screen.lock().unwrap().clone();
+            if let Ok(shortcut) = entire_shortcut_str.parse::<Shortcut>() {
+                let _ = app.global_shortcut().register(shortcut);
+            }
+
             reap_stale_model_processes(app.handle());
             create_tray(app.handle())?;
             Ok(())
@@ -8130,12 +8426,19 @@ pub fn run() {
             selected_ollama_model: Mutex::new("gemma2:2b".to_string()),
             ollama_base_url: Mutex::new("http://127.0.0.1:11434".to_string()),
             ollama_api_key: Mutex::new(None),
+            global_shortcut_look_at_screen_region: Mutex::new("Command+Shift+L".to_string()),
+            global_shortcut_look_at_screen_region_hydrated: Mutex::new(false),
+            global_shortcut_look_at_screen_region_modified_before_hydration: Mutex::new(false),
+            global_shortcut_look_at_entire_screen: Mutex::new("Command+Shift+Option+L".to_string()),
+            global_shortcut_look_at_entire_screen_hydrated: Mutex::new(false),
+            global_shortcut_look_at_entire_screen_modified_before_hydration: Mutex::new(false),
             next_conversation_entry_id: AtomicU64::new(1),
             last_tray_icon_variant: Mutex::new(None),
             last_tray_menu_state: Mutex::new(None),
             last_tray_title: Mutex::new(None),
             is_quitting: Mutex::new(false),
             vad: Mutex::new(None),
+            screen_capture_child: Mutex::new(None),
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -8160,6 +8463,12 @@ pub fn run() {
             set_call_muted,
             set_tts_playback_active,
             initialize_pong_playback_preference,
+            get_global_shortcut_look_at_entire_screen,
+            initialize_global_shortcut_look_at_entire_screen,
+            set_global_shortcut_look_at_entire_screen,
+            get_global_shortcut_look_at_screen_region,
+            initialize_global_shortcut_look_at_screen_region,
+            set_global_shortcut_look_at_screen_region,
             clear_conversation_context_images,
             sync_conversation_log_has_visible_images,
             get_gemma_variant,

@@ -15,10 +15,14 @@ export const CONTACT_ICONS_STORE_NAME = "contact-icons";
 export const DEFAULT_CONTACT_ID = "contact-openduck";
 export const MODEL_PREFERENCES_STORAGE_KEY = "openduck.model-preferences.v1";
 export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
+export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
+export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY = "openduck.global-shortcut-entire.v1";
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
 export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
 export const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
 export const DEFAULT_OLLAMA_MODEL = "gemma2:2b";
+export const DEFAULT_GLOBAL_SHORTCUT = "Command+Shift+L";
+export const DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN = "Command+Shift+Option+L";
 
 export const MODEL_PRESETS: Record<
   Exclude<ModelPreset, "custom">,
