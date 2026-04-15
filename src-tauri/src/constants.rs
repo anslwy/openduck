@@ -51,6 +51,7 @@ pub(crate) const STT_WHISPER_VOCAB_FILE: &str = "vocab.json";
 pub(crate) const SILENCE_THRESHOLD: f32 = 0.02;
 pub(crate) const END_OF_UTTERANCE_SILENCE_MS: u32 = 2500;
 pub(crate) const MIN_SPEAKING_CHUNKS: usize = 10;
+pub(crate) const PRE_SPEECH_BUFFER_MS: u32 = 2000;
 pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 pub(crate) const MIN_CAPTURE_SAMPLE_RATE: u32 = 8_000;
 pub(crate) const MAX_CAPTURE_SAMPLE_RATE: u32 = 192_000;

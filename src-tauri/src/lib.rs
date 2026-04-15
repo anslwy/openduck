@@ -277,6 +277,7 @@ enum TrayIconVariant {
 
 struct AppState {
     audio_buffer: Mutex<Vec<f32>>,
+    pre_audio_buffer: Mutex<VecDeque<f32>>,
     silent_chunks_count: Mutex<usize>,
     speaking_chunks_count: Mutex<usize>,
     is_speaking: Mutex<bool>,
@@ -2639,6 +2640,10 @@ async fn receive_audio_chunk(
 
     if detected_speech {
         interrupt_active_generation(&app_handle).await;
+        let mut buffer = state.audio_buffer.lock().unwrap();
+        let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
+        buffer.extend(pre_buffer.iter().copied());
+        pre_buffer.clear();
     }
 
     let mut buffer = state.audio_buffer.lock().unwrap();
@@ -2654,6 +2659,10 @@ async fn receive_audio_chunk(
             emit_call_stage(&app_handle, "processing_audio", "Processing Audio");
             process_audio_turn(&buffer, capture_sample_rate, app_handle);
             buffer.clear();
+            {
+                let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
+                pre_buffer.clear();
+            }
             *is_speaking = false;
             *silent_count = 0;
             *speaking_count = 0;
@@ -2662,6 +2671,15 @@ async fn receive_audio_chunk(
             if let Some(vad) = vad_guard.as_mut() {
                 vad.reset();
             }
+        }
+    } else {
+        let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
+        pre_buffer.extend(prepared_chunk.samples.iter().copied());
+        let max_pre_buffer_samples =
+            (capture_sample_rate as u64 * PRE_SPEECH_BUFFER_MS as u64 / 1000) as usize;
+        if pre_buffer.len() > max_pre_buffer_samples {
+            let to_remove = pre_buffer.len() - max_pre_buffer_samples;
+            pre_buffer.drain(..to_remove);
         }
     }
     Ok(())
@@ -8330,6 +8348,7 @@ pub fn run() {
         .manage(PendingAppUpdate(Mutex::new(None)))
         .manage(AppState {
             audio_buffer: Mutex::new(Vec::new()),
+            pre_audio_buffer: Mutex::new(VecDeque::new()),
             silent_chunks_count: Mutex::new(0),
             speaking_chunks_count: Mutex::new(0),
             is_speaking: Mutex::new(false),
