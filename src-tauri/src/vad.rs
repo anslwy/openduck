@@ -3,7 +3,6 @@ use ort::session::Session;
 use ort::value::Value;
 use std::mem::take;
 use std::path::Path;
-use tracing::debug;
 
 #[derive(Debug, Clone, Copy)]
 pub enum SampleRate {

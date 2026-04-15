@@ -2577,16 +2577,14 @@ async fn receive_audio_chunk(
 
     let mut is_really_speaking = false;
     if prepared_chunk.rms > SILENCE_THRESHOLD {
-        let max_abs = prepared_chunk.samples.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
-        debug!("VAD Check: rms={:.4}, max_abs={:.4}", prepared_chunk.rms, max_abs);
         is_really_speaking = true;
 
         if let Ok(_) = ensure_vad(&app_handle, state.inner()) {
             let mut vad_guard = state.vad.lock().unwrap();
             if let Some(vad) = vad_guard.as_mut() {
                 let resampled = vad::resample_to_16k(&prepared_chunk.samples, capture_sample_rate);
+                // Use VAD to filter out background noise
                 if let Ok(prob) = vad.calc_level(&resampled) {
-                    debug!("VAD probability: {:.4}", prob);
                     if prob < 0.001 {
                         is_really_speaking = false;
                     }
@@ -3777,12 +3775,6 @@ fn build_input_audio_content(audio_path: &Path) -> ChatContent {
     }
 }
 
-fn build_input_image_content(image_path: &Path) -> ChatContent {
-    ChatContent::InputImage {
-        image_url: image_path.to_string_lossy().into_owned(),
-    }
-}
-
 fn build_user_turn_message(
     user_text: &str,
     image_paths: &[PathBuf],
@@ -3916,52 +3908,6 @@ fn parse_gemma_stream_event(event_block: &str) -> Result<ParsedGemmaStreamEvent,
 fn drain_next_sse_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
     let separator = buffer.windows(2).position(|window| window == b"\n\n")?;
     Some(buffer.drain(..separator + 2).take(separator).collect())
-}
-
-fn debug_attachment_file_name(path_text: &str) -> String {
-    Path::new(path_text)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| path_text.to_string())
-}
-
-fn serialize_chat_content_for_debug(content: &ChatContent) -> serde_json::Value {
-    match content {
-        ChatContent::Text { text } => serde_json::json!({
-            "type": "text",
-            "text": text,
-        }),
-        ChatContent::InputImage { image_url } => serde_json::json!({
-            "type": "input_image",
-            "file_name": debug_attachment_file_name(image_url),
-        }),
-        ChatContent::InputAudio { input_audio } => serde_json::json!({
-            "type": "input_audio",
-            "input_audio": {
-                "data": input_audio.data,
-                "format": input_audio.format,
-            },
-        }),
-    }
-}
-
-fn serialize_chat_messages_for_debug(messages: &[ChatMessage]) -> serde_json::Value {
-    serde_json::Value::Array(
-        messages
-            .iter()
-            .map(|message| {
-                serde_json::json!({
-                    "role": message.role,
-                    "content": message
-                        .content
-                        .iter()
-                        .map(serialize_chat_content_for_debug)
-                        .collect::<Vec<_>>(),
-                })
-            })
-            .collect(),
-    )
 }
 
 fn log_chat_request_debug(conversation_session_id: u64, request: &ChatRequest) {
@@ -4450,7 +4396,7 @@ mod tests {
         build_latest_user_turn_message, build_llm_system_prompt, parse_gemma_stream_event,
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, required_silence_chunks,
-        resolve_capture_sample_rate, sanitize_for_voice_output, serialize_chat_messages_for_debug,
+        resolve_capture_sample_rate, sanitize_for_voice_output,
         suppress_playback_echo, AudioPayload, ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT,
         DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
