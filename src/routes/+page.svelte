@@ -525,6 +525,26 @@
     const assistantSpeaking = $derived(
         calling && callStagePhase === "speaking",
     );
+    let userVolume = $state(0);
+    const userSpeaking = $derived(calling && !micMuted && userVolume > 0.005);
+    let themeRgb = $state("127, 227, 124");
+
+    $effect(() => {
+        if (!selectedContactIconUrl) return;
+        const img = new Image();
+        img.src = selectedContactIconUrl;
+        img.onload = () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 1;
+            canvas.height = 1;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+                ctx.drawImage(img, 0, 0, 1, 1);
+                const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+                themeRgb = `${r}, ${g}, ${b}`;
+            }
+        };
+    });
 
     function setCallStage(phase: CallStagePhase, message: string) {
         callStagePhase = phase;
@@ -2675,6 +2695,7 @@
 
             captureProcessor.port.onmessage = (event) => {
                 if (!calling) {
+                    userVolume = 0;
                     return;
                 }
 
@@ -2684,6 +2705,14 @@
                         playbackReferenceData?: Float32Array;
                         playbackActive?: boolean;
                     };
+
+                // Calculate RMS volume for voice activity visualization
+                let sum = 0;
+                for (let i = 0; i < inputData.length; i++) {
+                    sum += inputData[i] * inputData[i];
+                }
+                userVolume = Math.sqrt(sum / (inputData.length || 1));
+
                 void invoke("receive_audio_chunk", {
                     payload: {
                         data: Array.from(inputData),
@@ -2769,6 +2798,7 @@
             void captureContext.close();
             captureContext = null;
         }
+        userVolume = 0;
         if (mediaStream) {
             mediaStream.getTracks().forEach((track) => track.stop());
             mediaStream = null;
@@ -4173,10 +4203,16 @@
                 <span>{callStageMessage}</span>
             </div>
         {/if}
-        <div class="avatar-container">
+        <div class="avatar-container" style="--theme-rgb: {themeRgb}">
+            {#if assistantSpeaking}
+                <div class="avatar-wave"></div>
+                <div class="avatar-wave"></div>
+                <div class="avatar-wave"></div>
+            {/if}
             <div
                 class="avatar"
                 class:calling
+                class:user-speaking={userSpeaking}
                 style={selectedContactImageStyle}
             ></div>
         </div>

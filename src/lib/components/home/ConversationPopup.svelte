@@ -335,7 +335,7 @@
                                             </svg>
                                         </button>
                                         <div class="tooltip-bubble control-tooltip left-aligned">
-                                            Copy messages up to this point into a new session. (Fork)
+                                            Copy messages up to this point into a new session. (Similar to Git Fork)
                                         </div>
                                     </div>
                                 {/if}
