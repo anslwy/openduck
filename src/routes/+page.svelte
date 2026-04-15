@@ -3,6 +3,7 @@
     import "./home.css";
 
     import { onDestroy, onMount } from "svelte";
+    import { fade } from "svelte/transition";
     import { invoke, convertFileSrc } from "@tauri-apps/api/core";
     import { listen, type UnlistenFn } from "@tauri-apps/api/event";
     import { save } from "@tauri-apps/plugin-dialog";
@@ -4247,9 +4248,9 @@
         {/if}
         <div class="avatar-container" style="--theme-rgb: {themeRgb}">
             {#if assistantSpeaking}
-                <div class="avatar-wave"></div>
-                <div class="avatar-wave"></div>
-                <div class="avatar-wave"></div>
+                <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
+                <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
+                <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
             {/if}
             <div
                 class="avatar"
