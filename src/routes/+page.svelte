@@ -170,6 +170,7 @@
     let playbackIdleTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let eventUnlisteners: UnlistenFn[] = [];
     let activeTtsRequestId: number | null = null;
+    let ttsSegmentTextMap = new Map<number, string[]>();
     let syncedTtsPlaybackActive = false;
     let pendingCompletionPongRequestId = $state<number | null>(null);
     let pendingTtsSegments = $state(0);
@@ -208,6 +209,7 @@
     let pendingConversationUserLogEntryId: number | null = null;
     let activeAssistantResponseId: number | null = null;
     let activeAssistantConversationEntryId: number | null = null;
+    let currentSpokenResponse = $state("");
     let isSavingConversationLogEntryEdit = $state(false);
     let isClearingConversationLogImages = $state(false);
 
@@ -751,6 +753,7 @@
         pendingConversationUserLogEntryId = null;
         activeAssistantResponseId = null;
         activeAssistantConversationEntryId = null;
+        currentSpokenResponse = "";
     }
 
     function resetScreenCaptureStatus() {
@@ -2734,6 +2737,22 @@
                     requestId?: number;
                 };
 
+                if (type === "chunk-started") {
+                    if (requestId != null) {
+                        const segments = ttsSegmentTextMap.get(requestId);
+                        if (segments && segments.length > 0) {
+                            const startedText = segments.shift();
+                            if (startedText) {
+                                currentSpokenResponse = (
+                                    currentSpokenResponse +
+                                    startedText
+                                ).trim();
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 if (type !== "chunk-finished") {
                     return;
                 }
@@ -2817,6 +2836,7 @@
         }
         queuedPlaybackChunkCount = 0;
         activeTtsRequestId = null;
+        ttsSegmentTextMap.clear();
         pendingCompletionPongRequestId = null;
         pendingTtsSegments = 0;
         isQueueingCompletionPong = false;
@@ -2849,8 +2869,14 @@
             return;
         }
 
+        const entryId = activeAssistantConversationEntryId;
+        const text = currentSpokenResponse;
+
         try {
             await invoke("interrupt_tts");
+            if (entryId != null && text) {
+                void saveConversationLogEntryEdit(entryId, text, false);
+            }
         } catch (err) {
             console.error("Failed to interrupt TTS:", err);
         }
@@ -3697,6 +3723,7 @@
                             if (payload.request_id !== activeTtsRequestId) {
                                 stopPlayback();
                                 activeTtsRequestId = payload.request_id;
+                                currentSpokenResponse = "";
                             }
                             pendingCompletionPongRequestId = payload.request_id;
                         },
@@ -3712,6 +3739,10 @@
                             }
 
                             pendingTtsSegments += 1;
+                            const segments =
+                                ttsSegmentTextMap.get(payload.request_id) ?? [];
+                            segments.push(payload.text);
+                            ttsSegmentTextMap.set(payload.request_id, segments);
                             updateStageAfterPlaybackStateChange();
                         },
                     ),
@@ -3743,6 +3774,17 @@
                         },
                     ),
                     listen<CsmAudioStopEvent>("csm-audio-stop", () => {
+                        if (assistantSpeaking) {
+                            const entryId = activeAssistantConversationEntryId;
+                            const text = currentSpokenResponse;
+                            if (entryId != null && text) {
+                                void saveConversationLogEntryEdit(
+                                    entryId,
+                                    text,
+                                    false,
+                                );
+                            }
+                        }
                         pendingCompletionPongRequestId = null;
                         stopPlayback();
                         if (calling) {

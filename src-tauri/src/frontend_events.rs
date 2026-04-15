@@ -13,6 +13,7 @@ pub(crate) struct CsmAudioStartEvent {
 #[derive(Clone, Serialize)]
 pub(crate) struct CsmAudioQueuedEvent {
     pub(crate) request_id: u64,
+    pub(crate) text: String,
 }
 
 #[derive(Clone, Serialize)]

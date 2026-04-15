@@ -3676,7 +3676,13 @@ async fn queue_spoken_response_segments_for_csm(
             spoken_segments.len(),
             spoken_segment
         );
-        emit_csm_audio_queued(app_handle, CsmAudioQueuedEvent { request_id });
+        emit_csm_audio_queued(
+            app_handle,
+            CsmAudioQueuedEvent {
+                request_id,
+                text: spoken_segment.clone(),
+            },
+        );
         send_csm_synthesis_request(app_handle, request_id, spoken_segment).await?;
     }
 

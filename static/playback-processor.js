@@ -30,6 +30,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.prebufferSamples = 0;
     this.started = false;
     this.currentRequestId = null;
+    this.chunkStarted = false;
 
     this.port.onmessage = (event) => {
       const { type } = event.data ?? {};
@@ -74,6 +75,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.bufferedSamples = 0;
     this.started = false;
     this.currentRequestId = null;
+    this.chunkStarted = false;
   }
 
   process(inputs, outputs) {
@@ -101,6 +103,14 @@ class PlaybackProcessor extends AudioWorkletProcessor {
           break;
         }
 
+        if (this.offset === 0 && !this.chunkStarted) {
+          this.chunkStarted = true;
+          this.port.postMessage({
+            type: "chunk-started",
+            requestId: head.requestId,
+          });
+        }
+
         const available = head.samples.length - this.offset;
         const toCopy = Math.min(available, output.length - writeIndex);
         output.set(
@@ -114,6 +124,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         if (this.offset >= head.samples.length) {
           this.queue.shift();
           this.offset = 0;
+          this.chunkStarted = false;
           this.port.postMessage({
             type: "chunk-finished",
             requestId: head.requestId,

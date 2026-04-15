@@ -5,6 +5,7 @@ export type CsmAudioStartEvent = {
 
 export type CsmAudioQueuedEvent = {
     request_id: number;
+    text: string;
 };
 
 export type CsmAudioChunkEvent = {
