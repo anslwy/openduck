@@ -3,6 +3,7 @@
 mod constants;
 mod frontend_events;
 mod model_variants;
+mod vad;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use constants::*;
@@ -341,6 +342,7 @@ struct AppState {
     last_tray_menu_state: Mutex<Option<TrayMenuState>>,
     last_tray_title: Mutex<Option<String>>,
     is_quitting: Mutex<bool>,
+    vad: Mutex<Option<vad::Silero>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2349,15 +2351,33 @@ async fn receive_audio_chunk(
     let silence_chunks_required =
         required_silence_chunks(capture_sample_rate, prepared_chunk.samples.len());
 
+    let mut is_really_speaking = false;
+    if prepared_chunk.rms > SILENCE_THRESHOLD {
+        let max_abs = prepared_chunk.samples.iter().fold(0.0f32, |m, &x| m.max(x.abs()));
+        debug!("VAD Check: rms={:.4}, max_abs={:.4}", prepared_chunk.rms, max_abs);
+        is_really_speaking = true;
+
+        if let Ok(_) = ensure_vad(&app_handle, state.inner()) {
+            let mut vad_guard = state.vad.lock().unwrap();
+            if let Some(vad) = vad_guard.as_mut() {
+                let resampled = vad::resample_to_16k(&prepared_chunk.samples, capture_sample_rate);
+                if let Ok(prob) = vad.calc_level(&resampled) {
+                    debug!("VAD probability: {:.4}", prob);
+                    if prob < 0.001 {
+                        is_really_speaking = false;
+                    }
+                }
+            }
+        }
+    }
+
     let mut detected_speech = false;
     {
         let mut silent_count = state.silent_chunks_count.lock().unwrap();
         let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
         let mut is_speaking = state.is_speaking.lock().unwrap();
 
-        let rms = prepared_chunk.rms;
-
-        if rms > SILENCE_THRESHOLD {
+        if is_really_speaking {
             *speaking_count += 1;
             *silent_count = 0;
         } else {
@@ -2394,6 +2414,11 @@ async fn receive_audio_chunk(
             *is_speaking = false;
             *silent_count = 0;
             *speaking_count = 0;
+
+            let mut vad_guard = state.vad.lock().unwrap();
+            if let Some(vad) = vad_guard.as_mut() {
+                vad.reset();
+            }
         }
     }
     Ok(())
@@ -6550,6 +6575,15 @@ fn resolve_capture_sample_rate(sample_rate: Option<u32>) -> u32 {
     }
 }
 
+fn ensure_vad(app_handle: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
+    let mut vad = state.vad.lock().unwrap();
+    if vad.is_none() {
+        let model_path = resolve_resource_file(app_handle, "silero_vad.onnx")?;
+        *vad = Some(vad::Silero::new(vad::SampleRate::SixteenkHz, model_path)?);
+    }
+    Ok(())
+}
+
 fn reserve_free_port() -> Result<u16, String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     listener
@@ -8101,6 +8135,7 @@ pub fn run() {
             last_tray_menu_state: Mutex::new(None),
             last_tray_title: Mutex::new(None),
             is_quitting: Mutex::new(false),
+            vad: Mutex::new(None),
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
