@@ -283,14 +283,6 @@ main.idle-layout {
 
 .load-all-btn {
     min-width: 112px;
-    background: rgba(127, 227, 124, 0.12);
-    border-color: rgba(127, 227, 124, 0.28);
-    color: #c9f7c8;
-}
-
-.load-all-btn:hover:not(:disabled) {
-    background: rgba(127, 227, 124, 0.18);
-    border-color: rgba(127, 227, 124, 0.34);
 }
 
 .control-bar-wrapper {
@@ -1817,7 +1809,7 @@ main.idle-layout {
         border-color 0.2s ease;
 }
 
-.utility-btn:hover:not(:disabled) {
+.utility-btn:hover:not(:disabled):not(.load-all-btn) {
     background: rgba(255, 255, 255, 0.12);
     border-color: rgba(255, 255, 255, 0.12);
 }
@@ -2652,6 +2644,17 @@ main.idle-layout {
         transform: scale(1);
         box-shadow: 0 0 0 0 rgba(255, 205, 64, 0);
     }
+}
+
+.load-all-btn-primary {
+    background: #ffffff;
+    color: #000;
+}
+
+.load-all-btn-primary:disabled {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.12);
+    color: rgb(255, 255, 255);
 }
 
 /* Shared styles for the OpenDuck home page and its extracted UI components. */

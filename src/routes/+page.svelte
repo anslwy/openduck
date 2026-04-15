@@ -441,23 +441,37 @@
             isLoadingStt ||
             isUnloadingStt,
     );
-    const loadAllDisabled = $derived(loadAllBusy || !loadAllNeedsAction);
+    const loadAllDisabled = $derived(loadAllBusy);
+    let lastLoadAllDisabled = $state(true);
+    $effect(() => {
+        if (lastLoadAllDisabled && !loadAllDisabled) {
+            const loadAllBtn = document.querySelector(".load-all-btn");
+            if (loadAllBtn) {
+                loadAllBtn.classList.add("pulse-animation");
+                setTimeout(
+                    () => loadAllBtn.classList.remove("pulse-animation"),
+                    1500,
+                );
+            }
+        }
+        lastLoadAllDisabled = loadAllDisabled;
+    });
     const presetSelectDisabled = $derived(
         loadAllBusy || isUpdatingCsmQuantize || pendingModelPreset !== null,
     );
     const loadAllButtonLabel = $derived(
         isLoadingAll
-            ? "Loading All..."
+            ? "Processing..."
             : loadAllNeedsAction
               ? "Load All"
-              : "All Loaded",
+              : "Unload All",
     );
     const loadAllButtonTitle = $derived(
         loadAllMissingDownloads.length > 0
             ? `Download and load ${loadAllMissingDownloads.join(", ")}.`
             : loadAllNeedsAction
               ? "Load the selected models."
-              : "The selected models are already loaded.",
+              : "Unload all loaded models.",
     );
     const selectedContact = $derived(
         contacts.find((contact) => contact.id === selectedContactId) ??
@@ -3646,6 +3660,23 @@
         }
     }
 
+    async function handleUnloadAll() {
+        if (isLoadingAll) {
+            return;
+        }
+
+        isLoadingAll = true;
+
+        try {
+            await handleUnloadGemma({ suppressAlert: true });
+            await handleUnloadCsm({ suppressAlert: true });
+            await handleUnloadStt({ suppressAlert: true });
+        } finally {
+            isLoadingAll = false;
+            await syncModelStatus();
+        }
+    }
+
     async function handleUnloadGemma(options?: { suppressAlert?: boolean }) {
         isUnloadingGemma = true;
         try {
@@ -4140,9 +4171,10 @@
                     <button
                         type="button"
                         class="utility-btn load-all-btn"
+                        class:load-all-btn-primary={loadAllNeedsAction}
                         disabled={loadAllDisabled}
                         title={loadAllButtonTitle}
-                        onclick={handleLoadAll}
+                        onclick={loadAllNeedsAction ? handleLoadAll : handleUnloadAll}
                     >
                         {loadAllButtonLabel}
                     </button>
