@@ -23,8 +23,10 @@
         closeAboutPopup,
         globalShortcut,
         globalShortcutEntireScreen,
+        pongPlaybackEnabled,
         onUpdateGlobalShortcut,
         onUpdateGlobalShortcutEntireScreen,
+        onUpdatePongPlayback,
     } = $props<{
         buildInfo: BuildInfo | null;
         buildInfoError: string | null;
@@ -37,8 +39,10 @@
         closeAboutPopup: () => void;
         globalShortcut: string;
         globalShortcutEntireScreen: string;
+        pongPlaybackEnabled: boolean;
         onUpdateGlobalShortcut: (shortcut: string) => void;
         onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
+        onUpdatePongPlayback: (enabled: boolean) => void;
     }>();
 
     let copyState = $state<"idle" | "copied" | "failed">("idle");
@@ -225,6 +229,18 @@
         </div>
 
         <div class="about-metadata-card">
+            <div class="about-metadata-row">
+                <span class="about-metadata-label">Enable Pong Sound (When Screenshots are pasted / AI finishes response)</span>
+                <button
+                    type="button"
+                    class="quantize-toggle"
+                    class:active={pongPlaybackEnabled}
+                    onclick={() => onUpdatePongPlayback(!pongPlaybackEnabled)}
+                >
+                    <span class="quantize-dot"></span>
+                    <span>{pongPlaybackEnabled ? "Enabled" : "Disabled"}</span>
+                </button>
+            </div>
             <div class="about-metadata-row shortcut-row">
                 <span class="about-metadata-label">Look at Screen Region (During Call)</span>
                 <div class="shortcut-input-wrapper">
@@ -379,3 +395,9 @@
         </div>
     {/if}
 </div>
+
+<style>
+    .about-metadata-label {
+        font-size: 10px;
+    }
+</style>

@@ -1027,6 +1027,27 @@ fn set_tts_playback_active(app_handle: tauri::AppHandle, active: bool) {
 }
 
 #[tauri::command]
+fn set_pong_playback_enabled(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) {
+    {
+        let mut tray_pong_playback_enabled = state.tray_pong_playback_enabled.lock().unwrap();
+        *tray_pong_playback_enabled = enabled;
+    }
+
+    if !*state.tray_pong_playback_hydrated.lock().unwrap() {
+        *state
+            .tray_pong_playback_modified_before_hydration
+            .lock()
+            .unwrap() = true;
+    }
+
+    refresh_tray_menu(&app_handle);
+}
+
+#[tauri::command]
 fn initialize_pong_playback_preference(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -8408,6 +8429,7 @@ pub fn run() {
             stop_call_timer,
             set_call_muted,
             set_tts_playback_active,
+            set_pong_playback_enabled,
             initialize_pong_playback_preference,
             get_global_shortcut_look_at_entire_screen,
             initialize_global_shortcut_look_at_entire_screen,

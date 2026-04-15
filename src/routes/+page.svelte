@@ -845,6 +845,10 @@
         pongPlaybackEnabled = enabled;
         persistPongPlaybackPreference(enabled);
 
+        invoke("set_pong_playback_enabled", { enabled }).catch((err) => {
+            console.error("Failed to update pong playback preference:", err);
+        });
+
         if (!enabled) {
             pendingCompletionPongRequestId = null;
             stopActivePongPlayback();
@@ -4334,8 +4338,10 @@
                     {closeAboutPopup}
                     {globalShortcut}
                     {globalShortcutEntireScreen}
+                    {pongPlaybackEnabled}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
                     onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
+                    onUpdatePongPlayback={applyPongPlaybackPreference}
                 />
             </div>
         {/if}
