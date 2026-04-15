@@ -1372,6 +1372,17 @@ main.idle-layout {
     color: rgba(255, 255, 255, 0.84);
 }
 
+.conversation-entry-action-btn.secondary.icon-only {
+    background: transparent;
+    padding: 6px;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.conversation-entry-action-btn.secondary.icon-only:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.9);
+}
+
 .conversation-entry-action-btn.primary {
     background: #ffcd40;
     color: #2f2500;
@@ -1916,8 +1927,7 @@ main.idle-layout {
 }
 
 .tooltip-bubble.left-aligned {
-    left: 0;
-    transform: translateY(6px);
+    left: -10px;
     white-space: normal;
     max-width: 280px;
     width: max-content;
