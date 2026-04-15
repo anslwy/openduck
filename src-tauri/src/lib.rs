@@ -6361,10 +6361,6 @@ async fn capture_screen_selection_inner(app_handle: &AppHandle) -> Result<(), St
         return Err("Look at Screen Region is only available during an active call.".to_string());
     }
 
-    if *state.tray_pong_playback_enabled.lock().unwrap() {
-        emit_play_tray_pong(app_handle);
-    }
-
     {
         let mut in_progress_guard = state.screen_capture_in_progress.lock().unwrap();
         if *in_progress_guard {
@@ -6399,6 +6395,9 @@ async fn capture_screen_selection_inner(app_handle: &AppHandle) -> Result<(), St
     match capture_result {
         Ok(Some(path)) => {
             add_pending_screen_capture(state.inner(), path);
+            if *state.tray_pong_playback_enabled.lock().unwrap() {
+                emit_play_tray_pong(app_handle);
+            }
             emit_screen_capture_event(
                 app_handle,
                 "ready",
@@ -6439,10 +6438,6 @@ async fn capture_entire_screen_inner(app_handle: &AppHandle) -> Result<(), Strin
         return Err("Look at Entire Screen is only available during an active call.".to_string());
     }
 
-    if *state.tray_pong_playback_enabled.lock().unwrap() {
-        emit_play_tray_pong(app_handle);
-    }
-
     {
         let mut in_progress_guard = state.screen_capture_in_progress.lock().unwrap();
         if *in_progress_guard {
@@ -6476,6 +6471,9 @@ async fn capture_entire_screen_inner(app_handle: &AppHandle) -> Result<(), Strin
     match capture_result {
         Ok(Some(path)) => {
             add_pending_screen_capture(state.inner(), path);
+            if *state.tray_pong_playback_enabled.lock().unwrap() {
+                emit_play_tray_pong(app_handle);
+            }
             emit_screen_capture_event(
                 app_handle,
                 "ready",
