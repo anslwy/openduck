@@ -317,16 +317,18 @@
                                         </div>
                                     </div>
                                 {/if}
-                                <button
-                                    type="button"
-                                    class="conversation-entry-action-btn secondary"
-                                    onclick={() => {
-                                        messageToDelete = entry;
-                                    }}
-                                    disabled={isBusy}
-                                >
-                                    Delete
-                                </button>
+                                {#if entry.role !== "assistant"}
+                                    <button
+                                        type="button"
+                                        class="conversation-entry-action-btn secondary"
+                                        onclick={() => {
+                                            messageToDelete = entry;
+                                        }}
+                                        disabled={isBusy}
+                                    >
+                                        Delete
+                                    </button>
+                                {/if}
                             </div>
                         {/if}
                     </div>
@@ -338,7 +340,7 @@
     {#if messageToDelete}
         <ConfirmDialog
             title="Delete message?"
-            message="This action cannot be undone. Do you wish to continue?"
+            message="This action cannot be undone and the AI response will be deleted as well. Do you wish to continue?"
             onConfirm={async () => {
                 if (messageToDelete) {
                     await deleteConversationLogEntry(messageToDelete.id);
