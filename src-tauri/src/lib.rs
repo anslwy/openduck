@@ -4331,14 +4331,14 @@ mod tests {
 
     #[test]
     fn required_silence_chunks_scales_with_sample_rate() {
-        assert_eq!(required_silence_chunks(44_100, 128), 293);
-        assert_eq!(required_silence_chunks(48_000, 128), 319);
+        assert_eq!(required_silence_chunks(44_100, 128), 517);
+        assert_eq!(required_silence_chunks(48_000, 128), 563);
     }
 
     #[test]
     fn required_silence_chunks_respects_chunk_size() {
-        assert_eq!(required_silence_chunks(48_000, 256), 160);
-        assert_eq!(required_silence_chunks(48_000, 1024), 40);
+        assert_eq!(required_silence_chunks(48_000, 256), 282);
+        assert_eq!(required_silence_chunks(48_000, 1024), 71);
     }
 
     #[test]
@@ -4362,7 +4362,7 @@ mod tests {
 
     #[test]
     fn latest_user_turn_message_stays_text_only_without_audio() {
-        let message = build_latest_user_turn_message("hello there", None, None);
+        let message = build_latest_user_turn_message("hello there", None, &[]);
         let serialized = serde_json::to_value(&message).unwrap();
 
         assert_eq!(serialized["role"], "user");
@@ -4376,7 +4376,7 @@ mod tests {
         let message = build_latest_user_turn_message(
             "hello there",
             None,
-            Some(Path::new("/tmp/openduck-screen-test.png")),
+            &[Path::new("/tmp/openduck-screen-test.png")],
         );
         let serialized = serde_json::to_value(&message).unwrap();
 
@@ -4396,7 +4396,7 @@ mod tests {
         let messages = vec![build_latest_user_turn_message(
             "hello there",
             None,
-            Some(Path::new("/tmp/openduck-screen-test.png")),
+            &[Path::new("/tmp/openduck-screen-test.png")],
         )];
         let serialized = serialize_chat_messages_for_debug(&messages);
 
