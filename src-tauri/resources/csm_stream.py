@@ -69,6 +69,9 @@ COSYVOICE3_TOKENIZER_CONFIG_FILE = "tokenizer_config.json"
 SAMPLE_RATE = 24_000
 CSM_WARMUP_TEXT = "Okay."
 CSM_WARMUP_MAX_AUDIO_LENGTH_MS = 320
+# Accumulate a few decoder frames per emitted chunk so playback can start
+# early without overwhelming the JSON/stdout bridge with tiny packets.
+CSM_STREAM_ACCUMULATION_SIZE = 4
 DEVNULL = open(os.devnull, "w")
 
 # Keep PyTorch MPS fallback enabled for any speech dependency that may import torch.
@@ -436,7 +439,7 @@ def run_csm_server(
         emit_status("Importing generation helpers...")
         import mlx.core as mx
         from mlx_lm.sample_utils import make_sampler
-        from csm_mlx import Segment, generate
+        from csm_mlx import Segment, generate, stream_generate
         from csm_mlx.utils import read_audio
     except Exception as exc:
         emit({"type": "error", "message": f"Failed to import csm-mlx: {exc}"})
@@ -596,19 +599,26 @@ def run_csm_server(
                     last_response_text,
                     Segment,
                 )
-            audio = generate(
+            emitted_audio = False
+            streamed_audio_chunks = []
+            for audio_chunk in stream_generate(
                 model,
                 text=text,
                 speaker=speaker,
                 context=context,
                 max_audio_length_ms=int(request.get("max_audio_length_ms", 10_000)),
+                accumulation_size=CSM_STREAM_ACCUMULATION_SIZE,
                 sampler=sampler,
-            )
-            in_progress_request_id = request_id
-            in_progress_audio = audio
-            in_progress_text = text
-            audio_wav_base64 = encode_wav_base64(audio, SAMPLE_RATE)
-            if audio_wav_base64:
+            ):
+                normalized_chunk = normalize_audio_array(audio_chunk)
+                if normalized_chunk.size == 0:
+                    continue
+
+                streamed_audio_chunks.append(normalized_chunk)
+                audio_wav_base64 = encode_wav_base64(normalized_chunk, SAMPLE_RATE)
+                if not audio_wav_base64:
+                    continue
+
                 emit(
                     {
                         "type": "chunk",
@@ -616,6 +626,20 @@ def run_csm_server(
                         "audio_wav_base64": audio_wav_base64,
                     }
                 )
+                emitted_audio = True
+
+            if not emitted_audio:
+                raise RuntimeError("CSM generated an empty audio response.")
+
+            if len(streamed_audio_chunks) == 1:
+                audio = mx.array(streamed_audio_chunks[0])
+            else:
+                np = import_numpy()
+                audio = mx.array(np.concatenate(streamed_audio_chunks))
+
+            in_progress_request_id = request_id
+            in_progress_audio = audio
+            in_progress_text = text
             emit(
                 {
                     "type": "timing",
