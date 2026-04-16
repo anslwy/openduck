@@ -17,12 +17,18 @@ export const MODEL_PREFERENCES_STORAGE_KEY = "openduck.model-preferences.v1";
 export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
 export const SELECT_LAST_SESSION_STORAGE_KEY = "openduck.select-last-session.v1";
 export const SHOW_STAT_STORAGE_KEY = "openduck.show-stat.v1";
+export const END_OF_UTTERANCE_SILENCE_STORAGE_KEY =
+  "openduck.end-of-utterance-silence-ms.v1";
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
 export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY = "openduck.global-shortcut-entire.v1";
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
 export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
 export const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
 export const DEFAULT_OLLAMA_MODEL = "gemma2:2b";
+export const DEFAULT_END_OF_UTTERANCE_SILENCE_MS = 2500;
+export const MIN_END_OF_UTTERANCE_SILENCE_MS = 500;
+export const MAX_END_OF_UTTERANCE_SILENCE_MS = 5000;
+export const END_OF_UTTERANCE_SILENCE_STEP_MS = 100;
 export const DEFAULT_GLOBAL_SHORTCUT = "Command+Shift+L";
 export const DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN = "Command+Shift+Option+L";
 

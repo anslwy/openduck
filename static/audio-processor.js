@@ -10,16 +10,31 @@ const PLAYBACK_REFERENCE_CANDIDATE_DELAYS = [
 const MIN_REFERENCE_ENERGY = 1e-8;
 const MIN_MIC_ENERGY = 1e-8;
 const AUDIO_WORKLET_RENDER_QUANTUM_FRAMES = 128;
-const END_OF_UTTERANCE_SILENCE_MS = 2500;
-// Slightly above the Rust silence window so a muted turn can still flush.
-const POST_MUTE_DRAIN_MS = END_OF_UTTERANCE_SILENCE_MS + 100;
-const POST_MUTE_DRAIN_QUANTA = Math.max(
-  1,
-  Math.ceil(
-    (POST_MUTE_DRAIN_MS / 1000 * sampleRate) /
-      AUDIO_WORKLET_RENDER_QUANTUM_FRAMES,
-  ),
-);
+const DEFAULT_END_OF_UTTERANCE_SILENCE_MS = 2500;
+const MIN_END_OF_UTTERANCE_SILENCE_MS = 500;
+const MAX_END_OF_UTTERANCE_SILENCE_MS = 5000;
+
+function clampEndOfUtteranceSilenceMs(milliseconds) {
+  return Math.min(
+    MAX_END_OF_UTTERANCE_SILENCE_MS,
+    Math.max(
+      MIN_END_OF_UTTERANCE_SILENCE_MS,
+      Math.round(Number(milliseconds) || DEFAULT_END_OF_UTTERANCE_SILENCE_MS),
+    ),
+  );
+}
+
+function computePostMuteDrainQuanta(milliseconds) {
+  // Slightly above the Rust silence window so a muted turn can still flush.
+  const postMuteDrainMs = clampEndOfUtteranceSilenceMs(milliseconds) + 100;
+  return Math.max(
+    1,
+    Math.ceil(
+      ((postMuteDrainMs / 1000) * sampleRate) /
+        AUDIO_WORKLET_RENDER_QUANTUM_FRAMES,
+    ),
+  );
+}
 
 function getPlaybackReferenceState() {
   if (!globalThis[PLAYBACK_REFERENCE_STATE_KEY]) {
@@ -105,16 +120,27 @@ class AudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.muted = false;
+    this.endOfUtteranceSilenceMs = DEFAULT_END_OF_UTTERANCE_SILENCE_MS;
     this.postMuteDrainQuantaRemaining = 0;
 
     this.port.onmessage = (event) => {
-      if (event.data?.type !== "set-muted") {
+      if (event.data?.type === "set-muted") {
+        this.muted = Boolean(event.data.muted);
+        this.postMuteDrainQuantaRemaining = this.muted
+          ? computePostMuteDrainQuanta(this.endOfUtteranceSilenceMs)
+          : 0;
         return;
       }
 
-      this.muted = Boolean(event.data.muted);
+      if (event.data?.type !== "set-end-of-utterance-silence-ms") {
+        return;
+      }
+
+      this.endOfUtteranceSilenceMs = clampEndOfUtteranceSilenceMs(
+        event.data.milliseconds,
+      );
       this.postMuteDrainQuantaRemaining = this.muted
-        ? POST_MUTE_DRAIN_QUANTA
+        ? computePostMuteDrainQuanta(this.endOfUtteranceSilenceMs)
         : 0;
     };
   }

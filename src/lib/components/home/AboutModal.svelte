@@ -4,6 +4,11 @@
     import { invoke } from "@tauri-apps/api/core";
     import { ask } from "@tauri-apps/plugin-dialog";
 
+    import {
+        END_OF_UTTERANCE_SILENCE_STEP_MS,
+        MAX_END_OF_UTTERANCE_SILENCE_MS,
+        MIN_END_OF_UTTERANCE_SILENCE_MS,
+    } from "$lib/openduck/config";
     import type {
         AppUpdateInfo,
         AppUpdateStatus,
@@ -26,11 +31,13 @@
         pongPlaybackEnabled,
         selectLastSessionEnabled,
         showStatEnabled,
+        endOfUtteranceSilenceMs,
         onUpdateGlobalShortcut,
         onUpdateGlobalShortcutEntireScreen,
         onUpdatePongPlayback,
         onUpdateSelectLastSession,
         onUpdateShowStat,
+        onUpdateEndOfUtteranceSilenceMs,
     } = $props<{
         buildInfo: BuildInfo | null;
         buildInfoError: string | null;
@@ -46,18 +53,20 @@
         pongPlaybackEnabled: boolean;
         selectLastSessionEnabled: boolean;
         showStatEnabled: boolean;
+        endOfUtteranceSilenceMs: number;
         onUpdateGlobalShortcut: (shortcut: string) => void;
         onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
         onUpdatePongPlayback: (enabled: boolean) => void;
         onUpdateSelectLastSession: (enabled: boolean) => void;
         onUpdateShowStat: (enabled: boolean) => void;
+        onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
     }>();
 
     let copyState = $state<"idle" | "copied" | "failed">("idle");
     let copyResetTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let isRefreshing = $state(false);
-    let editedShortcut = $state(globalShortcut);
-    let editedShortcutEntireScreen = $state(globalShortcutEntireScreen);
+    let editedShortcut = $state("");
+    let editedShortcutEntireScreen = $state("");
 
     $effect(() => {
         editedShortcut = globalShortcut;
@@ -169,6 +178,26 @@
     const updateActionDisabled = $derived(
         appUpdateStatus === "checking" || appUpdateStatus === "installing",
     );
+    const formattedEndOfUtteranceSilence = $derived.by(() => {
+        const seconds = endOfUtteranceSilenceMs / 1000;
+        return Number.isInteger(seconds)
+            ? `${seconds}s`
+            : `${seconds.toFixed(1)}s`;
+    });
+    const endOfUtteranceSilenceProgress = $derived.by(() => {
+        const range =
+            MAX_END_OF_UTTERANCE_SILENCE_MS -
+            MIN_END_OF_UTTERANCE_SILENCE_MS;
+        if (range <= 0) {
+            return 0;
+        }
+
+        return (
+            ((endOfUtteranceSilenceMs - MIN_END_OF_UTTERANCE_SILENCE_MS) /
+                range) *
+            100
+        );
+    });
 
     onDestroy(() => {
         clearCopyFeedback();
@@ -272,6 +301,45 @@
                     <span class="quantize-dot"></span>
                     <span>{showStatEnabled ? "Enabled" : "Disabled"}</span>
                 </button>
+            </div>
+            <div class="about-metadata-row slider-row">
+                <span class="about-metadata-label"
+                    >Silence Before Sending Audio to STT</span
+                >
+                <div class="about-slider-control">
+                    <div class="about-slider-header">
+                        <span class="about-slider-detail"
+                            >Longer waits capture more pause-heavy speech before transcription starts.</span
+                        >
+                        <span class="about-slider-value"
+                            >{formattedEndOfUtteranceSilence}</span
+                        >
+                    </div>
+                    <div class="about-slider-surface">
+                        <input
+                            type="range"
+                            class="about-slider"
+                            min={MIN_END_OF_UTTERANCE_SILENCE_MS}
+                            max={MAX_END_OF_UTTERANCE_SILENCE_MS}
+                            step={END_OF_UTTERANCE_SILENCE_STEP_MS}
+                            value={endOfUtteranceSilenceMs}
+                            style={`--slider-progress: ${endOfUtteranceSilenceProgress}%;`}
+                            aria-label="Silence before sending audio to STT"
+                            oninput={(event) =>
+                                onUpdateEndOfUtteranceSilenceMs(
+                                    Number(
+                                        (
+                                            event.currentTarget as HTMLInputElement
+                                        ).value,
+                                    ),
+                                )}
+                        />
+                        <div class="about-slider-scale" aria-hidden="true">
+                            <span>0.5s</span>
+                            <span>5.0s</span>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="about-metadata-row shortcut-row">
                 <span class="about-metadata-label">Look at Screen Region (During Call)</span>
@@ -431,5 +499,150 @@
 <style>
     .about-metadata-label {
         font-size: 10px;
+    }
+
+    .about-slider-header {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        margin-bottom: 10px;
+    }
+
+    .about-slider-control {
+        min-width: 0;
+    }
+
+    .about-slider-surface {
+        padding: 12px 14px 10px;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .about-slider {
+        --slider-progress: 50%;
+        --slider-fill-start: #ffdf63;
+        --slider-fill-end: #ffcd40;
+        --slider-track: rgba(255, 255, 255, 0.14);
+        appearance: none;
+        -webkit-appearance: none;
+        width: 100%;
+        height: 12px;
+        border-radius: 999px;
+        background: linear-gradient(
+            90deg,
+            var(--slider-fill-start) 0%,
+            var(--slider-fill-end) var(--slider-progress),
+            var(--slider-track) var(--slider-progress),
+            var(--slider-track) 100%
+        );
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+        cursor: pointer;
+        transition:
+            filter 0.18s ease,
+            box-shadow 0.18s ease;
+    }
+
+    .about-slider:hover {
+        filter: brightness(1.04);
+    }
+
+    .about-slider:focus-visible {
+        outline: none;
+        box-shadow:
+            inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+            0 0 0 4px rgba(255, 205, 64, 0.14);
+    }
+
+    .about-slider::-webkit-slider-runnable-track {
+        height: 12px;
+        border-radius: 999px;
+        background: transparent;
+    }
+
+    .about-slider::-webkit-slider-thumb {
+        appearance: none;
+        -webkit-appearance: none;
+        width: 24px;
+        height: 24px;
+        margin-top: -6px;
+        border-radius: 50%;
+        border: 1px solid rgba(47, 37, 0, 0.36);
+        background: linear-gradient(135deg, #fff2bf 0%, #ffcd40 100%);
+        box-shadow:
+            0 6px 16px rgba(255, 205, 64, 0.28),
+            0 0 0 3px rgba(255, 205, 64, 0.1);
+    }
+
+    .about-slider::-moz-range-track {
+        height: 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.14);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    }
+
+    .about-slider::-moz-range-progress {
+        height: 12px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #ffdf63 0%, #ffcd40 100%);
+    }
+
+    .about-slider::-moz-range-thumb {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 1px solid rgba(47, 37, 0, 0.36);
+        background: linear-gradient(135deg, #fff2bf 0%, #ffcd40 100%);
+        box-shadow:
+            0 6px 16px rgba(255, 205, 64, 0.28),
+            0 0 0 3px rgba(255, 205, 64, 0.1);
+        cursor: pointer;
+    }
+
+    .about-slider-scale {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 10px;
+        color: rgba(255, 255, 255, 0.46);
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+
+    .about-slider-value {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: rgba(255, 205, 64, 0.1);
+        border: 1px solid rgba(255, 205, 64, 0.22);
+        color: #ffcd40;
+        font-size: 0.78rem;
+        font-variant-numeric: tabular-nums;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+    }
+
+    .about-slider-detail {
+        color: rgba(255, 255, 255, 0.62);
+        font-size: 0.76rem;
+        line-height: 1.4;
+        max-width: 44ch;
+    }
+
+    @media (max-width: 720px) {
+        .about-slider-header {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+
+        .about-slider-detail {
+            max-width: none;
+        }
     }
 </style>

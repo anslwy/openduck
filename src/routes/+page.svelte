@@ -31,11 +31,16 @@
         CONTACTS_STORAGE_KEY,
         DEFAULT_CONTACT_ID,
         DEFAULT_CSM_MODEL,
+        DEFAULT_END_OF_UTTERANCE_SILENCE_MS,
         DEFAULT_GEMMA_VARIANT,
         DEFAULT_OLLAMA_MODEL,
         DEFAULT_STT_MODEL,
         DEFAULT_VOICE_SYSTEM_PROMPT,
+        END_OF_UTTERANCE_SILENCE_STEP_MS,
+        END_OF_UTTERANCE_SILENCE_STORAGE_KEY,
         MODEL_PREFERENCES_STORAGE_KEY,
+        MAX_END_OF_UTTERANCE_SILENCE_MS,
+        MIN_END_OF_UTTERANCE_SILENCE_MS,
         MODEL_PRESETS,
         PONG_PLAYBACK_STORAGE_KEY,
         SELECT_LAST_SESSION_STORAGE_KEY,
@@ -109,6 +114,11 @@
     type StoredShowStatPreference = {
         version: 1;
         enabled: boolean;
+    };
+
+    type StoredEndOfUtteranceSilencePreference = {
+        version: 1;
+        milliseconds: number;
     };
 
     let calling = $state(false);
@@ -197,6 +207,9 @@
     let pongPlaybackEnabled = $state(true);
     let selectLastSessionEnabled = $state(false);
     let showStatEnabled = $state(false);
+    let endOfUtteranceSilenceMs = $state(
+        DEFAULT_END_OF_UTTERANCE_SILENCE_MS,
+    );
     let globalShortcut = $state(DEFAULT_GLOBAL_SHORTCUT);
     let globalShortcutEntireScreen = $state(
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
@@ -909,6 +922,41 @@
         );
     }
 
+    function clampEndOfUtteranceSilenceMs(milliseconds: number) {
+        if (!Number.isFinite(milliseconds)) {
+            return DEFAULT_END_OF_UTTERANCE_SILENCE_MS;
+        }
+
+        const roundedMilliseconds = Math.round(milliseconds);
+        const steppedMilliseconds =
+            Math.round(
+                roundedMilliseconds / END_OF_UTTERANCE_SILENCE_STEP_MS,
+            ) * END_OF_UTTERANCE_SILENCE_STEP_MS;
+
+        return Math.min(
+            MAX_END_OF_UTTERANCE_SILENCE_MS,
+            Math.max(
+                MIN_END_OF_UTTERANCE_SILENCE_MS,
+                steppedMilliseconds,
+            ),
+        );
+    }
+
+    function persistEndOfUtteranceSilencePreference(milliseconds: number) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredEndOfUtteranceSilencePreference = {
+            version: 1,
+            milliseconds,
+        };
+        window.localStorage.setItem(
+            END_OF_UTTERANCE_SILENCE_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function loadPongPlaybackPreferenceFromStorage() {
         if (typeof window === "undefined") {
             return true;
@@ -996,6 +1044,53 @@
         }
     }
 
+    function loadEndOfUtteranceSilencePreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_END_OF_UTTERANCE_SILENCE_MS;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            END_OF_UTTERANCE_SILENCE_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_END_OF_UTTERANCE_SILENCE_MS;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                milliseconds?: unknown;
+            };
+            if (
+                parsed.version !== 1 ||
+                typeof parsed.milliseconds !== "number"
+            ) {
+                return DEFAULT_END_OF_UTTERANCE_SILENCE_MS;
+            }
+
+            return clampEndOfUtteranceSilenceMs(parsed.milliseconds);
+        } catch (err) {
+            console.error(
+                "Failed to restore end-of-utterance silence preference:",
+                err,
+            );
+            return DEFAULT_END_OF_UTTERANCE_SILENCE_MS;
+        }
+    }
+
+    function syncEndOfUtteranceSilenceWithCaptureProcessor(
+        milliseconds: number,
+    ) {
+        if (!captureProcessor) {
+            return;
+        }
+
+        captureProcessor.port.postMessage({
+            type: "set-end-of-utterance-silence-ms",
+            milliseconds,
+        });
+    }
+
     function applyPongPlaybackPreference(enabled: boolean) {
         pongPlaybackEnabled = enabled;
         persistPongPlaybackPreference(enabled);
@@ -1021,6 +1116,25 @@
     function applyShowStatPreference(enabled: boolean) {
         showStatEnabled = enabled;
         persistShowStatPreference(enabled);
+    }
+
+    function applyEndOfUtteranceSilencePreference(milliseconds: number) {
+        const normalizedMilliseconds =
+            clampEndOfUtteranceSilenceMs(milliseconds);
+        endOfUtteranceSilenceMs = normalizedMilliseconds;
+        persistEndOfUtteranceSilencePreference(normalizedMilliseconds);
+        syncEndOfUtteranceSilenceWithCaptureProcessor(
+            normalizedMilliseconds,
+        );
+
+        void invoke("set_end_of_utterance_silence_ms", {
+            milliseconds: normalizedMilliseconds,
+        }).catch((err) => {
+            console.error(
+                "Failed to update end-of-utterance silence preference:",
+                err,
+            );
+        });
     }
 
     async function initializePongPlaybackPreference() {
@@ -1050,6 +1164,12 @@
     async function initializeShowStatPreference() {
         const storedEnabled = loadShowStatPreferenceFromStorage();
         applyShowStatPreference(storedEnabled);
+    }
+
+    async function initializeEndOfUtteranceSilencePreference() {
+        const storedMilliseconds =
+            loadEndOfUtteranceSilencePreferenceFromStorage();
+        applyEndOfUtteranceSilencePreference(storedMilliseconds);
     }
 
     function persistGlobalShortcutPreference(shortcut: string) {
@@ -2848,6 +2968,9 @@
             silentCaptureSink = captureContext.createGain();
             silentCaptureSink.gain.value = 0;
             syncCaptureMutedState(micMuted);
+            syncEndOfUtteranceSilenceWithCaptureProcessor(
+                endOfUtteranceSilenceMs,
+            );
 
             captureProcessor.port.onmessage = (event) => {
                 if (!calling) {
@@ -4161,6 +4284,7 @@
             await initializePongPlaybackPreference();
             await initializeSelectLastSessionPreference();
             await initializeShowStatPreference();
+            await initializeEndOfUtteranceSilencePreference();
             await initializeGlobalShortcutPreference();
             await initializeGlobalShortcutEntireScreenPreference();
             await loadSessions();
@@ -4637,11 +4761,13 @@
                     {pongPlaybackEnabled}
                     {selectLastSessionEnabled}
                     {showStatEnabled}
+                    {endOfUtteranceSilenceMs}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
                     onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
                     onUpdatePongPlayback={applyPongPlaybackPreference}
                     onUpdateSelectLastSession={applySelectLastSessionPreference}
                     onUpdateShowStat={applyShowStatPreference}
+                    onUpdateEndOfUtteranceSilenceMs={applyEndOfUtteranceSilencePreference}
                 />
             </div>
         {/if}

@@ -337,6 +337,7 @@ struct AppState {
     tray_pong_playback_enabled: Mutex<bool>,
     tray_pong_playback_hydrated: Mutex<bool>,
     tray_pong_playback_modified_before_hydration: Mutex<bool>,
+    end_of_utterance_silence_ms: Mutex<u32>,
     conversation_log_has_visible_images: Mutex<bool>,
     selected_ollama_model: Mutex<String>,
     ollama_base_url: Mutex<String>,
@@ -1085,6 +1086,20 @@ fn initialize_pong_playback_preference(
     }
 
     effective_enabled
+}
+
+fn clamp_end_of_utterance_silence_ms(milliseconds: u32) -> u32 {
+    milliseconds.clamp(
+        MIN_END_OF_UTTERANCE_SILENCE_MS,
+        MAX_END_OF_UTTERANCE_SILENCE_MS,
+    )
+}
+
+#[tauri::command]
+fn set_end_of_utterance_silence_ms(state: State<'_, AppState>, milliseconds: u32) -> u32 {
+    let effective_milliseconds = clamp_end_of_utterance_silence_ms(milliseconds);
+    *state.end_of_utterance_silence_ms.lock().unwrap() = effective_milliseconds;
+    effective_milliseconds
 }
 
 #[tauri::command]
@@ -2597,7 +2612,11 @@ async fn receive_audio_chunk(
         return Ok(());
     }
     let silence_chunks_required =
-        required_silence_chunks(capture_sample_rate, prepared_chunk.samples.len());
+        required_silence_chunks(
+            capture_sample_rate,
+            prepared_chunk.samples.len(),
+            *state.end_of_utterance_silence_ms.lock().unwrap(),
+        );
 
     let mut is_really_speaking = false;
     if prepared_chunk.rms > SILENCE_THRESHOLD {
@@ -2690,9 +2709,13 @@ async fn receive_audio_chunk(
     Ok(())
 }
 
-fn required_silence_chunks(sample_rate: u32, chunk_sample_count: usize) -> usize {
+fn required_silence_chunks(
+    sample_rate: u32,
+    chunk_sample_count: usize,
+    silence_duration_ms: u32,
+) -> usize {
     let samples_per_chunk = chunk_sample_count.max(1) as u64;
-    let required_chunks = (u64::from(sample_rate) * u64::from(END_OF_UTTERANCE_SILENCE_MS))
+    let required_chunks = (u64::from(sample_rate) * u64::from(silence_duration_ms))
         .div_ceil(samples_per_chunk * 1000);
 
     required_chunks.max(1) as usize
@@ -4589,14 +4612,38 @@ mod tests {
 
     #[test]
     fn required_silence_chunks_scales_with_sample_rate() {
-        assert_eq!(required_silence_chunks(44_100, 128), 862);
-        assert_eq!(required_silence_chunks(48_000, 128), 938);
+        assert_eq!(
+            required_silence_chunks(44_100, 128, END_OF_UTTERANCE_SILENCE_MS),
+            862
+        );
+        assert_eq!(
+            required_silence_chunks(48_000, 128, END_OF_UTTERANCE_SILENCE_MS),
+            938
+        );
     }
 
     #[test]
     fn required_silence_chunks_respects_chunk_size() {
-        assert_eq!(required_silence_chunks(48_000, 256), 469);
-        assert_eq!(required_silence_chunks(48_000, 1024), 118);
+        assert_eq!(
+            required_silence_chunks(48_000, 256, END_OF_UTTERANCE_SILENCE_MS),
+            469
+        );
+        assert_eq!(
+            required_silence_chunks(48_000, 1024, END_OF_UTTERANCE_SILENCE_MS),
+            118
+        );
+    }
+
+    #[test]
+    fn clamp_end_of_utterance_silence_ms_stays_in_supported_range() {
+        assert_eq!(
+            clamp_end_of_utterance_silence_ms(MIN_END_OF_UTTERANCE_SILENCE_MS - 1),
+            MIN_END_OF_UTTERANCE_SILENCE_MS
+        );
+        assert_eq!(
+            clamp_end_of_utterance_silence_ms(MAX_END_OF_UTTERANCE_SILENCE_MS + 1),
+            MAX_END_OF_UTTERANCE_SILENCE_MS
+        );
     }
 
     #[test]
@@ -8458,6 +8505,7 @@ pub fn run() {
             tray_pong_playback_enabled: Mutex::new(true),
             tray_pong_playback_hydrated: Mutex::new(false),
             tray_pong_playback_modified_before_hydration: Mutex::new(false),
+            end_of_utterance_silence_ms: Mutex::new(END_OF_UTTERANCE_SILENCE_MS),
             conversation_log_has_visible_images: Mutex::new(false),
             selected_ollama_model: Mutex::new("gemma2:2b".to_string()),
             ollama_base_url: Mutex::new("http://127.0.0.1:11434".to_string()),
@@ -8500,6 +8548,7 @@ pub fn run() {
             set_tts_playback_active,
             set_pong_playback_enabled,
             initialize_pong_playback_preference,
+            set_end_of_utterance_silence_ms,
             get_global_shortcut_look_at_entire_screen,
             initialize_global_shortcut_look_at_entire_screen,
             set_global_shortcut_look_at_entire_screen,
