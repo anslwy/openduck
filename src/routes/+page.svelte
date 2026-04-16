@@ -38,6 +38,7 @@
         MODEL_PREFERENCES_STORAGE_KEY,
         MODEL_PRESETS,
         PONG_PLAYBACK_STORAGE_KEY,
+        SELECT_LAST_SESSION_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
         GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
         DEFAULT_GLOBAL_SHORTCUT,
@@ -94,6 +95,11 @@
     } from "$lib/openduck/types";
 
     type StoredPongPlaybackPreference = {
+        version: 1;
+        enabled: boolean;
+    };
+
+    type StoredSelectLastSessionPreference = {
         version: 1;
         enabled: boolean;
     };
@@ -182,6 +188,7 @@
     let activePongSource = $state<AudioBufferSourceNode | null>(null);
     let activePongGainNode = $state<GainNode | null>(null);
     let pongPlaybackEnabled = $state(true);
+    let selectLastSessionEnabled = $state(false);
     let globalShortcut = $state(DEFAULT_GLOBAL_SHORTCUT);
     let globalShortcutEntireScreen = $state(
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
@@ -851,6 +858,21 @@
         );
     }
 
+    function persistSelectLastSessionPreference(enabled: boolean) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredSelectLastSessionPreference = {
+            version: 1,
+            enabled,
+        };
+        window.localStorage.setItem(
+            SELECT_LAST_SESSION_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function loadPongPlaybackPreferenceFromStorage() {
         if (typeof window === "undefined") {
             return true;
@@ -879,6 +901,37 @@
         }
     }
 
+    function loadSelectLastSessionPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return false;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            SELECT_LAST_SESSION_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return false;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return false;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error(
+                "Failed to restore select last session preference:",
+                err,
+            );
+            return false;
+        }
+    }
+
     function applyPongPlaybackPreference(enabled: boolean) {
         pongPlaybackEnabled = enabled;
         persistPongPlaybackPreference(enabled);
@@ -894,6 +947,11 @@
                 updateStageAfterPlaybackStateChange();
             }
         }
+    }
+
+    function applySelectLastSessionPreference(enabled: boolean) {
+        selectLastSessionEnabled = enabled;
+        persistSelectLastSessionPreference(enabled);
     }
 
     async function initializePongPlaybackPreference() {
@@ -913,6 +971,11 @@
         }
 
         applyPongPlaybackPreference(effectiveEnabled);
+    }
+
+    async function initializeSelectLastSessionPreference() {
+        const storedEnabled = loadSelectLastSessionPreferenceFromStorage();
+        applySelectLastSessionPreference(storedEnabled);
     }
 
     function persistGlobalShortcutPreference(shortcut: string) {
@@ -3314,6 +3377,14 @@
             );
             currentSessionTitle = null;
             await loadSessions();
+
+            if (
+                !currentSessionId &&
+                selectLastSessionEnabled &&
+                sessions.length > 0
+            ) {
+                void handleSelectSession(sessions[0]);
+            }
         } catch (err) {
             console.error("Failed to clear call session:", err);
         }
@@ -3997,9 +4068,17 @@
             await restoreModelPreferences();
             await syncOllamaConfig();
             await initializePongPlaybackPreference();
+            await initializeSelectLastSessionPreference();
             await initializeGlobalShortcutPreference();
             await initializeGlobalShortcutEntireScreenPreference();
             await loadSessions();
+            if (
+                !currentSessionId &&
+                selectLastSessionEnabled &&
+                sessions.length > 0
+            ) {
+                void handleSelectSession(sessions[0]);
+            }
             await ensureRuntimeDependencies();
             await syncModelStatus();
             await syncOllamaModels();
@@ -4450,9 +4529,11 @@
                     {globalShortcut}
                     {globalShortcutEntireScreen}
                     {pongPlaybackEnabled}
+                    {selectLastSessionEnabled}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
                     onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
                     onUpdatePongPlayback={applyPongPlaybackPreference}
+                    onUpdateSelectLastSession={applySelectLastSessionPreference}
                 />
             </div>
         {/if}

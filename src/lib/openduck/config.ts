@@ -15,6 +15,7 @@ export const CONTACT_ICONS_STORE_NAME = "contact-icons";
 export const DEFAULT_CONTACT_ID = "contact-openduck";
 export const MODEL_PREFERENCES_STORAGE_KEY = "openduck.model-preferences.v1";
 export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
+export const SELECT_LAST_SESSION_STORAGE_KEY = "openduck.select-last-session.v1";
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
 export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY = "openduck.global-shortcut-entire.v1";
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";

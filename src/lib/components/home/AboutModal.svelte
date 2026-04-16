@@ -24,9 +24,11 @@
         globalShortcut,
         globalShortcutEntireScreen,
         pongPlaybackEnabled,
+        selectLastSessionEnabled,
         onUpdateGlobalShortcut,
         onUpdateGlobalShortcutEntireScreen,
         onUpdatePongPlayback,
+        onUpdateSelectLastSession,
     } = $props<{
         buildInfo: BuildInfo | null;
         buildInfoError: string | null;
@@ -40,9 +42,11 @@
         globalShortcut: string;
         globalShortcutEntireScreen: string;
         pongPlaybackEnabled: boolean;
+        selectLastSessionEnabled: boolean;
         onUpdateGlobalShortcut: (shortcut: string) => void;
         onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
         onUpdatePongPlayback: (enabled: boolean) => void;
+        onUpdateSelectLastSession: (enabled: boolean) => void;
     }>();
 
     let copyState = $state<"idle" | "copied" | "failed">("idle");
@@ -239,6 +243,18 @@
                 >
                     <span class="quantize-dot"></span>
                     <span>{pongPlaybackEnabled ? "Enabled" : "Disabled"}</span>
+                </button>
+            </div>
+            <div class="about-metadata-row">
+                <span class="about-metadata-label">Select Last Session When Startup</span>
+                <button
+                    type="button"
+                    class="quantize-toggle"
+                    class:active={selectLastSessionEnabled}
+                    onclick={() => onUpdateSelectLastSession(!selectLastSessionEnabled)}
+                >
+                    <span class="quantize-dot"></span>
+                    <span>{selectLastSessionEnabled ? "Enabled" : "Disabled"}</span>
                 </button>
             </div>
             <div class="about-metadata-row shortcut-row">
