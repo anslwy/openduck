@@ -5161,9 +5161,9 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     }
 
     let pong_playback_label = if tray_pong_playback_enabled {
-        "Disable Pong Sound"
+        "Disable Pop Sound"
     } else {
-        "Enable Pong Sound"
+        "Enable Pop Sound"
     };
     builder = builder
         .separator()

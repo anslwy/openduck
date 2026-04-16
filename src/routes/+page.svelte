@@ -525,7 +525,7 @@
     const PLAYBACK_PREBUFFER_SAMPLES = 2048;
     const MAX_CONTEXT_BACKED_CONVERSATION_LOG_ENTRIES = 48;
     const PONG_VOLUME = 0.7;
-    const pongUrl = "/pong.mp3";
+    const pongUrl = "/pop.mp3";
     const screenCaptureTitle = $derived(
         screenCapturePhase === "capturing"
             ? "Select a Screen Region"
@@ -3002,7 +3002,7 @@
 
         const response = await fetch(pongUrl);
         if (!response.ok) {
-            throw new Error(`Failed to fetch pong.mp3 (${response.status})`);
+            throw new Error(`Failed to fetch pop.mp3 (${response.status})`);
         }
 
         const audioBytes = await response.arrayBuffer();
