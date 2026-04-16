@@ -370,12 +370,12 @@
             : selectedCsmModel === "kokoro_82m"
               ? "Kokoro-82M is a lighter English TTS backend. Quantization is not used for this model."
               : selectedCsmModel === "cosyvoice2_0_5b"
-                ? "CosyVoice2-0.5B produces high quality audio with higher usage of memory. Quantization is not used for this model."
+                ? "CosyVoice2-0.5B produces high quality audio with higher usage of memory."
                 : selectedCsmModel === "cosyvoice3_0_5b_8bit"
                   ? "Fun-CosyVoice3-0.5B (8-bit) provides a balance between realistic voice quality and RAM usage."
                   : selectedCsmModel === "cosyvoice3_0_5b_fp16"
-                    ? "Fun-CosyVoice3-0.5B (fp16) provides the highest possible voice quality. Quantization is not used for this model."
-                    : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM. Quantization is not used for this model.",
+                    ? "Fun-CosyVoice3-0.5B (fp16) provides the highest possible voice quality."
+                    : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM.",
     );
     const selectedSttModelLabel = $derived(
         sttModelOptions.find((option) => option.value === selectedSttModel)

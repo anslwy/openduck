@@ -652,6 +652,21 @@ def run_kokoro_server(_quantize: bool) -> int:
         return 1
 
     sample_rate = resolve_model_sample_rate(model)
+    try:
+        emit_status("Warming up Kokoro runtime...")
+        with redirect_library_stdout():
+            generator = model.generate(
+                text="Okay.",
+                voice=KOKORO_DEFAULT_VOICE,
+                speed=1.0,
+                lang_code=KOKORO_LANG_CODE,
+            )
+            for result in generator:
+                normalize_audio_array(result.audio)
+                break
+    except Exception as exc:
+        emit_status(f"Kokoro warmup skipped: {exc}")
+
     emit_status("Kokoro worker ready.")
     emit({"type": "ready", "sample_rate": sample_rate})
 
@@ -798,6 +813,24 @@ def run_cosyvoice2_server(_quantize: bool, context_audio: Path | None = None) ->
             traceback.print_exc(file=sys.stderr)
             return 1
 
+    if reference_audio is not None:
+        try:
+            emit_status("Warming up CosyVoice2 runtime...")
+            warmup_kwargs = supported_generate_kwargs(
+                model,
+                text="Okay.",
+                ref_audio=reference_audio,
+                ref_text="",
+                stream=True,
+            )
+            with redirect_library_stdout():
+                generator = model.generate(**warmup_kwargs)
+                for result in generator:
+                    normalize_audio_array(result.audio)
+                    break
+        except Exception as exc:
+            emit_status(f"CosyVoice2 warmup skipped: {exc}")
+
     emit_status("CosyVoice2 worker ready.")
     emit({"type": "ready", "sample_rate": sample_rate})
 
@@ -875,6 +908,7 @@ def run_cosyvoice2_server(_quantize: bool, context_audio: Path | None = None) ->
                 speed=float(request.get("speed", 1.0)),
                 temperature=float(request.get("temperature", 0.7)),
                 top_k=int(request.get("top_k", 50)),
+                stream=True,
             )
             with redirect_library_stdout():
                 generator = model.generate(**generate_kwargs)
@@ -977,6 +1011,24 @@ def run_cosyvoice3_server(
             traceback.print_exc(file=sys.stderr)
             return 1
 
+    if reference_audio is not None:
+        try:
+            emit_status("Warming up CosyVoice3 runtime...")
+            warmup_kwargs = supported_generate_kwargs(
+                model,
+                text="Okay.",
+                ref_audio=reference_audio,
+                ref_text="",
+                stream=True,
+            )
+            with redirect_library_stdout():
+                generator = model.generate(**warmup_kwargs)
+                for result in generator:
+                    normalize_audio_array(result.audio)
+                    break
+        except Exception as exc:
+            emit_status(f"CosyVoice3 warmup skipped: {exc}")
+
     emit_status("CosyVoice3 worker ready.")
     emit({"type": "ready", "sample_rate": sample_rate})
 
@@ -1054,6 +1106,7 @@ def run_cosyvoice3_server(
                 speed=float(request.get("speed", 1.0)),
                 temperature=float(request.get("temperature", 0.7)),
                 top_k=int(request.get("top_k", 50)),
+                stream=True,
             )
             with redirect_library_stdout():
                 generator = model.generate(**generate_kwargs)
