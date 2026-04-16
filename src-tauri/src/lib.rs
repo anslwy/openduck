@@ -327,6 +327,8 @@ struct AppState {
     current_session_id: Mutex<Option<String>>,
     current_session_title: Mutex<Option<String>>,
     call_started_at: Mutex<Option<Instant>>,
+    processing_audio_started_at: Mutex<Option<Instant>>,
+    processing_audio_latency_request_id: Mutex<Option<u64>>,
     tray_timer_generation: AtomicU64,
     tray_title_override_generation: AtomicU64,
     call_in_progress: Mutex<bool>,
@@ -3631,6 +3633,43 @@ async fn send_csm_synthesis_request(
     Ok(())
 }
 
+fn track_processing_audio_latency_request(app_handle: &tauri::AppHandle, request_id: u64) {
+    let state = app_handle.state::<AppState>();
+    if state.processing_audio_started_at.lock().unwrap().is_none() {
+        return;
+    }
+
+    *state.processing_audio_latency_request_id.lock().unwrap() = Some(request_id);
+}
+
+fn log_processing_audio_latency_for_first_chunk(app_handle: &tauri::AppHandle, request_id: u64) {
+    let state = app_handle.state::<AppState>();
+    {
+        let mut tracked_request_id = state.processing_audio_latency_request_id.lock().unwrap();
+        if *tracked_request_id != Some(request_id) {
+            return;
+        }
+        *tracked_request_id = None;
+    }
+
+    let Some(started_at) = state.processing_audio_started_at.lock().unwrap().take() else {
+        return;
+    };
+
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    info!(
+        "Latency from processing_audio to first audio chunk: {} ms",
+        latency_ms
+    );
+    emit_processing_audio_latency(
+        app_handle,
+        ProcessingAudioLatencyEvent {
+            request_id,
+            latency_ms,
+        },
+    );
+}
+
 async fn queue_spoken_response_segments_for_csm(
     app_handle: &tauri::AppHandle,
     request_id: u64,
@@ -3655,6 +3694,7 @@ async fn queue_spoken_response_segments_for_csm(
     }
 
     if !*started_audio_response {
+        track_processing_audio_latency_request(app_handle, request_id);
         emit_call_stage(app_handle, "generating_audio", "Generating Audio");
         emit_csm_audio_start(app_handle, CsmAudioStartEvent { request_id });
         *started_audio_response = true;
@@ -5475,6 +5515,7 @@ async fn csm_stdout_task(
                 request_id,
                 audio_wav_base64,
             }) => {
+                log_processing_audio_latency_for_first_chunk(&app_handle, request_id);
                 if let Err(err) = app_handle.emit(
                     CSM_AUDIO_CHUNK_EVENT,
                     CsmAudioChunkEvent {
@@ -8407,6 +8448,8 @@ pub fn run() {
             current_session_id: Mutex::new(None),
             current_session_title: Mutex::new(None),
             call_started_at: Mutex::new(None),
+            processing_audio_started_at: Mutex::new(None),
+            processing_audio_latency_request_id: Mutex::new(None),
             tray_timer_generation: AtomicU64::new(0),
             tray_title_override_generation: AtomicU64::new(0),
             call_in_progress: Mutex::new(false),

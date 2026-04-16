@@ -66,6 +66,7 @@ pub(crate) const CSM_AUDIO_STOP_EVENT: &str = "csm-audio-stop";
 pub(crate) const CSM_ERROR_EVENT: &str = "csm-error";
 pub(crate) const CSM_STATUS_EVENT: &str = "csm-status";
 pub(crate) const CALL_STAGE_EVENT: &str = "call-stage";
+pub(crate) const PROCESSING_AUDIO_LATENCY_EVENT: &str = "processing-audio-latency";
 pub(crate) const TRANSCRIPT_EVENT: &str = "transcript-ready";
 pub(crate) const ASSISTANT_RESPONSE_EVENT: &str = "assistant-response";
 pub(crate) const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";

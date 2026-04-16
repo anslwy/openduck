@@ -53,6 +53,12 @@ pub(crate) struct CallStageEvent {
 }
 
 #[derive(Clone, Serialize)]
+pub(crate) struct ProcessingAudioLatencyEvent {
+    pub(crate) request_id: u64,
+    pub(crate) latency_ms: u64,
+}
+
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TranscriptEvent {
     pub(crate) text: String,
@@ -160,6 +166,19 @@ pub(crate) fn emit_call_stage(app_handle: &AppHandle, phase: &str, message: &str
         let state = app_handle.state::<crate::AppState>();
         let mut phase_guard = state.call_stage_phase.lock().unwrap();
         *phase_guard = phase.to_string();
+
+        match phase {
+            "processing_audio" => {
+                *state.processing_audio_started_at.lock().unwrap() =
+                    Some(std::time::Instant::now());
+                *state.processing_audio_latency_request_id.lock().unwrap() = None;
+            }
+            "listening" => {
+                *state.processing_audio_started_at.lock().unwrap() = None;
+                *state.processing_audio_latency_request_id.lock().unwrap() = None;
+            }
+            _ => {}
+        }
     }
     crate::refresh_tray_presentation(app_handle);
 
@@ -177,6 +196,15 @@ pub(crate) fn emit_call_stage(app_handle: &AppHandle, phase: &str, message: &str
 pub(crate) fn emit_transcript_event(app_handle: &AppHandle, payload: TranscriptEvent) {
     if let Err(err) = app_handle.emit(TRANSCRIPT_EVENT, payload) {
         error!("Failed to emit transcript event: {}", err);
+    }
+}
+
+pub(crate) fn emit_processing_audio_latency(
+    app_handle: &AppHandle,
+    payload: ProcessingAudioLatencyEvent,
+) {
+    if let Err(err) = app_handle.emit(PROCESSING_AUDIO_LATENCY_EVENT, payload) {
+        error!("Failed to emit processing-audio-latency event: {}", err);
     }
 }
 

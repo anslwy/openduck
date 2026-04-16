@@ -45,6 +45,11 @@ export type CallStageEvent = {
     message: string;
 };
 
+export type ProcessingAudioLatencyEvent = {
+    request_id: number;
+    latency_ms: number;
+};
+
 export type TranscriptEvent = {
     text: string;
     imagePaths: string[];

@@ -39,6 +39,7 @@
         MODEL_PRESETS,
         PONG_PLAYBACK_STORAGE_KEY,
         SELECT_LAST_SESSION_STORAGE_KEY,
+        SHOW_STAT_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
         GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
         DEFAULT_GLOBAL_SHORTCUT,
@@ -80,6 +81,7 @@
         ModelMemoryUsageSnapshot,
         ModelPreset,
         ModelSelection,
+        ProcessingAudioLatencyEvent,
         RuntimeSetupStatusEvent,
         ScreenCaptureEvent,
         SelectOption,
@@ -100,6 +102,11 @@
     };
 
     type StoredSelectLastSessionPreference = {
+        version: 1;
+        enabled: boolean;
+    };
+
+    type StoredShowStatPreference = {
         version: 1;
         enabled: boolean;
     };
@@ -189,6 +196,7 @@
     let activePongGainNode = $state<GainNode | null>(null);
     let pongPlaybackEnabled = $state(true);
     let selectLastSessionEnabled = $state(false);
+    let showStatEnabled = $state(false);
     let globalShortcut = $state(DEFAULT_GLOBAL_SHORTCUT);
     let globalShortcutEntireScreen = $state(
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
@@ -226,6 +234,7 @@
     );
     let callStagePhase = $state<CallStagePhase>("idle");
     let callStageMessage = $state("");
+    let processingAudioLatencyMs = $state<number | null>(null);
     let screenCapturePhase = $state<ScreenCaptureEvent["phase"] | null>(null);
     let screenCaptureMessage = $state("");
     let screenCaptureHasPendingAttachment = $state(false);
@@ -267,7 +276,7 @@
         isGemmaLoaded || isCsmLoaded || isSttLoaded,
     );
     const showModelMemorySummary = $derived(
-        (modelMemorySnapshot?.total_bytes ?? 0) > 0,
+        showStatEnabled && (modelMemorySnapshot?.total_bytes ?? 0) > 0,
     );
     const showScreenCaptureCard = $derived(
         calling &&
@@ -575,6 +584,18 @@
         callStageMessage = message;
     }
 
+    function formatProcessingAudioLatency(latencyMs: number) {
+        if (latencyMs >= 10_000) {
+            return `${(latencyMs / 1000).toFixed(1)} s`;
+        }
+
+        if (latencyMs >= 1000) {
+            return `${(latencyMs / 1000).toFixed(2)} s`;
+        }
+
+        return `${latencyMs} ms`;
+    }
+
     function syncCaptureMutedState(muted: boolean) {
         if (!captureProcessor) {
             return;
@@ -873,6 +894,21 @@
         );
     }
 
+    function persistShowStatPreference(enabled: boolean) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredShowStatPreference = {
+            version: 1,
+            enabled,
+        };
+        window.localStorage.setItem(
+            SHOW_STAT_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function loadPongPlaybackPreferenceFromStorage() {
         if (typeof window === "undefined") {
             return true;
@@ -932,6 +968,34 @@
         }
     }
 
+    function loadShowStatPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return false;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            SHOW_STAT_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return false;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return false;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error("Failed to restore show stat preference:", err);
+            return false;
+        }
+    }
+
     function applyPongPlaybackPreference(enabled: boolean) {
         pongPlaybackEnabled = enabled;
         persistPongPlaybackPreference(enabled);
@@ -952,6 +1016,11 @@
     function applySelectLastSessionPreference(enabled: boolean) {
         selectLastSessionEnabled = enabled;
         persistSelectLastSessionPreference(enabled);
+    }
+
+    function applyShowStatPreference(enabled: boolean) {
+        showStatEnabled = enabled;
+        persistShowStatPreference(enabled);
     }
 
     async function initializePongPlaybackPreference() {
@@ -976,6 +1045,11 @@
     async function initializeSelectLastSessionPreference() {
         const storedEnabled = loadSelectLastSessionPreferenceFromStorage();
         applySelectLastSessionPreference(storedEnabled);
+    }
+
+    async function initializeShowStatPreference() {
+        const storedEnabled = loadShowStatPreferenceFromStorage();
+        applyShowStatPreference(storedEnabled);
     }
 
     function persistGlobalShortcutPreference(shortcut: string) {
@@ -2178,6 +2252,7 @@
     function stopCallTimerTracking() {
         callStartedAtMs = null;
         time = 0;
+        processingAudioLatencyMs = null;
 
         if (callTimerInterval) {
             clearInterval(callTimerInterval);
@@ -3281,6 +3356,7 @@
         resetScreenCaptureStatus();
         calling = true;
         callStartedAtMs = Date.now();
+        processingAudioLatencyMs = null;
         syncCallElapsedTime();
         activeTtsRequestId = null;
         syncTtsPlaybackState(false);
@@ -3327,6 +3403,7 @@
         resetScreenCaptureStatus();
         calling = true;
         callStartedAtMs = Date.now();
+        processingAudioLatencyMs = null;
         syncCallElapsedTime();
         activeTtsRequestId = null;
         syncTtsPlaybackState(false);
@@ -3367,6 +3444,7 @@
         closeConversationPopup();
         resetConversationLog();
         resetScreenCaptureStatus();
+        processingAudioLatencyMs = null;
         setCallStage("idle", "");
         stopCallTimerTracking();
 
@@ -3964,9 +4042,22 @@
                             payload.phase === "thinking" ||
                             payload.phase === "generating_audio"
                         ) {
+                            if (payload.phase === "processing_audio") {
+                                processingAudioLatencyMs = null;
+                            }
                             setCallStage(payload.phase, payload.message);
                         }
                     }),
+                    listen<ProcessingAudioLatencyEvent>(
+                        "processing-audio-latency",
+                        ({ payload }) => {
+                            if (!calling) {
+                                return;
+                            }
+
+                            processingAudioLatencyMs = payload.latency_ms;
+                        },
+                    ),
                     listen<TranscriptEvent>(
                         "transcript-ready",
                         ({ payload }) => {
@@ -4069,6 +4160,7 @@
             await syncOllamaConfig();
             await initializePongPlaybackPreference();
             await initializeSelectLastSessionPreference();
+            await initializeShowStatPreference();
             await initializeGlobalShortcutPreference();
             await initializeGlobalShortcutEntireScreenPreference();
             await loadSessions();
@@ -4357,18 +4449,32 @@
                 <span>{callStageMessage}</span>
             </div>
         {/if}
-        <div class="avatar-container" style="--theme-rgb: {themeRgb}">
-            {#if assistantSpeaking}
-                <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
-                <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
-                <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
+        <div class="avatar-shell" style="--theme-rgb: {themeRgb}">
+            <div class="avatar-container">
+                {#if assistantSpeaking}
+                    <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
+                    <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
+                    <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
+                {/if}
+                <div
+                    class="avatar"
+                    class:calling
+                    class:user-speaking={userSpeaking}
+                    style={selectedContactImageStyle}
+                ></div>
+            </div>
+            {#if calling && showStatEnabled}
+                <div class="avatar-latency" aria-live="polite">
+                    <span class="avatar-latency-label">Latency</span>
+                    <span class="avatar-latency-value"
+                        >{processingAudioLatencyMs == null
+                            ? "--"
+                            : formatProcessingAudioLatency(
+                                  processingAudioLatencyMs,
+                              )}</span
+                    >
+                </div>
             {/if}
-            <div
-                class="avatar"
-                class:calling
-                class:user-speaking={userSpeaking}
-                style={selectedContactImageStyle}
-            ></div>
         </div>
     </main>
 
@@ -4530,10 +4636,12 @@
                     {globalShortcutEntireScreen}
                     {pongPlaybackEnabled}
                     {selectLastSessionEnabled}
+                    {showStatEnabled}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
                     onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
                     onUpdatePongPlayback={applyPongPlaybackPreference}
                     onUpdateSelectLastSession={applySelectLastSessionPreference}
+                    onUpdateShowStat={applyShowStatPreference}
                 />
             </div>
         {/if}
