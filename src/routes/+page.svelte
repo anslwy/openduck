@@ -4110,7 +4110,7 @@
 <div class="app-container" class:contacts-open={showContactsPopup}>
     <div class="background" style={selectedContactImageStyle}></div>
 
-    {#if !isPreparingRuntime && !showContactsPopup && !showAboutPopup}
+    {#if !isPreparingRuntime && !showContactsPopup && !showAboutPopup && !showConversationPopup}
         <AppHeader
             {currentSessionTitle}
             {showSessionsPopup}
