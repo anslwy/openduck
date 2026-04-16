@@ -1,11 +1,31 @@
 # OpenDuck
 
-A local voice-call desktop application built for [rubberducking](https://en.wikipedia.org/wiki/Rubber_duck_debugging) on Apple Silicon.
-
-The frontend captures microphone audio and plays streamed speech output.
-The backend uses Gemma / Ollama for reply generation, a selectable STT backend for transcription, and a selectable speech backend for text-to-speech.
+Fast, screen-aware, voice-first, local AI assistant for [rubberducking](https://en.wikipedia.org/wiki/Rubber_duck_debugging). Built for Apple Silicon (M1 or later)
 
 <img width="689" height="745" alt="image" src="https://github.com/user-attachments/assets/dcf3b70b-5221-4139-8c98-0bd38557f17b" />
+
+## Key Features
+
+🎙️ Real-Time Voice Interaction
+
+Real-Time Conversation: Speak naturally. Interrupt the AI mid-sentence. No "push-to-talk" required.
+Voice Cloning: Upload a sample to create custom personas via CosyVoice3 support.
+Ultra-Fast TTS: Uses Kokoro-82M for high-quality, lightweight speech that feels human.
+
+👀 Screen-Aware Vision (Use Cases)
+
+Contextual Rubberducking: Use `Shift+Command+L` to capture a screen region and ask: "Why is this code throwing an error?" or "What does this graph mean?"
+
+Accessibility: Be a "Visual Prosthetic". Blind and visually impaired users can use `Shift+Command+Option+L` to have the AI describe any part of their screen in real-time.
+
+🎭 Portability with .openduck
+
+Persona in a Box: Package prompts, custom icons, and voice clones into a single .openduck file. Share your custom characters or expert mentors with one click.
+
+⚡ Engineered for Efficiency
+
+OpenDuck is built with a Rust backend and a Svelte frontend as a native MacOS application.
+We chose this stack specifically to maximize Unified Memory for your models. While Electron apps often idle at 500MB+ RAM, OpenDuck stays out of the way. By keeping the app overhead nearly invisible, we ensure that every possible gigabyte of your Mac's RAM is dedicated to running the smartest LLMs possible.
 
 ## Quick Start for Installing the Beta Version
 
@@ -117,11 +137,18 @@ The app is now split so the entry files stay focused on orchestration:
 
 ## FAQ
 
-### Q: What is the minimum requirement for RAM?
-### A: If you choose `Gemma-4-E2B` for both LLM and STT, then select `Kokoro-82M` for TTS you can get away with ~4GB
+> What is the minimum requirement for RAM?
 
-### Q: The model is too slow / My Mac does not have enough RAM / Even the E4B model is too dumb to be useful. What should I do?
-### A: Use [Ollama](https://ollama.com) for the LLM. They support cloud models. Execute for example `ollama run gemma4:31b-cloud` in your Terminal. Then you should be able to see the model in the dropdown on OpenDuck and you can chat with the model without using your GPU. Alternatively, you can setup Ollama on your more powerful desktop / GPU server then change the base url.
+If you choose `Gemma-4-E2B` for both LLM and STT, then select `Kokoro-82M` for TTS you can get away with ~4GB
 
-### Q: Failed to install some packages / Cannot start the call / There is an error. What to do?
-### A: Click "Check for Updates..." (the option under "About OpenDuck") to see if you are on the latest version. If not, try upgrading it to see if it resolves the issue. If the error persists, try pressing "Refresh Caches" to reinstall the runtime environment. If it's still not fixed, you can create an issue and make sure you include your OpenDuck version number, Mac model and the error message (if any)
+> The model is too slow / My Mac does not have enough RAM / Even the E4B model is too dumb to be useful. What should I do?
+
+Use [Ollama](https://ollama.com) for the LLM. They support cloud models. Execute for example `ollama run gemma4:31b-cloud` in your Terminal. Then you should be able to see the model in the dropdown on OpenDuck and you can chat with the model without using your GPU. Alternatively, you can setup Ollama on your more powerful desktop / GPU server then change the base url.
+
+> Failed to install some packages / Cannot start the call / There is an error. What to do?
+
+Click "Check for Updates..." (the option under "About OpenDuck") to see if you are on the latest version. If not, try upgrading it to see if it resolves the issue. If the error persists, try pressing "Refresh Caches" to reinstall the runtime environment. If it's still not fixed, you can create an issue and make sure you include your OpenDuck version number, Mac model and the error message (if any)
+
+> How do I find my conversation logs?
+
+They are all located at `~/.openduck/sessions/`
