@@ -230,7 +230,7 @@
 
         <div class="about-metadata-card">
             <div class="about-metadata-row">
-                <span class="about-metadata-label">Enable Pong Sound (When Screenshots are pasted / AI finishes response)</span>
+                <span class="about-metadata-label">Enable Pong Sound (Screenshots / Processing Audio / Finished Response)</span>
                 <button
                     type="button"
                     class="quantize-toggle"

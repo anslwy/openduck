@@ -2657,6 +2657,9 @@ async fn receive_audio_chunk(
         if *silent_count >= silence_chunks_required {
             info!("Silence detected, preparing buffered audio for transcription...");
             emit_call_stage(&app_handle, "processing_audio", "Processing Audio");
+            if *state.tray_pong_playback_enabled.lock().unwrap() {
+                emit_play_tray_pong(&app_handle);
+            }
             process_audio_turn(&buffer, capture_sample_rate, app_handle);
             buffer.clear();
             {
