@@ -432,13 +432,13 @@ main.idle-layout {
     left: 50%;
     bottom: calc(100% + 18px);
     transform: translateX(-50%);
-    width: min(calc(100vw - 32px), 420px);
-    max-height: min(52vh, 420px);
+    width: min(calc(100vw - 32px), 600px);
+    max-height: min(75vh, 680px);
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    padding: 18px;
-    border-radius: 24px;
+    gap: 16px;
+    padding: 22px;
+    border-radius: 28px;
     background: linear-gradient(
         180deg,
         rgba(34, 31, 16, 0.94) 0%,
@@ -451,6 +451,49 @@ main.idle-layout {
     backdrop-filter: blur(22px);
     box-sizing: border-box;
     z-index: 21;
+}
+
+@media (min-width: 1024px) {
+    .conversation-popup {
+        width: 720px;
+        max-height: 78vh;
+        padding: 24px;
+    }
+}
+
+@media (min-width: 1400px) {
+    .conversation-popup {
+        width: 800px;
+        max-height: 80vh;
+        padding: 28px;
+        gap: 20px;
+    }
+
+    .conversation-popup-title {
+        font-size: 1.1rem;
+    }
+
+    .conversation-bubble {
+        font-size: 1.05rem;
+        padding: 16px 20px;
+    }
+
+    .conversation-entry-content {
+        max-width: 92%;
+    }
+
+    .conversation-popup-subtitle {
+        font-size: 0.95rem;
+    }
+
+    .conversation-popup-title-input {
+        width: 400px;
+        font-size: 1.1rem;
+    }
+
+    .conversation-attachment-image {
+        max-height: 320px;
+    }
 }
 
 .contacts-modal-backdrop {
