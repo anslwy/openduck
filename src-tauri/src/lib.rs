@@ -3593,7 +3593,8 @@ async fn stream_gemma_response_to_csm(
         }
     }
 
-    log_chat_request_debug(conversation_session_id, &request);
+    // Hide the logs for now
+    // log_chat_request_debug(conversation_session_id, &request);
 
     let request_body = if is_ollama {
         serialize_request_for_ollama(&request)
@@ -3932,6 +3933,22 @@ async fn send_csm_synthesis_request(
     Ok(())
 }
 
+fn log_processing_audio_latency_for_first_message_chunk(app_handle: &tauri::AppHandle) {
+    let state = app_handle.state::<AppState>();
+    let latency_ms = {
+        let started_at = state.processing_audio_started_at.lock().unwrap();
+        let Some(started_at) = started_at.as_ref() else {
+            return;
+        };
+        started_at.elapsed().as_millis() as u64
+    };
+
+    info!(
+        "Latency from processing_audio to first message chunk from LLM: {} ms",
+        latency_ms
+    );
+}
+
 fn track_processing_audio_latency_request(app_handle: &tauri::AppHandle, request_id: u64) {
     let state = app_handle.state::<AppState>();
     if state.processing_audio_started_at.lock().unwrap().is_none() {
@@ -3993,6 +4010,7 @@ async fn queue_spoken_response_segments_for_csm(
     }
 
     if !*started_audio_response {
+        log_processing_audio_latency_for_first_message_chunk(app_handle);
         track_processing_audio_latency_request(app_handle, request_id);
         emit_call_stage(app_handle, "generating_audio", "Generating Audio");
         emit_csm_audio_start(app_handle, CsmAudioStartEvent { request_id });
