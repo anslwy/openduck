@@ -30,6 +30,8 @@
         handleClearSttCache,
         handleDownloadStt,
         handleLoadStt,
+        isExternalGemmaVariant,
+        externalProviderLabel,
     } = $props<{
         sttUsesGemma: boolean;
         isGemmaLoaded: boolean;
@@ -58,6 +60,8 @@
         handleClearSttCache: () => Promise<void>;
         handleDownloadStt: () => Promise<void>;
         handleLoadStt: () => Promise<void>;
+        isExternalGemmaVariant: boolean;
+        externalProviderLabel: string;
     }>();
 </script>
 
@@ -90,8 +94,8 @@
                     </div>
                 </div>
                 <span class="banner-subtitle"
-                    >{selectedGemmaVariant === "ollama"
-                        ? "Not supported with Ollama"
+                    >{isExternalGemmaVariant
+                        ? `Not supported with ${externalProviderLabel}`
                         : isGemmaLoaded
                           ? "Using the loaded Gemma model"
                           : "Loads with the Gemma model above"}</span

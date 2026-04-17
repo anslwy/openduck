@@ -143,7 +143,10 @@ If you choose `Gemma-4-E2B` for both LLM and STT, then select `Kokoro-82M` for T
 
 > The model is too slow / My Mac does not have enough RAM / Even the E4B model is too dumb to be useful. What should I do?
 
-Use [Ollama](https://ollama.com) for the LLM. They support cloud models. Execute for example `ollama run gemma4:31b-cloud` in your Terminal. Then you should be able to see the model in the dropdown on OpenDuck and you can chat with the model without using your GPU. Alternatively, you can setup Ollama on your more powerful desktop / GPU server then change the base url.
+Use an external LLM server for the LLM.
+
+- [Ollama](https://ollama.com): execute for example `ollama run gemma4:31b-cloud` in your Terminal. The model should then appear in the LLM dropdown in OpenDuck. You can also point OpenDuck at an Ollama instance running on another machine by changing the base URL.
+- [LM Studio](https://lmstudio.ai): load your model in LM Studio, start its local server, then select `LM Studio` from the LLM dropdown in OpenDuck. By default OpenDuck expects LM Studio at `http://127.0.0.1:1234`, but you can change the base URL from the config button on the home screen.
 
 > Failed to install some packages / Cannot start the call / There is an error. What to do?
 

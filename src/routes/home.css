@@ -1957,7 +1957,7 @@ main.idle-layout {
     min-width: 170px;
 }
 
-.ollama-model-select {
+.external-model-select {
     min-width: 140px;
 }
 
@@ -2286,7 +2286,7 @@ main.idle-layout {
     background: rgba(255, 255, 255, 0.1);
 }
 
-.ollama-config-modal {
+.external-llm-config-modal {
     max-width: 480px;
 }
 

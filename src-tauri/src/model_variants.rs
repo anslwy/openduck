@@ -6,6 +6,7 @@ pub(crate) enum GemmaVariant {
     E4b,
     E2b,
     Ollama,
+    LmStudio,
 }
 
 impl GemmaVariant {
@@ -14,6 +15,7 @@ impl GemmaVariant {
             "e4b" => Ok(Self::E4b),
             "e2b" => Ok(Self::E2b),
             "ollama" => Ok(Self::Ollama),
+            "lmstudio" | "lm-studio" | "lm_studio" => Ok(Self::LmStudio),
             other => Err(format!("Unsupported LLM variant: {other}")),
         }
     }
@@ -23,6 +25,7 @@ impl GemmaVariant {
             Self::E4b => "e4b",
             Self::E2b => "e2b",
             Self::Ollama => "ollama",
+            Self::LmStudio => "lmstudio",
         }
     }
 
@@ -31,22 +34,35 @@ impl GemmaVariant {
             Self::E4b => "Gemma-4-E4B",
             Self::E2b => "Gemma-4-E2B",
             Self::Ollama => "Ollama",
+            Self::LmStudio => "LM Studio",
         }
     }
 
-    pub(crate) fn repo_id(self) -> &'static str {
+    pub(crate) fn repo_id(self) -> Option<&'static str> {
         match self {
-            Self::E4b => "mlx-community/gemma-4-E4B-it-8bit",
-            Self::E2b => "mlx-community/gemma-4-E2B-it-4bit",
-            Self::Ollama => "gemma2:2b",
+            Self::E4b => Some("mlx-community/gemma-4-E4B-it-8bit"),
+            Self::E2b => Some("mlx-community/gemma-4-E2B-it-4bit"),
+            Self::Ollama | Self::LmStudio => None,
         }
     }
 
-    pub(crate) fn cache_dir(self) -> &'static str {
+    pub(crate) fn cache_dir(self) -> Option<&'static str> {
         match self {
-            Self::E4b => "models--mlx-community--gemma-4-E4B-it-8bit",
-            Self::E2b => "models--mlx-community--gemma-4-E2B-it-4bit",
-            Self::Ollama => "",
+            Self::E4b => Some("models--mlx-community--gemma-4-E4B-it-8bit"),
+            Self::E2b => Some("models--mlx-community--gemma-4-E2B-it-4bit"),
+            Self::Ollama | Self::LmStudio => None,
+        }
+    }
+
+    pub(crate) fn is_external(self) -> bool {
+        matches!(self, Self::Ollama | Self::LmStudio)
+    }
+
+    pub(crate) fn external_sentinel_port(self) -> Option<u16> {
+        match self {
+            Self::Ollama => Some(11434),
+            Self::LmStudio => Some(1234),
+            Self::E4b | Self::E2b => None,
         }
     }
 }

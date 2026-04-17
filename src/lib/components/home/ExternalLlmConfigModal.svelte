@@ -1,15 +1,22 @@
-<!-- Modal for configuring Ollama connection details like URL and API key. -->
+<!-- Modal for configuring external LLM connection details like URL and API key. -->
 <script lang="ts">
-    let { ollamaBaseUrl, ollamaApiKey, onSave, onClose } = $props<{
-        ollamaBaseUrl: string;
-        ollamaApiKey: string;
+    let { providerName, baseUrl, apiKey, urlPlaceholder, onSave, onClose } = $props<{
+        providerName: string;
+        baseUrl: string;
+        apiKey: string;
+        urlPlaceholder: string;
         onSave: (url: string, key: string) => Promise<void>;
         onClose: () => void;
     }>();
 
-    let url = $state(ollamaBaseUrl);
-    let key = $state(ollamaApiKey);
+    let url = $state("");
+    let key = $state("");
     let isSaving = $state(false);
+
+    $effect(() => {
+        url = baseUrl;
+        key = apiKey;
+    });
 
     async function handleSave() {
         isSaving = true;
@@ -17,7 +24,7 @@
             await onSave(url, key);
             onClose();
         } catch (error) {
-            console.error("Failed to save Ollama config:", error);
+            console.error(`Failed to save ${providerName} config:`, error);
             alert("Failed to save configuration.");
         } finally {
             isSaving = false;
@@ -33,18 +40,18 @@
 ></button>
 
 <div
-    class="about-modal ollama-config-modal"
+    class="about-modal external-llm-config-modal"
     role="dialog"
-    aria-labelledby="ollama-config-title"
+    aria-labelledby="external-llm-config-title"
     aria-modal="true"
 >
     <div class="about-modal-header">
         <div class="about-modal-copy">
-            <span class="about-modal-title" id="ollama-config-title"
-                >Ollama Configuration</span
+            <span class="about-modal-title" id="external-llm-config-title"
+                >{providerName} Configuration</span
             >
             <span class="about-modal-subtitle"
-                >Configure connection to your Ollama service</span
+                >Configure connection to your {providerName} service</span
             >
         </div>
         <button
@@ -75,28 +82,28 @@
 
     <div class="config-form">
         <div class="form-group">
-            <label for="ollama-url">Base URL</label>
+            <label for="external-llm-url">Base URL</label>
             <input
-                id="ollama-url"
+                id="external-llm-url"
                 type="text"
                 bind:value={url}
-                placeholder="http://127.0.0.1:11434"
+                placeholder={urlPlaceholder}
                 class="config-input"
             />
-            <p class="field-help">The root URL of your Ollama service.</p>
+            <p class="field-help">The root URL of your {providerName} service.</p>
         </div>
 
         <div class="form-group">
-            <label for="ollama-key">API Key (Optional)</label>
+            <label for="external-llm-key">API Key (Optional)</label>
             <input
-                id="ollama-key"
+                id="external-llm-key"
                 type="password"
                 bind:value={key}
                 placeholder="Enter API key if required"
                 class="config-input"
             />
             <p class="field-help">
-                Only needed if your Ollama service is behind an authenticated
+                Only needed if your {providerName} service is behind an authenticated
                 proxy.
             </p>
         </div>

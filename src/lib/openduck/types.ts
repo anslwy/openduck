@@ -126,7 +126,7 @@ export type ModelMemoryUsageSnapshot = {
     models: ModelMemoryUsageEntry[];
 };
 
-export type GemmaVariant = "e4b" | "e2b" | "ollama";
+export type GemmaVariant = "e4b" | "e2b" | "ollama" | "lmstudio";
 export type CsmModelVariant =
     | "expressiva_1b"
     | "kokoro_82m"
@@ -204,6 +204,7 @@ export type StoredModelPreferences = {
     csmModel: CsmModelVariant;
     sttModel: SttModelVariant;
     ollamaModel?: string | null;
+    lmstudioModel?: string | null;
 };
 
 export type ModelSelection = Omit<StoredModelPreferences, "version">;

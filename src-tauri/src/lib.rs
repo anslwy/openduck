@@ -265,6 +265,16 @@ struct OllamaModel {
     name: String,
 }
 
+#[derive(Deserialize)]
+struct OpenAiModelsResponse {
+    data: Vec<OpenAiModel>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiModel {
+    id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TrayIconVariant {
     Default,
@@ -343,6 +353,9 @@ struct AppState {
     selected_ollama_model: Mutex<String>,
     ollama_base_url: Mutex<String>,
     ollama_api_key: Mutex<Option<String>>,
+    selected_lmstudio_model: Mutex<String>,
+    lmstudio_base_url: Mutex<String>,
+    lmstudio_api_key: Mutex<Option<String>>,
     global_shortcut_look_at_screen_region: Mutex<String>,
     global_shortcut_look_at_screen_region_hydrated: Mutex<bool>,
     global_shortcut_look_at_screen_region_modified_before_hydration: Mutex<bool>,
@@ -1304,11 +1317,11 @@ async fn is_server_running(state: State<'_, AppState>) -> Result<bool, String> {
     let selected_variant = selected_gemma_variant(state.inner());
     let loaded_variant = loaded_gemma_variant(state.inner());
 
-    if selected_variant == GemmaVariant::Ollama {
-        if loaded_variant != Some(GemmaVariant::Ollama) {
+    if selected_variant.is_external() {
+        if loaded_variant != Some(selected_variant) {
             return Ok(false);
         }
-        return Ok(ollama_service_is_running(state.inner()).await);
+        return Ok(external_llm_service_is_running(state.inner(), selected_variant).await);
     }
 
     let port = {
@@ -1320,6 +1333,40 @@ async fn is_server_running(state: State<'_, AppState>) -> Result<bool, String> {
     };
 
     Ok(gemma_server_is_running_on_port(port).await)
+}
+
+fn normalize_optional_api_key(key: Option<String>) -> Option<String> {
+    key.and_then(|value| {
+        if value.trim().is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    })
+}
+
+fn selected_external_llm_model(state: &AppState, variant: GemmaVariant) -> Option<String> {
+    match variant {
+        GemmaVariant::Ollama => Some(state.selected_ollama_model.lock().unwrap().clone()),
+        GemmaVariant::LmStudio => Some(state.selected_lmstudio_model.lock().unwrap().clone()),
+        GemmaVariant::E4b | GemmaVariant::E2b => None,
+    }
+}
+
+fn external_llm_base_url(state: &AppState, variant: GemmaVariant) -> Option<String> {
+    match variant {
+        GemmaVariant::Ollama => Some(state.ollama_base_url.lock().unwrap().clone()),
+        GemmaVariant::LmStudio => Some(state.lmstudio_base_url.lock().unwrap().clone()),
+        GemmaVariant::E4b | GemmaVariant::E2b => None,
+    }
+}
+
+fn external_llm_api_key(state: &AppState, variant: GemmaVariant) -> Option<String> {
+    match variant {
+        GemmaVariant::Ollama => state.ollama_api_key.lock().unwrap().clone(),
+        GemmaVariant::LmStudio => state.lmstudio_api_key.lock().unwrap().clone(),
+        GemmaVariant::E4b | GemmaVariant::E2b => None,
+    }
 }
 
 async fn ollama_service_is_running(state: &AppState) -> bool {
@@ -1338,9 +1385,73 @@ async fn ollama_service_is_running(state: &AppState) -> bool {
     }
 }
 
+async fn openai_compatible_service_is_running(base_url: String, api_key: Option<String>) -> bool {
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+    let mut request = client.get(url);
+
+    if let Some(api_key) = api_key.as_ref() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    match request.send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+async fn lmstudio_service_is_running(state: &AppState) -> bool {
+    let base_url = state.lmstudio_base_url.lock().unwrap().clone();
+    let api_key = state.lmstudio_api_key.lock().unwrap().clone();
+    openai_compatible_service_is_running(base_url, api_key).await
+}
+
+async fn external_llm_service_is_running(state: &AppState, variant: GemmaVariant) -> bool {
+    match variant {
+        GemmaVariant::Ollama => ollama_service_is_running(state).await,
+        GemmaVariant::LmStudio => lmstudio_service_is_running(state).await,
+        GemmaVariant::E4b | GemmaVariant::E2b => false,
+    }
+}
+
 #[tauri::command]
 async fn check_ollama_status(state: State<'_, AppState>) -> Result<bool, String> {
     Ok(ollama_service_is_running(state.inner()).await)
+}
+
+#[tauri::command]
+async fn check_lmstudio_status(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(lmstudio_service_is_running(state.inner()).await)
+}
+
+async fn get_openai_compatible_models(
+    base_url: String,
+    api_key: Option<String>,
+    provider_label: &str,
+) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+    let mut request = client.get(url);
+
+    if let Some(api_key) = api_key.as_ref() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let resp = request
+        .send()
+        .await
+        .map_err(|e| format!("Failed to connect to {provider_label}: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("{provider_label} returned error: {}", resp.status()));
+    }
+
+    let payload = resp
+        .json::<OpenAiModelsResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse {provider_label} models: {e}"))?;
+
+    Ok(payload.data.into_iter().map(|m| m.id).collect())
 }
 
 #[tauri::command]
@@ -1372,13 +1483,31 @@ async fn get_ollama_models(state: State<'_, AppState>) -> Result<Vec<String>, St
 }
 
 #[tauri::command]
+async fn get_lmstudio_models(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let base_url = state.lmstudio_base_url.lock().unwrap().clone();
+    let api_key = state.lmstudio_api_key.lock().unwrap().clone();
+    get_openai_compatible_models(base_url, api_key, "LM Studio").await
+}
+
+#[tauri::command]
 fn get_ollama_model(state: State<'_, AppState>) -> String {
     state.selected_ollama_model.lock().unwrap().clone()
 }
 
 #[tauri::command]
+fn get_lmstudio_model(state: State<'_, AppState>) -> String {
+    state.selected_lmstudio_model.lock().unwrap().clone()
+}
+
+#[tauri::command]
 fn set_ollama_model(state: State<'_, AppState>, model: String) {
     let mut model_guard = state.selected_ollama_model.lock().unwrap();
+    *model_guard = model;
+}
+
+#[tauri::command]
+fn set_lmstudio_model(state: State<'_, AppState>, model: String) {
+    let mut model_guard = state.selected_lmstudio_model.lock().unwrap();
     *model_guard = model;
 }
 
@@ -1390,19 +1519,26 @@ fn get_ollama_config(state: State<'_, AppState>) -> (String, Option<String>) {
 }
 
 #[tauri::command]
+fn get_lmstudio_config(state: State<'_, AppState>) -> (String, Option<String>) {
+    let url = state.lmstudio_base_url.lock().unwrap().clone();
+    let key = state.lmstudio_api_key.lock().unwrap().clone();
+    (url, key)
+}
+
+#[tauri::command]
 fn set_ollama_config(state: State<'_, AppState>, url: String, key: Option<String>) {
     let mut url_guard = state.ollama_base_url.lock().unwrap();
     *url_guard = url;
     let mut key_guard = state.ollama_api_key.lock().unwrap();
-    *key_guard = if let Some(k) = key {
-        if k.trim().is_empty() {
-            None
-        } else {
-            Some(k)
-        }
-    } else {
-        None
-    };
+    *key_guard = normalize_optional_api_key(key);
+}
+
+#[tauri::command]
+fn set_lmstudio_config(state: State<'_, AppState>, url: String, key: Option<String>) {
+    let mut url_guard = state.lmstudio_base_url.lock().unwrap();
+    *url_guard = url;
+    let mut key_guard = state.lmstudio_api_key.lock().unwrap();
+    *key_guard = normalize_optional_api_key(key);
 }
 
 #[tauri::command]
@@ -1580,10 +1716,10 @@ fn loaded_model_memory_snapshot(state: &AppState) -> Result<ModelMemoryUsageSnap
     let mut models = Vec::new();
 
     if let Some(loaded_variant) = loaded_gemma_variant(state) {
-        let (label, detail) = if loaded_variant == GemmaVariant::Ollama {
+        let (label, detail) = if loaded_variant.is_external() {
             (
-                "Ollama".to_string(),
-                Some(state.selected_ollama_model.lock().unwrap().clone()),
+                loaded_variant.label().to_string(),
+                selected_external_llm_model(state, loaded_variant),
             )
         } else {
             ("LLM".to_string(), Some(loaded_variant.label().to_string()))
@@ -1591,8 +1727,8 @@ fn loaded_model_memory_snapshot(state: &AppState) -> Result<ModelMemoryUsageSnap
 
         if let Some(root_pid) = loaded_gemma_root_pid(state) {
             targets.push(("gemma".to_string(), label, detail, root_pid));
-        } else if loaded_variant == GemmaVariant::Ollama {
-            // Special case for Ollama which doesn't have a PID we track
+        } else if loaded_variant.is_external() {
+            // External providers do not have a local PID we track.
             models.push(ModelMemoryUsageEntry {
                 key: "gemma".to_string(),
                 label,
@@ -1903,14 +2039,17 @@ async fn start_server(
 
     let selected_variant = selected_gemma_variant(state.inner());
 
-    if selected_variant == GemmaVariant::Ollama {
-        if !ollama_service_is_running(state.inner()).await {
-            return Err("Ollama service is not responding at the configured URL.".to_string());
+    if selected_variant.is_external() {
+        if !external_llm_service_is_running(state.inner(), selected_variant).await {
+            return Err(format!(
+                "{} service is not responding at the configured URL.",
+                selected_variant.label()
+            ));
         }
         let mut port_guard = state.server_port.lock().unwrap();
-        *port_guard = Some(11434); // We still set a port to indicate it's "running"
+        *port_guard = selected_variant.external_sentinel_port();
         let mut loaded_variant_guard = state.loaded_gemma_variant.lock().unwrap();
-        *loaded_variant_guard = Some(GemmaVariant::Ollama);
+        *loaded_variant_guard = Some(selected_variant);
         return Ok(());
     }
 
@@ -1946,7 +2085,9 @@ async fn start_server(
             .args(&[
                 "--server",
                 "--model",
-                selected_variant.repo_id(),
+                selected_variant.repo_id().ok_or_else(|| {
+                    format!("{} does not use a local MLX server.", selected_variant.label())
+                })?,
                 "--port",
                 &port_arg,
             ]);
@@ -2787,6 +2928,7 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
     };
     let generation_id;
     let conversation_session_id;
+    let active_gemma_variant: GemmaVariant;
     let gemma_model;
     let active_stt_model: SttModelVariant;
     let server_port;
@@ -2796,10 +2938,14 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
         conversation_session_id = current_conversation_session_id(state.inner());
         let variant = loaded_gemma_variant(state.inner())
             .unwrap_or_else(|| selected_gemma_variant(state.inner()));
-        gemma_model = if variant == GemmaVariant::Ollama {
-            state.selected_ollama_model.lock().unwrap().clone()
+        active_gemma_variant = variant;
+        gemma_model = if variant.is_external() {
+            selected_external_llm_model(state.inner(), variant).unwrap_or_default()
         } else {
-            variant.repo_id().to_string()
+            variant
+                .repo_id()
+                .unwrap_or_default()
+                .to_string()
         };
         active_stt_model = selected_stt_model(state.inner());
         server_port = *state.server_port.lock().unwrap();
@@ -2868,7 +3014,13 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
 
         let transcription_result = match active_stt_model {
             SttModelVariant::Gemma => {
-                transcribe_audio_with_gemma(server_port, &gemma_model, &audio_path).await
+                transcribe_audio_with_gemma(
+                    active_gemma_variant,
+                    server_port,
+                    &gemma_model,
+                    &audio_path,
+                )
+                .await
             }
             SttModelVariant::DistilWhisperLargeV3 | SttModelVariant::WhisperLargeV3Turbo => {
                 transcribe_audio_with_stt_worker(&app_handle_for_task, &audio_path).await
@@ -3098,12 +3250,16 @@ fn start_response_generation(
 }
 
 async fn transcribe_audio_with_gemma(
+    variant: GemmaVariant,
     server_port: u16,
     gemma_model: &str,
     audio_path: &Path,
 ) -> Result<String, String> {
-    if server_port == 11434 {
-        return Err("Ollama does not support audio transcription. Please switch to Whisper Large V3 Turbo for STT.".to_string());
+    if variant.is_external() {
+        return Err(format!(
+            "{} does not support audio transcription. Please switch to Whisper Large V3 Turbo for STT.",
+            variant.label()
+        ));
     }
     let stt_started_at = Instant::now();
     let client = reqwest::Client::new();
@@ -3412,7 +3568,15 @@ async fn stream_gemma_response_to_csm(
         stream: true,
     };
 
-    let is_ollama = server_port == 11434;
+    let state = app_handle.state::<AppState>();
+    let loaded_variant = loaded_gemma_variant(state.inner())
+        .unwrap_or_else(|| selected_gemma_variant(state.inner()));
+    let is_ollama = loaded_variant == GemmaVariant::Ollama;
+    let provider_label = if loaded_variant.is_external() {
+        loaded_variant.label()
+    } else {
+        "MLX"
+    };
     let mut _temp_image_files = Vec::new();
     if !is_ollama {
         for msg in &mut request.messages {
@@ -3431,15 +3595,15 @@ async fn stream_gemma_response_to_csm(
 
     log_chat_request_debug(conversation_session_id, &request);
 
-    let state = app_handle.state::<AppState>();
     let request_body = if is_ollama {
         serialize_request_for_ollama(&request)
     } else {
         serde_json::to_value(&request).unwrap()
     };
 
-    let base_url = if is_ollama {
-        state.ollama_base_url.lock().unwrap().clone()
+    let base_url = if loaded_variant.is_external() {
+        external_llm_base_url(state.inner(), loaded_variant)
+            .ok_or_else(|| format!("Missing {} base URL.", loaded_variant.label()))?
     } else {
         server_base_url(server_port)
     };
@@ -3448,22 +3612,15 @@ async fn stream_gemma_response_to_csm(
         .post(format!("{}/v1/chat/completions", base_url.trim_end_matches('/')))
         .json(&request_body);
 
-    if is_ollama {
-        if let Some(api_key) = state.ollama_api_key.lock().unwrap().as_ref() {
-            request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
-        }
+    if let Some(api_key) = external_llm_api_key(state.inner(), loaded_variant).as_ref() {
+        request_builder =
+            request_builder.header("Authorization", format!("Bearer {}", api_key));
     }
 
     let mut response = request_builder
         .send()
         .await
-        .map_err(|e| {
-            format!(
-                "Failed to call {} Server: {}",
-                if is_ollama { "Ollama" } else { "MLX" },
-                e
-            )
-        })?;
+        .map_err(|e| format!("Failed to call {provider_label} Server: {e}"))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -3472,8 +3629,7 @@ async fn stream_gemma_response_to_csm(
             .await
             .unwrap_or_else(|e| format!("Failed to read error body: {e}"));
         return Err(format!(
-            "{} Server returned error {status}: {body}",
-            if is_ollama { "Ollama" } else { "MLX" }
+            "{provider_label} Server returned error {status}: {body}"
         ));
     }
 
@@ -5641,7 +5797,11 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     } else if any_models_loaded {
         builder = builder.separator();
 
-        if gemma_loaded && loaded_gemma_variant(state.inner()) != Some(GemmaVariant::Ollama) {
+        if gemma_loaded
+            && !loaded_gemma_variant(state.inner())
+                .map(|variant| variant.is_external())
+                .unwrap_or(false)
+        {
             builder = builder.text(TRAY_UNLOAD_GEMMA_MENU_ID, "Unload Gemma");
         }
         if stt_loaded {
@@ -7521,10 +7681,13 @@ fn any_snapshot_matches(model_dir_name: &str, predicate: impl Fn(&Path) -> bool)
 }
 
 fn gemma_model_cache_exists(variant: GemmaVariant) -> bool {
-    if variant == GemmaVariant::Ollama {
+    if variant.is_external() {
         return true;
     }
-    any_snapshot_matches(variant.cache_dir(), gemma_snapshot_is_complete)
+    variant
+        .cache_dir()
+        .map(|cache_dir| any_snapshot_matches(cache_dir, gemma_snapshot_is_complete))
+        .unwrap_or(false)
 }
 
 fn csm_model_cache_exists(variant: CsmModelVariant) -> bool {
@@ -8371,7 +8534,10 @@ fn clear_model_cache(state: State<'_, AppState>, model: String) -> Result<(), St
                 ));
             }
 
-            clear_huggingface_cache(selected_variant.cache_dir())?;
+            let cache_dir = selected_variant.cache_dir().ok_or_else(|| {
+                format!("{} does not use a local cache directory.", selected_variant.label())
+            })?;
+            clear_huggingface_cache(cache_dir)?;
         }
         DownloadModel::Csm => {
             let selected_variant = selected_csm_model(state.inner());
@@ -8422,12 +8588,18 @@ async fn download_model(
     let selected_variant = selected_gemma_variant(state.inner());
     let python_executable = resolve_gemma_python_executable(&app_handle)?;
     let gemma_site_packages = resolve_gemma_site_packages(&app_handle)?;
+    let model_repo_id = selected_variant.repo_id().ok_or_else(|| {
+        format!(
+            "{} uses an external server and does not need a local download.",
+            selected_variant.label()
+        )
+    })?;
     run_hf_download(
         &app_handle,
         python_executable,
         gemma_site_packages,
         "gemma",
-        selected_variant.repo_id(),
+        model_repo_id,
         &[],
     )
     .await
@@ -8934,6 +9106,9 @@ pub fn run() {
             selected_ollama_model: Mutex::new("gemma2:2b".to_string()),
             ollama_base_url: Mutex::new("http://127.0.0.1:11434".to_string()),
             ollama_api_key: Mutex::new(None),
+            selected_lmstudio_model: Mutex::new(String::new()),
+            lmstudio_base_url: Mutex::new("http://127.0.0.1:1234".to_string()),
+            lmstudio_api_key: Mutex::new(None),
             global_shortcut_look_at_screen_region: Mutex::new("Command+Shift+L".to_string()),
             global_shortcut_look_at_screen_region_hydrated: Mutex::new(false),
             global_shortcut_look_at_screen_region_modified_before_hydration: Mutex::new(false),
@@ -8992,6 +9167,12 @@ pub fn run() {
                 set_ollama_model,
                 get_ollama_config,
                 set_ollama_config,
+                check_lmstudio_status,
+                get_lmstudio_models,
+                get_lmstudio_model,
+                set_lmstudio_model,
+                get_lmstudio_config,
+                set_lmstudio_config,
                 check_csm_status,
             check_stt_status,
             clear_model_cache,

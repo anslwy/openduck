@@ -25,11 +25,15 @@
         handleClearGemmaCache,
         handleDownloadGemma,
         handleLoadGemma,
-        ollamaModels,
-        selectedOllamaModel,
-        handleOllamaModelChange,
-        ollamaModelDisabled,
-        openOllamaConfig,
+        isExternalGemmaVariant,
+        externalProviderLabel,
+        externalProviderSupported,
+        externalProviderGuideText,
+        externalModels,
+        selectedExternalModel,
+        handleExternalModelChange,
+        externalModelDisabled,
+        openExternalConfig,
     } = $props<{
         isDownloadingGemma: boolean;
         isGemmaDownloaded: boolean;
@@ -55,30 +59,34 @@
         handleClearGemmaCache: () => Promise<void>;
         handleDownloadGemma: () => Promise<void>;
         handleLoadGemma: () => Promise<void>;
-        ollamaModels: string[];
-        selectedOllamaModel: string;
-        handleOllamaModelChange: (event: Event) => Promise<void>;
-        ollamaModelDisabled: boolean;
-        openOllamaConfig: () => void;
+        isExternalGemmaVariant: boolean;
+        externalProviderLabel: string;
+        externalProviderSupported: boolean;
+        externalProviderGuideText: string | null;
+        externalModels: string[];
+        selectedExternalModel: string;
+        handleExternalModelChange: (event: Event) => Promise<void>;
+        externalModelDisabled: boolean;
+        openExternalConfig: () => void;
     }>();
 </script>
 
-{#snippet ollamaModelSelect()}
-    {#if selectedGemmaVariant === "ollama" && ollamaModels.length > 0}
-        <div class="tooltip-shell variant-select-shell ollama-model-shell">
+{#snippet externalModelSelect()}
+    {#if isExternalGemmaVariant && externalModels.length > 0}
+        <div class="tooltip-shell variant-select-shell external-model-shell">
             <select
-                class="variant-select ollama-model-select"
-                value={selectedOllamaModel}
-                aria-label="Ollama model"
-                disabled={ollamaModelDisabled}
-                onchange={handleOllamaModelChange}
+                class="variant-select external-model-select"
+                value={selectedExternalModel}
+                aria-label={`${externalProviderLabel} model`}
+                disabled={externalModelDisabled}
+                onchange={handleExternalModelChange}
             >
-                {#each ollamaModels as model}
+                {#each externalModels as model}
                     <option value={model}>{model}</option>
                 {/each}
             </select>
             <div class="tooltip-bubble variant-tooltip">
-                Select the Ollama model to use.
+                Select the {externalProviderLabel} model to use.
             </div>
         </div>
     {/if}
@@ -107,7 +115,7 @@
                         {gemmaVariantTooltip}
                     </div>
                 </div>
-                {@render ollamaModelSelect()}
+                {@render externalModelSelect()}
             </div>
             <div class="download-row">
                 <span
@@ -186,7 +194,7 @@
                                     {gemmaVariantTooltip}
                                 </div>
                             </div>
-                            {@render ollamaModelSelect()}
+                            {@render externalModelSelect()}
                         </div>
                         <span class="banner-subtitle">Loaded</span>
                     </div>
@@ -198,7 +206,7 @@
                         >
                             {isUnloadingGemma
                                 ? "Unloading..."
-                                : selectedGemmaVariant === "ollama"
+                                : isExternalGemmaVariant
                                   ? "Disconnect"
                                   : "Unload"}
                         </button>
@@ -240,15 +248,15 @@
                                 {gemmaVariantTooltip}
                             </div>
                         </div>
-                        {@render ollamaModelSelect()}
+                        {@render externalModelSelect()}
                     </div>
                     <div class="banner-subtitle-row">
                         <span class="banner-subtitle"
-                            >{selectedGemmaVariant === "ollama"
+                            >{isExternalGemmaVariant
                                 ? "External"
                                 : "Downloaded"}</span
                         >
-                        {#if selectedGemmaVariant !== "ollama"}
+                        {#if !isExternalGemmaVariant}
                             <button
                                 type="button"
                                 class="utility-btn subtitle-action-btn"
@@ -263,6 +271,9 @@
                             </button>
                         {/if}
                     </div>
+                    {#if isExternalGemmaVariant && !externalProviderSupported && externalProviderGuideText}
+                        <span class="banner-detail">{externalProviderGuideText}</span>
+                    {/if}
                 </div>
                 <div class="banner-action-row">
                     <button
@@ -274,16 +285,16 @@
                     >
                         {isLoadingGemma
                             ? "Loading..."
-                            : selectedGemmaVariant === "ollama"
+                            : isExternalGemmaVariant
                               ? "Connect"
                               : "Load Model"}
                     </button>
-                    {#if selectedGemmaVariant === "ollama"}
+                    {#if isExternalGemmaVariant}
                         <button
                             type="button"
                             class="utility-btn config-btn"
-                            onclick={openOllamaConfig}
-                            title="Configure Ollama connection"
+                            onclick={openExternalConfig}
+                            title={`Configure ${externalProviderLabel} connection`}
                         >
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                         </button>
@@ -314,15 +325,15 @@
                             {gemmaVariantTooltip}
                         </div>
                     </div>
-                    {@render ollamaModelSelect()}
+                    {@render externalModelSelect()}
                 </div>
                 {#if gemmaDownloadError}
                     <span class="banner-subtitle error">Download failed</span>
                     <span class="banner-detail error">{gemmaDownloadError}</span>
                 {:else}
                     <span class="banner-subtitle"
-                        >{selectedGemmaVariant === "ollama"
-                            ? "Ollama service not detected"
+                        >{isExternalGemmaVariant
+                            ? `${externalProviderLabel} service not detected`
                             : "Model not found in cache"}</span
                     >
                 {/if}
@@ -339,12 +350,12 @@
                           ? "Retry Download"
                           : "Download Model"}
                 </button>
-                {#if selectedGemmaVariant === "ollama"}
+                {#if isExternalGemmaVariant}
                     <button
                         type="button"
                         class="utility-btn config-btn"
-                        onclick={openOllamaConfig}
-                        title="Configure Ollama connection"
+                        onclick={openExternalConfig}
+                        title={`Configure ${externalProviderLabel} connection`}
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                     </button>

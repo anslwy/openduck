@@ -12,8 +12,8 @@
     import ConversationPopup from "$lib/components/home/ConversationPopup.svelte";
     import SessionsPopup from "$lib/components/home/SessionsPopup.svelte";
     import AppHeader from "$lib/components/home/AppHeader.svelte";
+    import ExternalLlmConfigModal from "$lib/components/home/ExternalLlmConfigModal.svelte";
     import GemmaBanner from "$lib/components/home/GemmaBanner.svelte";
-    import OllamaConfigModal from "$lib/components/home/OllamaConfigModal.svelte";
     import SpeechBanner from "$lib/components/home/SpeechBanner.svelte";
     import SttBanner from "$lib/components/home/SttBanner.svelte";
     import {
@@ -33,6 +33,7 @@
         DEFAULT_CSM_MODEL,
         DEFAULT_END_OF_UTTERANCE_SILENCE_MS,
         DEFAULT_GEMMA_VARIANT,
+        DEFAULT_LMSTUDIO_MODEL,
         DEFAULT_OLLAMA_MODEL,
         DEFAULT_STT_MODEL,
         DEFAULT_VOICE_SYSTEM_PROMPT,
@@ -128,8 +129,11 @@
     let isGemmaDownloaded = $state(false);
     let isGemmaLoaded = $state(false);
     let isOllamaSupported = $state(false);
+    let isLmStudioSupported = $state(false);
     let ollamaModels = $state<string[]>([]);
     let selectedOllamaModel = $state<string>("");
+    let lmStudioModels = $state<string[]>([]);
+    let selectedLmStudioModel = $state<string>(DEFAULT_LMSTUDIO_MODEL);
     let isCsmDownloaded = $state(false);
     let isCsmLoaded = $state(false);
     let isSttDownloaded = $state(false);
@@ -218,9 +222,11 @@
     let selectedContactId = $state(DEFAULT_CONTACT_ID);
     let showContactsPopup = $state(false);
     let contactIdOnPopupOpen = $state<string | null>(null);
-    let showOllamaConfig = $state(false);
+    let showExternalLlmConfig = $state(false);
     let ollamaBaseUrl = $state("http://127.0.0.1:11434");
     let ollamaApiKey = $state("");
+    let lmstudioBaseUrl = $state("http://127.0.0.1:1234");
+    let lmstudioApiKey = $state("");
     let showConversationPopup = $state(false);
     let showSessionsPopup = $state(false);
     let sessions = $state<SessionMetadata[]>([]);
@@ -315,7 +321,7 @@
             isLoadingGemma ||
             isUnloadingGemma,
     );
-    const ollamaModelDisabled = $derived(
+    const externalModelDisabled = $derived(
         isPreparingRuntime || isLoadingGemma || isUnloadingGemma,
     );
     const csmVariantDisabled = $derived(
@@ -345,6 +351,29 @@
     function setConversationLogViewport(element: HTMLDivElement | null) {
         conversationLogViewport = element;
     }
+
+    function isExternalGemmaVariant(variant: GemmaVariant) {
+        return variant === "ollama" || variant === "lmstudio";
+    }
+
+    function getExternalProviderLabel(variant: GemmaVariant) {
+        return variant === "lmstudio" ? "LM Studio" : "Ollama";
+    }
+
+    function getExternalProviderGuideText(variant: GemmaVariant) {
+        if (variant === "lmstudio") {
+            return "Start LM Studio's local server and load a model so it appears in the dropdown. The default URL is http://127.0.0.1:1234.";
+        }
+
+        return 'If your model does not show, run "ollama run {your_model}" in Terminal once so it appears here.';
+    }
+
+    function getExternalProviderUrlPlaceholder(variant: GemmaVariant) {
+        return variant === "lmstudio"
+            ? "http://127.0.0.1:1234"
+            : "http://127.0.0.1:11434";
+    }
+
     const modelPresetOptions: Array<SelectOption<ModelPreset>> = [
         { value: "lite", label: MODEL_PRESETS.lite.label },
         { value: "normal", label: MODEL_PRESETS.normal.label },
@@ -359,6 +388,10 @@
             label: isOllamaSupported ? "Ollama" : "Ollama (Not Supported)",
             disabled: !isOllamaSupported,
         },
+        {
+            value: "lmstudio",
+            label: "LM Studio",
+        },
     ]);
     const csmModelOptions: Array<SelectOption<CsmModelVariant>> = [
         { value: "kokoro_82m", label: "Kokoro-82M" },
@@ -371,7 +404,7 @@
         {
             value: "gemma",
             label: "Gemma",
-            disabled: selectedGemmaVariant === "ollama",
+            disabled: isExternalGemmaVariant(selectedGemmaVariant),
         },
         {
             value: "distil_whisper_large_v3",
@@ -387,7 +420,35 @@
             ? "E4B uses more RAM but is generally more capable. Recommended for Macs with 24 GB+ of unified memory."
             : selectedGemmaVariant === "e2b"
               ? "E2B uses less RAM but is generally less capable. Recommended for Macs with 16 GB+ of unified memory."
-              : 'Gemma STT is not supported with Ollama. If your model does not show, run "ollama run {your_model}" in Terminal (One-time only)',
+              : selectedGemmaVariant === "lmstudio"
+                ? "Gemma STT is not supported with LM Studio. Start LM Studio's local server and load a model so it appears here."
+                : 'Gemma STT is not supported with Ollama. If your model does not show, run "ollama run {your_model}" in Terminal (One-time only).',
+    );
+    const selectedGemmaUsesExternalProvider = $derived(
+        isExternalGemmaVariant(selectedGemmaVariant),
+    );
+    const selectedExternalProviderLabel = $derived(
+        getExternalProviderLabel(selectedGemmaVariant),
+    );
+    const selectedExternalProviderSupported = $derived(
+        selectedGemmaVariant === "lmstudio"
+            ? isLmStudioSupported
+            : selectedGemmaVariant === "ollama"
+              ? isOllamaSupported
+              : false,
+    );
+    const selectedExternalProviderGuideText = $derived(
+        selectedGemmaUsesExternalProvider && !selectedExternalProviderSupported
+            ? getExternalProviderGuideText(selectedGemmaVariant)
+            : null,
+    );
+    const selectedExternalModels = $derived(
+        selectedGemmaVariant === "lmstudio" ? lmStudioModels : ollamaModels,
+    );
+    const selectedExternalModel = $derived(
+        selectedGemmaVariant === "lmstudio"
+            ? selectedLmStudioModel
+            : selectedOllamaModel,
     );
     const selectedCsmModelLabel = $derived(
         csmModelOptions.find((option) => option.value === selectedCsmModel)
@@ -412,8 +473,8 @@
     );
     const sttModelTooltip = $derived(
         selectedSttModel === "gemma"
-            ? selectedGemmaVariant === "ollama"
-                ? "Gemma STT is not supported when using Ollama."
+            ? selectedGemmaUsesExternalProvider
+                ? `Gemma STT is not supported when using ${selectedExternalProviderLabel}.`
                 : "Use the loaded Gemma model for transcription. There is no separate STT model to load."
             : selectedSttModel === "distil_whisper_large_v3"
               ? "Use mlx-audio with distil-whisper/distil-large-v3 for transcription. This model has lower RAM usage but supports only English."
@@ -870,6 +931,7 @@
             csmModel: selectedCsmModel,
             sttModel: selectedSttModel,
             ollamaModel: selectedOllamaModel,
+            lmstudioModel: selectedLmStudioModel,
         };
         window.localStorage.setItem(
             MODEL_PREFERENCES_STORAGE_KEY,
@@ -1554,6 +1616,7 @@
             csmModel: selectedCsmModel,
             sttModel: selectedSttModel,
             ollamaModel: selectedOllamaModel,
+            lmstudioModel: selectedLmStudioModel,
         };
     }
 
@@ -1578,9 +1641,16 @@
 
         selectedGemmaVariant = restoredPreferences.gemmaVariant;
         selectedCsmModel = restoredPreferences.csmModel;
-        selectedSttModel = restoredPreferences.sttModel;
+        selectedSttModel =
+            restoredPreferences.sttModel === "gemma" &&
+            isExternalGemmaVariant(restoredPreferences.gemmaVariant)
+                ? DEFAULT_STT_MODEL
+                : restoredPreferences.sttModel;
         if (restoredPreferences.ollamaModel) {
             selectedOllamaModel = restoredPreferences.ollamaModel;
+        }
+        if (restoredPreferences.lmstudioModel) {
+            selectedLmStudioModel = restoredPreferences.lmstudioModel;
         }
 
         try {
@@ -1599,6 +1669,16 @@
             }
         }
 
+        if (restoredPreferences.lmstudioModel) {
+            try {
+                await invoke("set_lmstudio_model", {
+                    model: restoredPreferences.lmstudioModel,
+                });
+            } catch (err) {
+                console.error("Failed to restore LM Studio model:", err);
+            }
+        }
+
         try {
             await setCsmModelSelection(restoredPreferences.csmModel);
         } catch (err) {
@@ -1606,13 +1686,16 @@
         }
 
         try {
-            await setSttModelSelection(restoredPreferences.sttModel);
+            await setSttModelSelection(selectedSttModel);
         } catch (err) {
             console.error("Failed to restore STT model:", err);
         }
 
         if (isOllamaSupported) {
             await syncOllamaModels();
+        }
+        if (isLmStudioSupported) {
+            await syncLmStudioModels();
         }
     }
 
@@ -2358,8 +2441,8 @@
             return;
         }
 
-        if (showOllamaConfig) {
-            closeOllamaConfig();
+        if (showExternalLlmConfig) {
+            closeExternalConfig();
         }
     }
 
@@ -2626,7 +2709,9 @@
         const target = event.currentTarget as HTMLSelectElement;
         const nextVariant = target.value as GemmaVariant;
 
-        if (nextVariant === "ollama" && !isOllamaSupported) {
+        if (
+            nextVariant === "ollama" && !isOllamaSupported
+        ) {
             target.value = selectedGemmaVariant;
             return;
         }
@@ -2637,11 +2722,14 @@
 
         if (nextVariant === "ollama") {
             void syncOllamaModels();
+        } else if (nextVariant === "lmstudio") {
+            void syncLmStudioModels();
         }
 
-        if (nextVariant === "ollama" && selectedSttModel === "gemma") {
+        if (isExternalGemmaVariant(nextVariant) && selectedSttModel === "gemma") {
             try {
-                await setSttModelSelection("whisper_large_v3_turbo");
+                selectedSttModel = DEFAULT_STT_MODEL;
+                await setSttModelSelection(DEFAULT_STT_MODEL);
             } catch (err) {
                 console.error("Failed to auto-switch STT model:", err);
             }
@@ -2751,10 +2839,22 @@
                     model: nextSelection.ollamaModel,
                 });
             }
+
+            if (
+                currentSelection.lmstudioModel !== nextSelection.lmstudioModel
+            ) {
+                selectedLmStudioModel = nextSelection.lmstudioModel;
+                await invoke("set_lmstudio_model", {
+                    model: nextSelection.lmstudioModel,
+                });
+            }
         } catch (err) {
             selectedGemmaVariant = previousSelection.gemmaVariant;
             selectedCsmModel = previousSelection.csmModel;
             selectedSttModel = previousSelection.sttModel;
+            selectedOllamaModel = previousSelection.ollamaModel ?? DEFAULT_OLLAMA_MODEL;
+            selectedLmStudioModel =
+                previousSelection.lmstudioModel ?? DEFAULT_LMSTUDIO_MODEL;
             console.error("Failed to apply model preset:", err);
             alert(
                 `Failed to apply the ${MODEL_PRESETS[nextPreset].label} preset.\n${normalizeErrorMessage(err)}`,
@@ -2773,6 +2873,7 @@
                 sttModelVariant,
                 gemmaDownloaded,
                 ollamaSupported,
+                lmstudioSupported,
                 gemmaLoaded,
                 csmDownloaded,
                 csmLoaded,
@@ -2785,6 +2886,7 @@
                 invoke<SttModelVariant>("get_stt_model_variant"),
                 invoke<boolean>("check_model_status"),
                 invoke<boolean>("check_ollama_status"),
+                invoke<boolean>("check_lmstudio_status"),
                 invoke<boolean>("is_server_running"),
                 invoke<boolean>("check_csm_status"),
                 invoke<boolean>("is_csm_running"),
@@ -2798,7 +2900,9 @@
             selectedSttModel = sttModelVariant;
             isGemmaDownloaded = gemmaDownloaded;
             const previousOllamaSupported = isOllamaSupported;
+            const previousLmStudioSupported = isLmStudioSupported;
             isOllamaSupported = ollamaSupported;
+            isLmStudioSupported = lmstudioSupported;
             isGemmaLoaded = gemmaLoaded;
 
             if (
@@ -2806,6 +2910,17 @@
                 (!previousOllamaSupported || ollamaModels.length === 0)
             ) {
                 void syncOllamaModels();
+            } else if (!ollamaSupported) {
+                ollamaModels = [];
+            }
+
+            if (
+                lmstudioSupported &&
+                (!previousLmStudioSupported || lmStudioModels.length === 0)
+            ) {
+                void syncLmStudioModels();
+            } else if (!lmstudioSupported) {
+                lmStudioModels = [];
             }
 
             isCsmDownloaded = csmDownloaded;
@@ -2876,6 +2991,51 @@
         persistModelPreferences();
     }
 
+    async function syncLmStudioModels() {
+        if (!isLmStudioSupported) {
+            lmStudioModels = [];
+            return;
+        }
+        try {
+            const models = await invoke<string[]>("get_lmstudio_models");
+            lmStudioModels = models;
+            const current = await invoke<string>("get_lmstudio_model");
+
+            if (selectedLmStudioModel === "") {
+                selectedLmStudioModel = current;
+            }
+
+            if (
+                lmStudioModels.length > 0 &&
+                selectedLmStudioModel !== "" &&
+                !lmStudioModels.includes(selectedLmStudioModel)
+            ) {
+                selectedLmStudioModel = lmStudioModels[0];
+                await invoke("set_lmstudio_model", {
+                    model: selectedLmStudioModel,
+                });
+            } else if (
+                lmStudioModels.length > 0 &&
+                selectedLmStudioModel === ""
+            ) {
+                selectedLmStudioModel = lmStudioModels[0];
+                await invoke("set_lmstudio_model", {
+                    model: selectedLmStudioModel,
+                });
+            }
+        } catch (err) {
+            console.error("Failed to fetch LM Studio models:", err);
+        }
+    }
+
+    async function handleLmStudioModelChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        const nextModel = target.value;
+        selectedLmStudioModel = nextModel;
+        await invoke("set_lmstudio_model", { model: nextModel });
+        persistModelPreferences();
+    }
+
     async function syncOllamaConfig() {
         try {
             const [url, key] =
@@ -2887,28 +3047,53 @@
         }
     }
 
-    async function saveOllamaConfig(url: string, key: string) {
+    async function syncLmStudioConfig() {
         try {
-            await invoke("set_ollama_config", {
-                url,
-                key: key.trim() || null,
-            });
-            ollamaBaseUrl = url;
-            ollamaApiKey = key;
-            await syncModelStatus();
-            await syncOllamaModels();
+            const [url, key] =
+                await invoke<[string, string | null]>("get_lmstudio_config");
+            lmstudioBaseUrl = url;
+            lmstudioApiKey = key ?? "";
         } catch (err) {
-            console.error("Failed to save Ollama config:", err);
+            console.error("Failed to sync LM Studio config:", err);
+        }
+    }
+
+    async function saveExternalLlmConfig(url: string, key: string) {
+        try {
+            if (selectedGemmaVariant === "lmstudio") {
+                await invoke("set_lmstudio_config", {
+                    url,
+                    key: key.trim() || null,
+                });
+                lmstudioBaseUrl = url;
+                lmstudioApiKey = key;
+            } else {
+                await invoke("set_ollama_config", {
+                    url,
+                    key: key.trim() || null,
+                });
+                ollamaBaseUrl = url;
+                ollamaApiKey = key;
+            }
+
+            await syncModelStatus();
+            if (selectedGemmaVariant === "lmstudio") {
+                await syncLmStudioModels();
+            } else {
+                await syncOllamaModels();
+            }
+        } catch (err) {
+            console.error("Failed to save external LLM config:", err);
             throw err;
         }
     }
 
-    function openOllamaConfig() {
-        showOllamaConfig = true;
+    function openExternalConfig() {
+        showExternalLlmConfig = true;
     }
 
-    function closeOllamaConfig() {
-        showOllamaConfig = false;
+    function closeExternalConfig() {
+        showExternalLlmConfig = false;
     }
 
     async function ensureRuntimeDependencies() {
@@ -3678,6 +3863,8 @@
         try {
             if (selectedGemmaVariant === "ollama") {
                 await syncOllamaModels();
+            } else if (selectedGemmaVariant === "lmstudio") {
+                await syncLmStudioModels();
             }
             await invoke("start_server");
             isGemmaLoaded = true;
@@ -4278,6 +4465,7 @@
             await syncSelectedContactVoiceReference();
             await restoreModelPreferences();
             await syncOllamaConfig();
+            await syncLmStudioConfig();
             await initializePongPlaybackPreference();
             await initializeSelectLastSessionPreference();
             await initializeShowStatPreference();
@@ -4295,6 +4483,7 @@
             await ensureRuntimeDependencies();
             await syncModelStatus();
             await syncOllamaModels();
+            await syncLmStudioModels();
         })();
 
         healthCheckInterval = window.setInterval(() => {
@@ -4494,11 +4683,18 @@
                     {handleClearGemmaCache}
                     {handleDownloadGemma}
                     {handleLoadGemma}
-                    {ollamaModels}
-                    {selectedOllamaModel}
-                    {handleOllamaModelChange}
-                    {ollamaModelDisabled}
-                    {openOllamaConfig}
+                    isExternalGemmaVariant={selectedGemmaUsesExternalProvider}
+                    externalProviderLabel={selectedExternalProviderLabel}
+                    externalProviderSupported={selectedExternalProviderSupported}
+                    externalProviderGuideText={selectedExternalProviderGuideText}
+                    externalModels={selectedExternalModels}
+                    selectedExternalModel={selectedExternalModel}
+                    handleExternalModelChange={selectedGemmaVariant ===
+                    "lmstudio"
+                        ? handleLmStudioModelChange
+                        : handleOllamaModelChange}
+                    {externalModelDisabled}
+                    {openExternalConfig}
                 />
                 <SttBanner
                     {selectedGemmaVariant}
@@ -4528,6 +4724,8 @@
                     {handleClearSttCache}
                     {handleDownloadStt}
                     {handleLoadStt}
+                    isExternalGemmaVariant={selectedGemmaUsesExternalProvider}
+                    externalProviderLabel={selectedExternalProviderLabel}
                 />
                 <SpeechBanner
                     {isDownloadingCsm}
@@ -4669,12 +4867,20 @@
             </div>
         {/if}
 
-        {#if showOllamaConfig}
-            <OllamaConfigModal
-                {ollamaBaseUrl}
-                {ollamaApiKey}
-                onSave={saveOllamaConfig}
-                onClose={closeOllamaConfig}
+        {#if showExternalLlmConfig}
+            <ExternalLlmConfigModal
+                providerName={selectedExternalProviderLabel}
+                baseUrl={selectedGemmaVariant === "lmstudio"
+                    ? lmstudioBaseUrl
+                    : ollamaBaseUrl}
+                apiKey={selectedGemmaVariant === "lmstudio"
+                    ? lmstudioApiKey
+                    : ollamaApiKey}
+                urlPlaceholder={getExternalProviderUrlPlaceholder(
+                    selectedGemmaVariant,
+                )}
+                onSave={saveExternalLlmConfig}
+                onClose={closeExternalConfig}
             />
         {/if}
 
