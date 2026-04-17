@@ -473,7 +473,7 @@
     const loadAllDisabled = $derived(loadAllBusy);
     let lastLoadAllDisabled = $state(true);
     $effect(() => {
-        if (lastLoadAllDisabled && !loadAllDisabled) {
+        if (lastLoadAllDisabled && !loadAllDisabled && loadAllNeedsAction) {
             const loadAllBtn = document.querySelector(".load-all-btn");
             if (loadAllBtn) {
                 loadAllBtn.classList.add("pulse-animation");
