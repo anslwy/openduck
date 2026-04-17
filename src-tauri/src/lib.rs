@@ -2902,6 +2902,12 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                             .collect(),
                     },
                 );
+                let latest_audio_path = if active_stt_model == SttModelVariant::Gemma {
+                    Some(audio_path)
+                } else {
+                    remove_temp_audio_file(&audio_path);
+                    None
+                };
                 start_response_generation(
                     &app_handle_for_task,
                     server_port,
@@ -2909,7 +2915,7 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                     conversation_session_id,
                     gemma_model,
                     user_text,
-                    audio_path,
+                    latest_audio_path,
                     latest_screen_capture_paths,
                 );
             }
@@ -2940,14 +2946,14 @@ fn start_response_generation(
     conversation_session_id: u64,
     gemma_model: String,
     user_text: String,
-    latest_audio_path: PathBuf,
+    latest_audio_path: Option<PathBuf>,
     latest_image_paths: Vec<PathBuf>,
 ) {
     let app_handle_for_task = app_handle.clone();
     let cancellation_token = Arc::new(AtomicBool::new(false));
     let cancellation_token_for_task = cancellation_token.clone();
     let handle = tauri::async_runtime::spawn(async move {
-        let latest_audio_file = TempAudioFile::new(latest_audio_path);
+        let latest_audio_file = latest_audio_path.map(TempAudioFile::new);
         let latest_image_files: Vec<TempImageFile> =
             latest_image_paths.into_iter().map(TempImageFile::new).collect();
         match stream_gemma_response_to_csm(
@@ -2955,7 +2961,7 @@ fn start_response_generation(
             server_port,
             &gemma_model,
             &user_text,
-            Some(latest_audio_file.path()),
+            latest_audio_file.as_ref().map(TempAudioFile::path),
             latest_image_files
                 .iter()
                 .map(TempImageFile::path)
@@ -3408,6 +3414,7 @@ async fn stream_gemma_response_to_csm(
     let mut latest_response_text = String::new();
     let mut queued_response_bytes = 0usize;
     let mut started_audio_response = false;
+    let mut incomplete_stream_segment_started_at = None;
     let mut raw_body = Vec::new();
     let mut sse_buffer = Vec::new();
     let mut saw_stream_event = false;
@@ -3449,6 +3456,7 @@ async fn stream_gemma_response_to_csm(
                         &mut latest_response_text,
                         &mut queued_response_bytes,
                         &mut started_audio_response,
+                        &mut incomplete_stream_segment_started_at,
                     )
                     .await?;
                 }
@@ -3479,6 +3487,7 @@ async fn stream_gemma_response_to_csm(
                         &mut latest_response_text,
                         &mut queued_response_bytes,
                         &mut started_audio_response,
+                        &mut incomplete_stream_segment_started_at,
                     )
                     .await?;
                 }
@@ -3562,9 +3571,11 @@ async fn emit_streamed_response_update(
     latest_response_text: &mut String,
     queued_response_bytes: &mut usize,
     started_audio_response: &mut bool,
+    incomplete_stream_segment_started_at: &mut Option<Instant>,
 ) -> Result<(), String> {
     let response_text = sanitize_for_voice_output(raw_response_text);
     if response_text.is_empty() {
+        *incomplete_stream_segment_started_at = None;
         return Ok(());
     }
 
@@ -3579,6 +3590,7 @@ async fn emit_streamed_response_update(
         );
         *latest_response_text = response_text.clone();
     }
+
     queue_spoken_response_segments_for_csm(
         app_handle,
         response_id,
@@ -3588,6 +3600,41 @@ async fn emit_streamed_response_update(
         false,
     )
     .await?;
+
+    let pending_response_text =
+        &response_text[(*queued_response_bytes).min(response_text.len())..];
+    if !contains_spoken_content(pending_response_text) {
+        *incomplete_stream_segment_started_at = None;
+        return Ok(());
+    }
+
+    if incomplete_stream_segment_started_at.is_none() {
+        *incomplete_stream_segment_started_at = Some(Instant::now());
+    }
+
+    if should_flush_incomplete_streamed_response_segment(
+        pending_response_text,
+        incomplete_stream_segment_started_at.as_ref().map(Instant::elapsed),
+    ) {
+        info!(
+            "Early-flushing incomplete streamed CSM segment after {} words",
+            count_spoken_words(pending_response_text)
+        );
+        queue_spoken_response_segments_for_csm(
+            app_handle,
+            response_id,
+            &response_text,
+            queued_response_bytes,
+            started_audio_response,
+            true,
+        )
+        .await?;
+        *incomplete_stream_segment_started_at = if *queued_response_bytes < response_text.len() {
+            Some(Instant::now())
+        } else {
+            None
+        };
+    }
 
     Ok(())
 }
@@ -4506,6 +4553,26 @@ fn contains_spoken_content(text: &str) -> bool {
     text.chars().any(|ch| ch.is_alphanumeric())
 }
 
+fn count_spoken_words(text: &str) -> usize {
+    text.split_whitespace()
+        .filter(|word| word.chars().any(|ch| ch.is_alphanumeric()))
+        .count()
+}
+
+fn should_flush_incomplete_streamed_response_segment(
+    text: &str,
+    pending_elapsed: Option<Duration>,
+) -> bool {
+    if !contains_spoken_content(text) {
+        return false;
+    }
+
+    count_spoken_words(text) >= STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS
+        || pending_elapsed
+            .map(|elapsed| elapsed >= Duration::from_millis(STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS))
+            .unwrap_or(false)
+}
+
 fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
     while end < text.len() {
         let Some(ch) = text[end..].chars().next() else {
@@ -4527,13 +4594,75 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 mod tests {
     use super::{
         build_latest_user_turn_message, build_llm_system_prompt, parse_gemma_stream_event,
+        clamp_end_of_utterance_silence_ms,
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, required_silence_chunks,
         resolve_capture_sample_rate, sanitize_for_voice_output,
+        should_flush_incomplete_streamed_response_segment,
         suppress_playback_echo, AudioPayload, ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT,
         DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
-    use std::path::Path;
+    use crate::constants::{
+        END_OF_UTTERANCE_SILENCE_MS, MAX_END_OF_UTTERANCE_SILENCE_MS,
+        MIN_END_OF_UTTERANCE_SILENCE_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
+    };
+    use std::{path::Path, time::Duration};
+
+    fn serialize_chat_messages_for_debug(messages: &[super::ChatMessage]) -> Vec<serde_json::Value> {
+        messages
+            .iter()
+            .map(|message| {
+                let content = message
+                    .content
+                    .iter()
+                    .map(|item| match item {
+                        super::ChatContent::Text { text } => serde_json::json!({
+                            "type": "text",
+                            "text": text,
+                        }),
+                        super::ChatContent::InputImage { image_url } => {
+                            let file_name = Path::new(image_url)
+                                .file_name()
+                                .and_then(|name| name.to_str());
+
+                            match file_name {
+                                Some(file_name) => serde_json::json!({
+                                    "type": "input_image",
+                                    "file_name": file_name,
+                                }),
+                                None => serde_json::json!({
+                                    "type": "input_image",
+                                    "image_url": image_url,
+                                }),
+                            }
+                        }
+                        super::ChatContent::InputAudio { input_audio } => {
+                            let file_name = Path::new(&input_audio.data)
+                                .file_name()
+                                .and_then(|name| name.to_str());
+
+                            match file_name {
+                                Some(file_name) => serde_json::json!({
+                                    "type": "input_audio",
+                                    "file_name": file_name,
+                                    "format": input_audio.format,
+                                }),
+                                None => serde_json::json!({
+                                    "type": "input_audio",
+                                    "format": input_audio.format,
+                                }),
+                            }
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                serde_json::json!({
+                    "role": message.role,
+                    "content": content,
+                })
+            })
+            .collect()
+    }
 
     #[test]
     fn sanitize_for_voice_output_removes_plain_emoji() {
@@ -4675,11 +4804,11 @@ mod tests {
     fn required_silence_chunks_scales_with_sample_rate() {
         assert_eq!(
             required_silence_chunks(44_100, 128, END_OF_UTTERANCE_SILENCE_MS),
-            862
+            690
         );
         assert_eq!(
             required_silence_chunks(48_000, 128, END_OF_UTTERANCE_SILENCE_MS),
-            938
+            750
         );
     }
 
@@ -4687,12 +4816,38 @@ mod tests {
     fn required_silence_chunks_respects_chunk_size() {
         assert_eq!(
             required_silence_chunks(48_000, 256, END_OF_UTTERANCE_SILENCE_MS),
-            469
+            375
         );
         assert_eq!(
             required_silence_chunks(48_000, 1024, END_OF_UTTERANCE_SILENCE_MS),
-            118
+            94
         );
+    }
+
+    #[test]
+    fn incomplete_streamed_segments_flush_after_word_threshold() {
+        assert!(should_flush_incomplete_streamed_response_segment(
+            "This partial reply is long enough to start speaking before punctuation arrives",
+            None
+        ));
+    }
+
+    #[test]
+    fn incomplete_streamed_segments_flush_after_timeout() {
+        assert!(should_flush_incomplete_streamed_response_segment(
+            "Still thinking through this response",
+            Some(Duration::from_millis(
+                STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS
+            ))
+        ));
+    }
+
+    #[test]
+    fn incomplete_streamed_segments_wait_when_short_and_fresh() {
+        assert!(!should_flush_incomplete_streamed_response_segment(
+            "Still thinking",
+            Some(Duration::from_millis(150))
+        ));
     }
 
     #[test]
