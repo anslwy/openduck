@@ -3340,7 +3340,7 @@ async fn stream_gemma_response_to_csm(
 
     let llm_started_at = Instant::now();
     let client = reqwest::Client::new();
-    let (conversation_session_id, conversation_turns) = {
+    let (conversation_session_id, conversation_turns, total_turn_count) = {
         let state = app_handle.state::<AppState>();
         let session_id = current_conversation_session_id(state.inner());
         let turns = state
@@ -3350,13 +3350,26 @@ async fn stream_gemma_response_to_csm(
             .iter()
             .cloned()
             .collect::<Vec<_>>();
-        (session_id, turns)
+        let selected_turns = select_conversation_turns_for_llm_context(&turns);
+        (session_id, selected_turns, turns.len())
     };
     let has_latest_audio = latest_audio_path.is_some();
     let has_any_image_context = !latest_image_paths.is_empty()
         || conversation_turns.iter().any(|turn| {
             !turn.image_paths.is_empty() || !turn.user_image_data_urls.is_empty()
         });
+    let llm_context_text_chars = conversation_turns
+        .iter()
+        .map(conversation_turn_text_char_count)
+        .sum::<usize>();
+    if conversation_turns.len() != total_turn_count {
+        info!(
+            "Trimmed LLM voice context from {} to {} turns ({} text chars)",
+            total_turn_count,
+            conversation_turns.len(),
+            llm_context_text_chars
+        );
+    }
     let mut messages = vec![ChatMessage {
         role: "system".to_string(),
         content: vec![ChatContent::Text {
@@ -3961,6 +3974,37 @@ async fn apply_csm_voice_context(
         .map_err(|e| format!("Failed to flush CSM voice update: {e}"))?;
 
     Ok(())
+}
+
+fn conversation_turn_text_char_count(turn: &ConversationTurn) -> usize {
+    turn.user_text.chars().count() + turn.assistant_text.chars().count()
+}
+
+fn select_conversation_turns_for_llm_context(turns: &[ConversationTurn]) -> Vec<ConversationTurn> {
+    if turns.is_empty() {
+        return Vec::new();
+    }
+
+    let mut selected_turns = Vec::new();
+    let mut total_text_chars = 0usize;
+
+    for turn in turns.iter().rev() {
+        let keep_for_minimum = selected_turns.len() < MIN_LLM_CONTEXT_TURNS;
+        let turn_text_chars = conversation_turn_text_char_count(turn);
+        let exceeds_turn_limit = selected_turns.len() >= MAX_LLM_CONTEXT_TURNS;
+        let exceeds_char_budget = !selected_turns.is_empty()
+            && total_text_chars + turn_text_chars > MAX_LLM_CONTEXT_TEXT_CHARS;
+
+        if !keep_for_minimum && (exceeds_turn_limit || exceeds_char_budget) {
+            break;
+        }
+
+        total_text_chars += turn_text_chars;
+        selected_turns.push(turn.clone());
+    }
+
+    selected_turns.reverse();
+    selected_turns
 }
 
 fn extract_chat_content_text(content: serde_json::Value) -> String {
@@ -4654,15 +4698,18 @@ mod tests {
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, required_silence_chunks,
         resolve_capture_sample_rate, sanitize_for_voice_output,
+        select_conversation_turns_for_llm_context,
         should_flush_incomplete_streamed_response_segment,
-        suppress_playback_echo, AudioPayload, ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT,
+        suppress_playback_echo, AudioPayload, ConversationTurn, ParsedGemmaStreamEvent,
+        AUDIO_CONTEXT_SYSTEM_PROMPT,
         DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
         utterance_voiced_duration_ms,
     };
     use crate::constants::{
         ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS, ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS,
         END_OF_UTTERANCE_SILENCE_MS, MAX_END_OF_UTTERANCE_SILENCE_MS,
-        MIN_END_OF_UTTERANCE_SILENCE_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
+        MAX_LLM_CONTEXT_TURNS, MIN_END_OF_UTTERANCE_SILENCE_MS,
+        STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
     };
     use std::{path::Path, time::Duration};
 
@@ -4907,6 +4954,28 @@ mod tests {
     #[test]
     fn adaptive_endpointing_interpolates_for_mid_length_utterances() {
         assert_eq!(adaptive_end_of_utterance_silence_ms(2000, 2600), 1500);
+    }
+
+    #[test]
+    fn llm_context_selection_prefers_recent_turns() {
+        let turns = (0..10)
+            .map(|index| ConversationTurn {
+                user_entry_id: index * 2,
+                assistant_entry_id: index * 2 + 1,
+                user_text: format!("user turn {index}"),
+                assistant_text: format!("assistant turn {index}"),
+                image_paths: Vec::new(),
+                user_image_data_urls: Vec::new(),
+                image_path: None,
+                user_image_data_url: None,
+            })
+            .collect::<Vec<_>>();
+
+        let selected = select_conversation_turns_for_llm_context(&turns);
+
+        assert_eq!(selected.len(), MAX_LLM_CONTEXT_TURNS);
+        assert_eq!(selected.first().unwrap().user_text, "user turn 4");
+        assert_eq!(selected.last().unwrap().assistant_text, "assistant turn 9");
     }
 
     #[test]
