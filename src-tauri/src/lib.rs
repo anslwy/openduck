@@ -280,6 +280,7 @@ struct AppState {
     pre_audio_buffer: Mutex<VecDeque<f32>>,
     silent_chunks_count: Mutex<usize>,
     speaking_chunks_count: Mutex<usize>,
+    current_utterance_voiced_samples: Mutex<usize>,
     is_speaking: Mutex<bool>,
     runtime_setup_lock: AsyncMutex<()>,
     selected_gemma_variant: Mutex<GemmaVariant>,
@@ -2611,12 +2612,7 @@ async fn receive_audio_chunk(
     if prepared_chunk.samples.is_empty() {
         return Ok(());
     }
-    let silence_chunks_required =
-        required_silence_chunks(
-            capture_sample_rate,
-            prepared_chunk.samples.len(),
-            *state.end_of_utterance_silence_ms.lock().unwrap(),
-        );
+    let configured_silence_ms = *state.end_of_utterance_silence_ms.lock().unwrap();
 
     let mut is_really_speaking = false;
     if prepared_chunk.rms > SILENCE_THRESHOLD {
@@ -2640,15 +2636,19 @@ async fn receive_audio_chunk(
     {
         let mut silent_count = state.silent_chunks_count.lock().unwrap();
         let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
+        let mut current_utterance_voiced_samples =
+            state.current_utterance_voiced_samples.lock().unwrap();
         let mut is_speaking = state.is_speaking.lock().unwrap();
 
         if is_really_speaking {
             *speaking_count += 1;
             *silent_count = 0;
+            *current_utterance_voiced_samples += prepared_chunk.samples.len();
         } else {
             *silent_count += 1;
-            if *silent_count > 5 {
+            if *silent_count > 5 && !*is_speaking {
                 *speaking_count = 0;
+                *current_utterance_voiced_samples = 0;
             }
         }
 
@@ -2670,13 +2670,31 @@ async fn receive_audio_chunk(
     let mut buffer = state.audio_buffer.lock().unwrap();
     let mut silent_count = state.silent_chunks_count.lock().unwrap();
     let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
+    let mut current_utterance_voiced_samples = state.current_utterance_voiced_samples.lock().unwrap();
     let mut is_speaking = state.is_speaking.lock().unwrap();
 
     if *is_speaking {
         buffer.extend_from_slice(&prepared_chunk.samples);
 
+        let utterance_voiced_duration_ms =
+            utterance_voiced_duration_ms(*current_utterance_voiced_samples, capture_sample_rate);
+        let effective_silence_ms = adaptive_end_of_utterance_silence_ms(
+            configured_silence_ms,
+            utterance_voiced_duration_ms,
+        );
+        let silence_chunks_required = required_silence_chunks(
+            capture_sample_rate,
+            prepared_chunk.samples.len(),
+            effective_silence_ms,
+        );
+
         if *silent_count >= silence_chunks_required {
-            info!("Silence detected, preparing buffered audio for transcription...");
+            info!(
+                "Silence detected after {} ms of voiced audio; endpointing with {} ms silence (configured {} ms) before transcription.",
+                utterance_voiced_duration_ms,
+                effective_silence_ms,
+                configured_silence_ms
+            );
             emit_call_stage(&app_handle, "processing_audio", "Processing Audio");
             if *state.tray_pong_playback_enabled.lock().unwrap() {
                 emit_play_tray_pong(&app_handle);
@@ -2690,6 +2708,7 @@ async fn receive_audio_chunk(
             *is_speaking = false;
             *silent_count = 0;
             *speaking_count = 0;
+            *current_utterance_voiced_samples = 0;
 
             let mut vad_guard = state.vad.lock().unwrap();
             if let Some(vad) = vad_guard.as_mut() {
@@ -2719,6 +2738,42 @@ fn required_silence_chunks(
         .div_ceil(samples_per_chunk * 1000);
 
     required_chunks.max(1) as usize
+}
+
+fn utterance_voiced_duration_ms(voiced_sample_count: usize, sample_rate: u32) -> u32 {
+    if voiced_sample_count == 0 || sample_rate == 0 {
+        return 0;
+    }
+
+    ((voiced_sample_count as u64) * 1000 / u64::from(sample_rate)) as u32
+}
+
+fn adaptive_end_of_utterance_silence_ms(
+    configured_silence_ms: u32,
+    utterance_voiced_duration_ms: u32,
+) -> u32 {
+    let configured_silence_ms = clamp_end_of_utterance_silence_ms(configured_silence_ms);
+    let minimum_effective_silence_ms = configured_silence_ms
+        .saturating_mul(ADAPTIVE_ENDPOINTING_MIN_SILENCE_RATIO_PERCENT)
+        .div_ceil(100)
+        .clamp(MIN_END_OF_UTTERANCE_SILENCE_MS, configured_silence_ms);
+
+    if utterance_voiced_duration_ms <= ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS {
+        return minimum_effective_silence_ms;
+    }
+
+    if utterance_voiced_duration_ms >= ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS {
+        return configured_silence_ms;
+    }
+
+    let range_ms =
+        u64::from(ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS - ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS);
+    let progress_ms =
+        u64::from(utterance_voiced_duration_ms - ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS);
+    let silence_delta_ms = u64::from(configured_silence_ms - minimum_effective_silence_ms);
+
+    minimum_effective_silence_ms
+        + ((silence_delta_ms * progress_ms) / range_ms) as u32
 }
 
 fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tauri::AppHandle) {
@@ -4593,6 +4648,7 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
+        adaptive_end_of_utterance_silence_ms,
         build_latest_user_turn_message, build_llm_system_prompt, parse_gemma_stream_event,
         clamp_end_of_utterance_silence_ms,
         prepare_completed_spoken_response_segments_for_csm,
@@ -4601,8 +4657,10 @@ mod tests {
         should_flush_incomplete_streamed_response_segment,
         suppress_playback_echo, AudioPayload, ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT,
         DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
+        utterance_voiced_duration_ms,
     };
     use crate::constants::{
+        ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS, ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS,
         END_OF_UTTERANCE_SILENCE_MS, MAX_END_OF_UTTERANCE_SILENCE_MS,
         MIN_END_OF_UTTERANCE_SILENCE_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
     };
@@ -4822,6 +4880,33 @@ mod tests {
             required_silence_chunks(48_000, 1024, END_OF_UTTERANCE_SILENCE_MS),
             94
         );
+    }
+
+    #[test]
+    fn voiced_duration_tracks_sample_count() {
+        assert_eq!(utterance_voiced_duration_ms(48_000, 48_000), 1000);
+        assert_eq!(utterance_voiced_duration_ms(24_000, 48_000), 500);
+    }
+
+    #[test]
+    fn adaptive_endpointing_halves_silence_for_short_utterances() {
+        assert_eq!(
+            adaptive_end_of_utterance_silence_ms(2000, ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS),
+            1000
+        );
+    }
+
+    #[test]
+    fn adaptive_endpointing_keeps_full_silence_for_long_utterances() {
+        assert_eq!(
+            adaptive_end_of_utterance_silence_ms(2000, ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS),
+            2000
+        );
+    }
+
+    #[test]
+    fn adaptive_endpointing_interpolates_for_mid_length_utterances() {
+        assert_eq!(adaptive_end_of_utterance_silence_ms(2000, 2600), 1500);
     }
 
     #[test]
@@ -6378,6 +6463,11 @@ fn reset_call_session_state(state: &AppState) {
     {
         let mut speaking_chunks_count = state.speaking_chunks_count.lock().unwrap();
         *speaking_chunks_count = 0;
+    }
+    {
+        let mut current_utterance_voiced_samples =
+            state.current_utterance_voiced_samples.lock().unwrap();
+        *current_utterance_voiced_samples = 0;
     }
     {
         let mut is_speaking = state.is_speaking.lock().unwrap();
@@ -8664,6 +8754,7 @@ pub fn run() {
             pre_audio_buffer: Mutex::new(VecDeque::new()),
             silent_chunks_count: Mutex::new(0),
             speaking_chunks_count: Mutex::new(0),
+            current_utterance_voiced_samples: Mutex::new(0),
             is_speaking: Mutex::new(false),
             runtime_setup_lock: AsyncMutex::new(()),
             selected_gemma_variant: Mutex::new(GemmaVariant::E4b),
