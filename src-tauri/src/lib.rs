@@ -3676,6 +3676,11 @@ async fn emit_streamed_response_update(
         return Ok(());
     }
 
+    if !pending_streamed_segment_is_in_first_sentence(&response_text, *queued_response_bytes) {
+        *incomplete_stream_segment_started_at = None;
+        return Ok(());
+    }
+
     if incomplete_stream_segment_started_at.is_none() {
         *incomplete_stream_segment_started_at = Some(Instant::now());
     }
@@ -4658,6 +4663,18 @@ fn count_spoken_words(text: &str) -> usize {
         .count()
 }
 
+fn pending_streamed_segment_is_in_first_sentence(
+    response_text: &str,
+    queued_response_bytes: usize,
+) -> bool {
+    let queued_start = queued_response_bytes.min(response_text.len());
+    let completed_prefix = &response_text[..queued_start];
+
+    !completed_prefix
+        .char_indices()
+        .any(|(idx, ch)| is_spoken_sentence_boundary(completed_prefix, idx, ch))
+}
+
 fn should_flush_incomplete_streamed_response_segment(
     text: &str,
     pending_elapsed: Option<Duration>,
@@ -4695,6 +4712,7 @@ mod tests {
         adaptive_end_of_utterance_silence_ms,
         build_latest_user_turn_message, build_llm_system_prompt, parse_gemma_stream_event,
         clamp_end_of_utterance_silence_ms,
+        pending_streamed_segment_is_in_first_sentence,
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, required_silence_chunks,
         resolve_capture_sample_rate, sanitize_for_voice_output,
@@ -4709,7 +4727,7 @@ mod tests {
         ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS, ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS,
         END_OF_UTTERANCE_SILENCE_MS, MAX_END_OF_UTTERANCE_SILENCE_MS,
         MAX_LLM_CONTEXT_TURNS, MIN_END_OF_UTTERANCE_SILENCE_MS,
-        STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
+        STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS,
     };
     use std::{path::Path, time::Duration};
 
@@ -4980,8 +4998,10 @@ mod tests {
 
     #[test]
     fn incomplete_streamed_segments_flush_after_word_threshold() {
+        let long_partial = vec!["word"; STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS].join(" ");
+
         assert!(should_flush_incomplete_streamed_response_segment(
-            "This partial reply is long enough to start speaking before punctuation arrives",
+            &long_partial,
             None
         ));
     }
@@ -5001,6 +5021,34 @@ mod tests {
         assert!(!should_flush_incomplete_streamed_response_segment(
             "Still thinking",
             Some(Duration::from_millis(150))
+        ));
+    }
+
+    #[test]
+    fn incomplete_streamed_segments_stay_eligible_within_first_sentence() {
+        let response_text = "This first sentence has already been partially queued but it is still unfinished";
+        let queued_response_bytes = "This first sentence has already".len();
+
+        assert!(pending_streamed_segment_is_in_first_sentence(
+            response_text,
+            queued_response_bytes
+        ));
+    }
+
+    #[test]
+    fn incomplete_streamed_segments_do_not_early_flush_after_first_sentence() {
+        let long_partial = vec!["word"; STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS].join(" ");
+        let response_text = format!("First sentence. {long_partial}");
+        let queued_response_bytes = "First sentence. ".len();
+        let pending_response_text = &response_text[queued_response_bytes..];
+
+        assert!(!pending_streamed_segment_is_in_first_sentence(
+            &response_text,
+            queued_response_bytes
+        ));
+        assert!(should_flush_incomplete_streamed_response_segment(
+            pending_response_text,
+            None
         ));
     }
 
