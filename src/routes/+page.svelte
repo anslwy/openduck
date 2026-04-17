@@ -4165,9 +4165,6 @@
                             payload.phase === "thinking" ||
                             payload.phase === "generating_audio"
                         ) {
-                            if (payload.phase === "processing_audio") {
-                                processingAudioLatencyMs = null;
-                            }
                             setCallStage(payload.phase, payload.message);
                         }
                     }),
