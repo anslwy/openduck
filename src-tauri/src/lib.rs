@@ -4320,7 +4320,7 @@ fn collect_spoken_response_segments(
     let mut sentence_count = 0;
     let mut consumed_len = 0;
     for (idx, ch) in normalized.char_indices() {
-        if matches!(ch, '.' | '!' | '?' | '\n') {
+        if is_spoken_sentence_boundary(normalized, idx, ch) {
             sentence_count += 1;
             if sentence_count >= max_sentences {
                 let end = expand_speech_boundary(normalized, idx + ch.len_utf8());
@@ -4354,6 +4354,28 @@ fn collect_spoken_response_segments(
     }
 
     (segments, consumed_len)
+}
+
+fn is_spoken_sentence_boundary(text: &str, idx: usize, ch: char) -> bool {
+    match ch {
+        '.' => is_spoken_period_boundary(text, idx),
+        '!' | '?' | '\n' => true,
+        _ => false,
+    }
+}
+
+fn is_spoken_period_boundary(text: &str, idx: usize) -> bool {
+    let period_end = idx + '.'.len_utf8();
+    let previous_char = text[..idx].chars().next_back();
+    let next_char = text[period_end..].chars().next();
+
+    if previous_char.is_some_and(|ch| ch.is_ascii_digit())
+        && next_char.is_none_or(|ch| ch.is_ascii_digit())
+    {
+        return false;
+    }
+
+    true
 }
 
 fn split_long_spoken_segment_for_csm(segment: &str) -> Vec<String> {
@@ -4608,6 +4630,45 @@ mod tests {
             vec!["Letting everyone peek under the hood tinker improve.".to_string()]
         );
         assert_eq!(&response_text[consumed_len..], "Next bit");
+    }
+
+    #[test]
+    fn completed_spoken_segments_wait_for_decimal_suffix_before_flushing() {
+        let response_text = "I am not familiar with Claude 3.";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert!(segments.is_empty());
+        assert_eq!(consumed_len, 0);
+    }
+
+    #[test]
+    fn completed_spoken_segments_keep_decimal_model_names_intact() {
+        let response_text =
+            "I am not familiar with Claude 3.5. Are you asking about a specific AI";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(
+            segments,
+            vec!["I am not familiar with Claude 3.5.".to_string()]
+        );
+        assert_eq!(&response_text[consumed_len..], "Are you asking about a specific AI");
+    }
+
+    #[test]
+    fn spoken_segments_keep_decimal_model_names_intact() {
+        let response_text =
+            "I am not familiar with Claude 3.5. Are you asking about a specific AI model?";
+        let segments = prepare_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(
+            segments,
+            vec![
+                "I am not familiar with Claude 3.5.".to_string(),
+                "Are you asking about a specific AI model?".to_string()
+            ]
+        );
     }
 
     #[test]
