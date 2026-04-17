@@ -585,7 +585,7 @@ main.idle-layout {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: min(520px, calc(100vw - 40px));
+    width: min(80vw, 1040px);
     max-height: calc(100vh - 40px);
     overflow-y: auto;
     display: flex;
@@ -711,13 +711,13 @@ main.idle-layout {
 
 .about-metadata-row {
     display: grid;
-    grid-template-columns: minmax(108px, 132px) minmax(0, 1fr);
-    gap: 16px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
     align-items: start;
 }
 
 .shortcut-row {
-    align-items: center;
+    align-items: stretch;
 }
 
 .shortcut-input-wrapper {

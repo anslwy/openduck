@@ -498,7 +498,8 @@
 
 <style>
     .about-metadata-label {
-        font-size: 10px;
+        font-size: 0.72rem;
+        line-height: 1.35;
     }
 
     .about-slider-header {
