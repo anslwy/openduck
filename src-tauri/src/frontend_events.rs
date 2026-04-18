@@ -53,8 +53,17 @@ pub(crate) struct CallStageEvent {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProcessingAudioLatencyKind {
+    Audio,
+    FirstMessageChunk,
+    FirstAudioChunk,
+}
+
+#[derive(Clone, Serialize)]
 pub(crate) struct ProcessingAudioLatencyEvent {
-    pub(crate) request_id: u64,
+    pub(crate) kind: ProcessingAudioLatencyKind,
+    pub(crate) request_id: Option<u64>,
     pub(crate) latency_ms: u64,
 }
 

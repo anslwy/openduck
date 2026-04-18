@@ -253,6 +253,8 @@
     );
     let callStagePhase = $state<CallStagePhase>("idle");
     let callStageMessage = $state("");
+    let processingAudioToAudioLatencyMs = $state<number | null>(null);
+    let processingAudioToLlmLatencyMs = $state<number | null>(null);
     let processingAudioLatencyMs = $state<number | null>(null);
     let screenCapturePhase = $state<ScreenCaptureEvent["phase"] | null>(null);
     let screenCaptureMessage = $state("");
@@ -668,6 +670,30 @@
         }
 
         return `${latencyMs} ms`;
+    }
+
+    function formatLatencyStat(label: string, latencyMs: number | null) {
+        return `${label} ${
+            latencyMs == null ? "--" : formatProcessingAudioLatency(latencyMs)
+        }`;
+    }
+
+    function formatLatencySummary() {
+        if (
+            processingAudioToAudioLatencyMs == null &&
+            processingAudioToLlmLatencyMs == null &&
+            processingAudioLatencyMs == null
+        ) {
+            return "--";
+        }
+
+        return `${formatLatencyStat("STT", processingAudioToAudioLatencyMs)} / ${formatLatencyStat("LLM", processingAudioToLlmLatencyMs)} / ${formatLatencyStat("1st audio", processingAudioLatencyMs)}`;
+    }
+
+    function resetProcessingAudioLatencies() {
+        processingAudioToAudioLatencyMs = null;
+        processingAudioToLlmLatencyMs = null;
+        processingAudioLatencyMs = null;
     }
 
     function syncCaptureMutedState(muted: boolean) {
@@ -2455,7 +2481,7 @@
     function stopCallTimerTracking() {
         callStartedAtMs = null;
         time = 0;
-        processingAudioLatencyMs = null;
+        resetProcessingAudioLatencies();
 
         if (callTimerInterval) {
             clearInterval(callTimerInterval);
@@ -3664,7 +3690,7 @@
         resetScreenCaptureStatus();
         calling = true;
         callStartedAtMs = Date.now();
-        processingAudioLatencyMs = null;
+        resetProcessingAudioLatencies();
         syncCallElapsedTime();
         activeTtsRequestId = null;
         syncTtsPlaybackState(false);
@@ -3711,7 +3737,7 @@
         resetScreenCaptureStatus();
         calling = true;
         callStartedAtMs = Date.now();
-        processingAudioLatencyMs = null;
+        resetProcessingAudioLatencies();
         syncCallElapsedTime();
         activeTtsRequestId = null;
         syncTtsPlaybackState(false);
@@ -3752,7 +3778,7 @@
         closeConversationPopup();
         resetConversationLog();
         resetScreenCaptureStatus();
-        processingAudioLatencyMs = null;
+        resetProcessingAudioLatencies();
         setCallStage("idle", "");
         stopCallTimerTracking();
 
@@ -4362,6 +4388,18 @@
                                 return;
                             }
 
+                            if (payload.kind === "audio") {
+                                processingAudioToAudioLatencyMs =
+                                    payload.latency_ms;
+                                return;
+                            }
+
+                            if (payload.kind === "first_message_chunk") {
+                                processingAudioToLlmLatencyMs =
+                                    payload.latency_ms;
+                                return;
+                            }
+
                             processingAudioLatencyMs = payload.latency_ms;
                         },
                     ),
@@ -4786,11 +4824,7 @@
                 <div class="avatar-latency" aria-live="polite">
                     <span class="avatar-latency-label">Latency</span>
                     <span class="avatar-latency-value"
-                        >{processingAudioLatencyMs == null
-                            ? "--"
-                            : formatProcessingAudioLatency(
-                                  processingAudioLatencyMs,
-                              )}</span
+                        >{formatLatencySummary()}</span
                     >
                 </div>
             {/if}

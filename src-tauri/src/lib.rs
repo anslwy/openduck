@@ -3079,6 +3079,7 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                     return;
                 }
 
+                log_processing_audio_latency_for_audio(&app_handle_for_task);
                 emit_call_stage(&app_handle_for_task, "thinking", "Thinking");
                 let latest_screen_capture_paths =
                     take_pending_screen_captures(app_handle_for_task.state::<AppState>().inner());
@@ -3933,19 +3934,49 @@ async fn send_csm_synthesis_request(
     Ok(())
 }
 
-fn log_processing_audio_latency_for_first_message_chunk(app_handle: &tauri::AppHandle) {
-    let state = app_handle.state::<AppState>();
-    let latency_ms = {
-        let started_at = state.processing_audio_started_at.lock().unwrap();
-        let Some(started_at) = started_at.as_ref() else {
-            return;
-        };
-        started_at.elapsed().as_millis() as u64
+fn log_processing_audio_latency_for_first_message_chunk(
+    app_handle: &tauri::AppHandle,
+    request_id: u64,
+) {
+    let Some(latency_ms) = current_processing_audio_latency_ms(app_handle) else {
+        return;
     };
 
     info!(
         "Latency from processing_audio to first message chunk from LLM: {} ms",
         latency_ms
+    );
+    emit_processing_audio_latency(
+        app_handle,
+        ProcessingAudioLatencyEvent {
+            kind: ProcessingAudioLatencyKind::FirstMessageChunk,
+            request_id: Some(request_id),
+            latency_ms,
+        },
+    );
+}
+
+fn current_processing_audio_latency_ms(app_handle: &tauri::AppHandle) -> Option<u64> {
+    let state = app_handle.state::<AppState>();
+    let started_at = state.processing_audio_started_at.lock().unwrap();
+    started_at
+        .as_ref()
+        .map(|started_at| started_at.elapsed().as_millis() as u64)
+}
+
+fn log_processing_audio_latency_for_audio(app_handle: &tauri::AppHandle) {
+    let Some(latency_ms) = current_processing_audio_latency_ms(app_handle) else {
+        return;
+    };
+
+    info!("Latency from processing_audio to audio: {} ms", latency_ms);
+    emit_processing_audio_latency(
+        app_handle,
+        ProcessingAudioLatencyEvent {
+            kind: ProcessingAudioLatencyKind::Audio,
+            request_id: None,
+            latency_ms,
+        },
     );
 }
 
@@ -3980,7 +4011,8 @@ fn log_processing_audio_latency_for_first_chunk(app_handle: &tauri::AppHandle, r
     emit_processing_audio_latency(
         app_handle,
         ProcessingAudioLatencyEvent {
-            request_id,
+            kind: ProcessingAudioLatencyKind::FirstAudioChunk,
+            request_id: Some(request_id),
             latency_ms,
         },
     );
@@ -4010,7 +4042,7 @@ async fn queue_spoken_response_segments_for_csm(
     }
 
     if !*started_audio_response {
-        log_processing_audio_latency_for_first_message_chunk(app_handle);
+        log_processing_audio_latency_for_first_message_chunk(app_handle, request_id);
         track_processing_audio_latency_request(app_handle, request_id);
         emit_call_stage(app_handle, "generating_audio", "Generating Audio");
         emit_csm_audio_start(app_handle, CsmAudioStartEvent { request_id });

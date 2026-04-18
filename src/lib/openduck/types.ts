@@ -46,7 +46,8 @@ export type CallStageEvent = {
 };
 
 export type ProcessingAudioLatencyEvent = {
-    request_id: number;
+    kind: "audio" | "first_message_chunk" | "first_audio_chunk";
+    request_id?: number | null;
     latency_ms: number;
 };
 
