@@ -344,6 +344,7 @@ struct AppState {
     tray_pong_playback_hydrated: Mutex<bool>,
     tray_pong_playback_modified_before_hydration: Mutex<bool>,
     end_of_utterance_silence_ms: Mutex<u32>,
+    llm_image_history_limit: Mutex<Option<usize>>,
     conversation_log_has_visible_images: Mutex<bool>,
     selected_ollama_model: Mutex<String>,
     ollama_base_url: Mutex<String>,
@@ -1094,11 +1095,25 @@ fn clamp_end_of_utterance_silence_ms(milliseconds: u32) -> u32 {
     )
 }
 
+fn clamp_llm_image_history_limit(limit: u32) -> usize {
+    limit.clamp(
+        MIN_LLM_IMAGE_HISTORY_LIMIT as u32,
+        MAX_LLM_IMAGE_HISTORY_LIMIT as u32,
+    ) as usize
+}
+
 #[tauri::command]
 fn set_end_of_utterance_silence_ms(state: State<'_, AppState>, milliseconds: u32) -> u32 {
     let effective_milliseconds = clamp_end_of_utterance_silence_ms(milliseconds);
     *state.end_of_utterance_silence_ms.lock().unwrap() = effective_milliseconds;
     effective_milliseconds
+}
+
+#[tauri::command]
+fn set_llm_image_history_limit(state: State<'_, AppState>, limit: Option<u32>) -> Option<u32> {
+    let effective_limit = limit.map(clamp_llm_image_history_limit);
+    *state.llm_image_history_limit.lock().unwrap() = effective_limit;
+    effective_limit.map(|value| value as u32)
 }
 
 #[tauri::command]
@@ -2953,7 +2968,8 @@ fn start_live_transcription_loop(
                     return;
                 }
 
-                live_guard.in_flight_handle.is_none() && voiced_samples > live_guard.cached_voiced_samples
+                live_guard.in_flight_handle.is_none()
+                    && voiced_samples > live_guard.cached_voiced_samples
             };
 
             if !should_start_attempt {
@@ -3256,10 +3272,7 @@ fn process_audio_turn(
                                     Ok(encoded) => encoded,
                                     Err(err) => {
                                         error!("{}", err);
-                                        emit_audio_turn_processing_error(
-                                            &app_handle_for_task,
-                                            err,
-                                        );
+                                        emit_audio_turn_processing_error(&app_handle_for_task, err);
                                         return;
                                     }
                                 };
@@ -3283,10 +3296,7 @@ fn process_audio_turn(
                                     Ok(encoded) => encoded,
                                     Err(err) => {
                                         error!("{}", err);
-                                        emit_audio_turn_processing_error(
-                                            &app_handle_for_task,
-                                            err,
-                                        );
+                                        emit_audio_turn_processing_error(&app_handle_for_task, err);
                                         return;
                                     }
                                 };
@@ -3817,7 +3827,7 @@ async fn stream_gemma_response_to_csm(
 
     let llm_started_at = Instant::now();
     let client = reqwest::Client::new();
-    let (_conversation_session_id, conversation_turns, total_turn_count) = {
+    let (_conversation_session_id, conversation_turns, total_turn_count, llm_image_history_limit) = {
         let state = app_handle.state::<AppState>();
         let session_id = current_conversation_session_id(state.inner());
         let turns = state
@@ -3828,13 +3838,37 @@ async fn stream_gemma_response_to_csm(
             .cloned()
             .collect::<Vec<_>>();
         let selected_turns = select_conversation_turns_for_llm_context(&turns);
-        (session_id, selected_turns, turns.len())
+        let image_history_limit = *state.llm_image_history_limit.lock().unwrap();
+        (session_id, selected_turns, turns.len(), image_history_limit)
     };
     let has_latest_audio = latest_audio_wav_base64.is_some();
-    let has_any_image_context = !latest_image_paths.is_empty()
-        || conversation_turns
-            .iter()
-            .any(|turn| !turn.image_paths.is_empty() || !turn.user_image_data_urls.is_empty());
+    let mut conversation_turn_image_urls = conversation_turns
+        .iter()
+        .map(resolve_user_turn_image_urls)
+        .collect::<Vec<_>>();
+    let mut latest_image_urls = load_image_data_urls_from_paths(latest_image_paths.iter().copied());
+    let total_image_count = conversation_turn_image_urls
+        .iter()
+        .map(Vec::len)
+        .sum::<usize>()
+        + latest_image_urls.len();
+    apply_llm_image_history_limit(
+        &mut conversation_turn_image_urls,
+        &mut latest_image_urls,
+        llm_image_history_limit,
+    );
+    let retained_image_count = conversation_turn_image_urls
+        .iter()
+        .map(Vec::len)
+        .sum::<usize>()
+        + latest_image_urls.len();
+    if retained_image_count != total_image_count {
+        info!(
+            "Trimmed LLM image context from {} to {} images",
+            total_image_count, retained_image_count
+        );
+    }
+    let has_any_image_context = retained_image_count > 0;
     let llm_context_text_chars = conversation_turns
         .iter()
         .map(conversation_turn_text_char_count)
@@ -3863,11 +3897,13 @@ async fn stream_gemma_response_to_csm(
         }],
     }];
 
-    for turn in &conversation_turns {
-        messages.push(build_user_turn_message(
+    for (turn, image_urls) in conversation_turns
+        .iter()
+        .zip(conversation_turn_image_urls.iter())
+    {
+        messages.push(build_user_turn_message_with_image_urls(
             &turn.user_text,
-            &turn.image_paths,
-            &turn.user_image_data_urls,
+            image_urls,
         ));
         messages.push(ChatMessage {
             role: "assistant".to_string(),
@@ -3877,10 +3913,10 @@ async fn stream_gemma_response_to_csm(
         });
     }
 
-    messages.push(build_latest_user_turn_message(
+    messages.push(build_latest_user_turn_message_with_image_urls(
         user_text,
         latest_audio_wav_base64,
-        latest_image_paths,
+        &latest_image_urls,
     ));
 
     let mut request = ChatRequest {
@@ -4541,6 +4577,53 @@ fn select_conversation_turns_for_llm_context(turns: &[ConversationTurn]) -> Vec<
     selected_turns
 }
 
+fn load_image_data_urls_from_paths<'a>(
+    image_paths: impl IntoIterator<Item = &'a Path>,
+) -> Vec<String> {
+    image_paths
+        .into_iter()
+        .filter_map(load_image_data_url)
+        .collect()
+}
+
+fn resolve_user_turn_image_urls(turn: &ConversationTurn) -> Vec<String> {
+    if !turn.user_image_data_urls.is_empty() {
+        return turn.user_image_data_urls.clone();
+    }
+
+    load_image_data_urls_from_paths(turn.image_paths.iter().map(PathBuf::as_path))
+}
+
+fn apply_llm_image_history_limit(
+    conversation_turn_image_urls: &mut [Vec<String>],
+    latest_image_urls: &mut Vec<String>,
+    image_limit: Option<usize>,
+) {
+    let Some(image_limit) = image_limit else {
+        return;
+    };
+
+    let total_image_count = conversation_turn_image_urls
+        .iter()
+        .map(Vec::len)
+        .sum::<usize>()
+        + latest_image_urls.len();
+    let mut images_to_drop = total_image_count.saturating_sub(image_limit);
+
+    for image_urls in conversation_turn_image_urls
+        .iter_mut()
+        .chain(std::iter::once(latest_image_urls))
+    {
+        if images_to_drop == 0 {
+            break;
+        }
+
+        let drop_count = images_to_drop.min(image_urls.len());
+        image_urls.drain(..drop_count);
+        images_to_drop -= drop_count;
+    }
+}
+
 fn extract_chat_content_text(content: serde_json::Value) -> String {
     match content {
         serde_json::Value::String(text) => text,
@@ -4571,18 +4654,21 @@ fn build_user_turn_message(
     image_paths: &[PathBuf],
     user_image_data_urls: &[String],
 ) -> ChatMessage {
+    let image_urls = if !user_image_data_urls.is_empty() {
+        user_image_data_urls.to_vec()
+    } else {
+        load_image_data_urls_from_paths(image_paths.iter().map(PathBuf::as_path))
+    };
+
+    build_user_turn_message_with_image_urls(user_text, &image_urls)
+}
+
+fn build_user_turn_message_with_image_urls(user_text: &str, image_urls: &[String]) -> ChatMessage {
     let mut content = Vec::new();
-    for image_data_url in user_image_data_urls {
+    for image_data_url in image_urls {
         content.push(ChatContent::InputImage {
             image_url: image_data_url.clone(),
         });
-    }
-    for image_path in image_paths {
-        if let Some(image_data_url) = load_image_data_url(image_path) {
-            content.push(ChatContent::InputImage {
-                image_url: image_data_url,
-            });
-        }
     }
     content.push(ChatContent::Text {
         text: user_text.to_string(),
@@ -4614,14 +4700,26 @@ fn build_latest_user_turn_message(
     latest_audio_wav_base64: Option<&str>,
     latest_image_paths: &[&Path],
 ) -> ChatMessage {
+    let latest_image_urls = load_image_data_urls_from_paths(latest_image_paths.iter().copied());
+
+    build_latest_user_turn_message_with_image_urls(
+        user_text,
+        latest_audio_wav_base64,
+        &latest_image_urls,
+    )
+}
+
+fn build_latest_user_turn_message_with_image_urls(
+    user_text: &str,
+    latest_audio_wav_base64: Option<&str>,
+    latest_image_urls: &[String],
+) -> ChatMessage {
     let mut content = Vec::new();
 
-    for image_path in latest_image_paths {
-        if let Some(image_data_url) = load_image_data_url(image_path) {
-            content.push(ChatContent::InputImage {
-                image_url: image_data_url,
-            });
-        }
+    for image_data_url in latest_image_urls {
+        content.push(ChatContent::InputImage {
+            image_url: image_data_url.clone(),
+        });
     }
 
     if let Some(audio_wav_base64) = latest_audio_wav_base64 {
@@ -5284,22 +5382,27 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_latest_user_turn_message, build_llm_system_prompt, clamp_end_of_utterance_silence_ms,
+        apply_llm_image_history_limit, build_latest_user_turn_message, build_llm_system_prompt,
+        build_user_turn_message, clamp_end_of_utterance_silence_ms, clamp_llm_image_history_limit,
         parse_gemma_stream_event, pending_streamed_segment_is_in_first_sentence,
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, required_silence_chunks,
         resolve_capture_sample_rate, samples_duration_ms, sanitize_for_voice_output,
         select_conversation_turns_for_llm_context,
-        should_flush_incomplete_streamed_response_segment, suppress_playback_echo, AudioPayload,
-        ConversationTurn, ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE,
-        IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
+        should_flush_incomplete_streamed_response_segment, suppress_playback_echo,
+        write_data_url_to_temp_file, AudioPayload, ConversationTurn, ParsedGemmaStreamEvent,
+        AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT,
+        MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
     use crate::constants::{
         END_OF_UTTERANCE_SILENCE_MS, MAX_END_OF_UTTERANCE_SILENCE_MS, MAX_LLM_CONTEXT_TURNS,
-        MIN_END_OF_UTTERANCE_SILENCE_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
-        STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS,
+        MAX_LLM_IMAGE_HISTORY_LIMIT, MIN_END_OF_UTTERANCE_SILENCE_MS, MIN_LLM_IMAGE_HISTORY_LIMIT,
+        STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS,
     };
-    use std::{path::Path, time::Duration};
+    use std::{fs, path::Path, time::Duration};
+
+    const TEST_IMAGE_DATA_URL: &str =
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9sXv2t8AAAAASUVORK5CYII=";
 
     fn serialize_chat_messages_for_debug(
         messages: &[super::ChatMessage],
@@ -5316,9 +5419,13 @@ mod tests {
                             "text": text,
                         }),
                         super::ChatContent::InputImage { image_url } => {
-                            let file_name = Path::new(image_url)
-                                .file_name()
-                                .and_then(|name| name.to_str());
+                            let file_name = if image_url.starts_with("data:") {
+                                None
+                            } else {
+                                Path::new(image_url)
+                                    .file_name()
+                                    .and_then(|name| name.to_str())
+                            };
 
                             match file_name {
                                 Some(file_name) => serde_json::json!({
@@ -5549,7 +5656,7 @@ mod tests {
         let selected = select_conversation_turns_for_llm_context(&turns);
 
         assert_eq!(selected.len(), MAX_LLM_CONTEXT_TURNS);
-        assert_eq!(selected.first().unwrap().user_text, "user turn 4");
+        assert_eq!(selected.first().unwrap().user_text, "user turn 3");
         assert_eq!(selected.last().unwrap().assistant_text, "assistant turn 9");
     }
 
@@ -5621,6 +5728,18 @@ mod tests {
     }
 
     #[test]
+    fn clamp_llm_image_history_limit_stays_in_supported_range() {
+        assert_eq!(
+            clamp_llm_image_history_limit((MIN_LLM_IMAGE_HISTORY_LIMIT - 1) as u32),
+            MIN_LLM_IMAGE_HISTORY_LIMIT
+        );
+        assert_eq!(
+            clamp_llm_image_history_limit((MAX_LLM_IMAGE_HISTORY_LIMIT + 1) as u32),
+            MAX_LLM_IMAGE_HISTORY_LIMIT
+        );
+    }
+
+    #[test]
     fn gemma_stream_event_extracts_delta_text() {
         let event =
             parse_gemma_stream_event(r#"data: {"choices":[{"delta":{"content":"Hello there."}}]}"#)
@@ -5652,20 +5771,19 @@ mod tests {
 
     #[test]
     fn latest_user_turn_message_includes_image_when_available() {
-        let message = build_latest_user_turn_message(
-            "hello there",
-            None,
-            &[Path::new("/tmp/openduck-screen-test.png")],
-        );
+        let image_path =
+            write_data_url_to_temp_file(TEST_IMAGE_DATA_URL).expect("test image should exist");
+        let message = build_latest_user_turn_message("hello there", None, &[image_path.as_path()]);
         let serialized = serde_json::to_value(&message).unwrap();
+        fs::remove_file(&image_path).ok();
 
         assert_eq!(serialized["role"], "user");
         assert_eq!(serialized["content"].as_array().unwrap().len(), 2);
         assert_eq!(serialized["content"][0]["type"], "input_image");
-        assert_eq!(
-            serialized["content"][0]["image_url"],
-            "/tmp/openduck-screen-test.png"
-        );
+        assert!(serialized["content"][0]["image_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
         assert_eq!(serialized["content"][1]["type"], "text");
         assert_eq!(serialized["content"][1]["text"], "hello there");
     }
@@ -5690,21 +5808,23 @@ mod tests {
 
     #[test]
     fn debug_chat_messages_show_image_file_name() {
+        let image_path =
+            write_data_url_to_temp_file(TEST_IMAGE_DATA_URL).expect("test image should exist");
         let messages = vec![build_latest_user_turn_message(
             "hello there",
             None,
-            &[Path::new("/tmp/openduck-screen-test.png")],
+            &[image_path.as_path()],
         )];
         let serialized = serialize_chat_messages_for_debug(&messages);
+        fs::remove_file(&image_path).ok();
 
         assert_eq!(serialized[0]["role"], "user");
         assert_eq!(serialized[0]["content"].as_array().unwrap().len(), 2);
         assert_eq!(serialized[0]["content"][0]["type"], "input_image");
-        assert_eq!(
-            serialized[0]["content"][0]["file_name"],
-            "openduck-screen-test.png"
-        );
-        assert!(serialized[0]["content"][0].get("image_url").is_none());
+        assert!(serialized[0]["content"][0]["image_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
         assert_eq!(serialized[0]["content"][1]["type"], "text");
         assert_eq!(serialized[0]["content"][1]["text"], "hello there");
     }
@@ -5725,6 +5845,48 @@ mod tests {
         assert!(serialized[0]["content"][0].get("file_name").is_none());
         assert_eq!(serialized[0]["content"][1]["type"], "text");
         assert_eq!(serialized[0]["content"][1]["text"], "hello there");
+    }
+
+    #[test]
+    fn user_turn_message_prefers_inline_images_without_duplication() {
+        let image_path =
+            write_data_url_to_temp_file(TEST_IMAGE_DATA_URL).expect("test image should exist");
+        let image_paths = vec![image_path.clone()];
+        let inline_images = vec![TEST_IMAGE_DATA_URL.to_string()];
+        let message = build_user_turn_message("hello there", &image_paths, &inline_images);
+        let serialized = serde_json::to_value(&message).unwrap();
+        fs::remove_file(&image_path).ok();
+
+        assert_eq!(serialized["role"], "user");
+        assert_eq!(serialized["content"].as_array().unwrap().len(), 2);
+        assert_eq!(serialized["content"][0]["type"], "input_image");
+        assert_eq!(serialized["content"][0]["image_url"], TEST_IMAGE_DATA_URL);
+        assert_eq!(serialized["content"][1]["type"], "text");
+        assert_eq!(serialized["content"][1]["text"], "hello there");
+    }
+
+    #[test]
+    fn llm_image_history_limit_keeps_only_latest_images() {
+        let mut conversation_turn_image_urls = vec![
+            vec!["turn-1-image-1".to_string(), "turn-1-image-2".to_string()],
+            vec!["turn-2-image-1".to_string()],
+            vec!["turn-3-image-1".to_string(), "turn-3-image-2".to_string()],
+        ];
+        let mut latest_image_urls = vec!["latest-image-1".to_string()];
+
+        apply_llm_image_history_limit(
+            &mut conversation_turn_image_urls,
+            &mut latest_image_urls,
+            Some(3),
+        );
+
+        assert!(conversation_turn_image_urls[0].is_empty());
+        assert!(conversation_turn_image_urls[1].is_empty());
+        assert_eq!(
+            conversation_turn_image_urls[2],
+            vec!["turn-3-image-1".to_string(), "turn-3-image-2".to_string()]
+        );
+        assert_eq!(latest_image_urls, vec!["latest-image-1".to_string()]);
     }
 
     #[test]
@@ -9588,6 +9750,7 @@ pub fn run() {
             tray_pong_playback_hydrated: Mutex::new(false),
             tray_pong_playback_modified_before_hydration: Mutex::new(false),
             end_of_utterance_silence_ms: Mutex::new(END_OF_UTTERANCE_SILENCE_MS),
+            llm_image_history_limit: Mutex::new(DEFAULT_LLM_IMAGE_HISTORY_LIMIT),
             conversation_log_has_visible_images: Mutex::new(false),
             selected_ollama_model: Mutex::new("gemma2:2b".to_string()),
             ollama_base_url: Mutex::new("http://127.0.0.1:11434".to_string()),
@@ -9634,6 +9797,7 @@ pub fn run() {
             set_pong_playback_enabled,
             initialize_pong_playback_preference,
             set_end_of_utterance_silence_ms,
+            set_llm_image_history_limit,
             get_global_shortcut_look_at_entire_screen,
             initialize_global_shortcut_look_at_entire_screen,
             set_global_shortcut_look_at_entire_screen,

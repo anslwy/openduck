@@ -5,9 +5,13 @@
     import { ask } from "@tauri-apps/plugin-dialog";
 
     import {
+        DEFAULT_LLM_IMAGE_HISTORY_LIMIT,
         END_OF_UTTERANCE_SILENCE_STEP_MS,
+        LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE,
         MAX_END_OF_UTTERANCE_SILENCE_MS,
+        MAX_LLM_IMAGE_HISTORY_LIMIT,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
+        MIN_LLM_IMAGE_HISTORY_LIMIT,
     } from "$lib/openduck/config";
     import type {
         AppUpdateInfo,
@@ -32,12 +36,14 @@
         selectLastSessionEnabled,
         showStatEnabled,
         endOfUtteranceSilenceMs,
+        llmImageHistoryLimit,
         onUpdateGlobalShortcut,
         onUpdateGlobalShortcutEntireScreen,
         onUpdatePongPlayback,
         onUpdateSelectLastSession,
         onUpdateShowStat,
         onUpdateEndOfUtteranceSilenceMs,
+        onUpdateLlmImageHistoryLimit,
     } = $props<{
         buildInfo: BuildInfo | null;
         buildInfoError: string | null;
@@ -54,12 +60,14 @@
         selectLastSessionEnabled: boolean;
         showStatEnabled: boolean;
         endOfUtteranceSilenceMs: number;
+        llmImageHistoryLimit: number | null;
         onUpdateGlobalShortcut: (shortcut: string) => void;
         onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
         onUpdatePongPlayback: (enabled: boolean) => void;
         onUpdateSelectLastSession: (enabled: boolean) => void;
         onUpdateShowStat: (enabled: boolean) => void;
         onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
+        onUpdateLlmImageHistoryLimit: (limit: number | null) => void;
     }>();
 
     let copyState = $state<"idle" | "copied" | "failed">("idle");
@@ -209,6 +217,38 @@
             100
         );
     });
+    const llmImageHistorySliderValue = $derived.by(() => {
+        if (llmImageHistoryLimit === DEFAULT_LLM_IMAGE_HISTORY_LIMIT) {
+            return LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE;
+        }
+
+        return llmImageHistoryLimit;
+    });
+    const formattedLlmImageHistoryLimit = $derived.by(() => {
+        if (llmImageHistoryLimit === DEFAULT_LLM_IMAGE_HISTORY_LIMIT) {
+            return "Unlimited";
+        }
+
+        return llmImageHistoryLimit === 1
+            ? "1 image"
+            : `${llmImageHistoryLimit} images`;
+    });
+    const llmImageHistoryProgress = $derived.by(() => {
+        const range =
+            LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE -
+            MIN_LLM_IMAGE_HISTORY_LIMIT;
+        if (range <= 0) {
+            return 0;
+        }
+
+        return (
+            ((llmImageHistorySliderValue - MIN_LLM_IMAGE_HISTORY_LIMIT) /
+                range) *
+            100
+        );
+    });
+    const minimumLlmImageHistoryLabel = `${MIN_LLM_IMAGE_HISTORY_LIMIT}`;
+    const maximumLlmImageHistoryLabel = "Unlimited";
 
     onDestroy(() => {
         clearCopyFeedback();
@@ -366,6 +406,60 @@
                         <div class="about-slider-scale" aria-hidden="true">
                             <span>{minimumEndOfUtteranceSilenceLabel}</span>
                             <span>{maximumEndOfUtteranceSilenceLabel}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="about-metadata-row slider-row">
+                <span class="about-metadata-label"
+                    >Last Images Visible to LLM</span
+                >
+                <div class="about-slider-control">
+                    <div class="about-slider-header">
+                        <span class="about-slider-detail"
+                            >Caps how many recent screenshots the model can
+                            inspect across the active conversation context. Move
+                            it to Unlimited to keep every image that still fits
+                            in the context window.</span
+                        >
+                        <span class="about-slider-value"
+                            >{formattedLlmImageHistoryLimit}</span
+                        >
+                    </div>
+                    <div class="about-slider-surface">
+                        <input
+                            type="range"
+                            class="about-slider"
+                            min={MIN_LLM_IMAGE_HISTORY_LIMIT}
+                            max={LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE}
+                            step="1"
+                            value={llmImageHistorySliderValue}
+                            style={`--slider-progress: ${llmImageHistoryProgress}%;`}
+                            aria-label="Last images visible to LLM"
+                            oninput={(event) => {
+                                const value = Number(
+                                    (
+                                        event.currentTarget as HTMLInputElement
+                                    ).value,
+                                );
+
+                                onUpdateLlmImageHistoryLimit(
+                                    value >=
+                                        LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE
+                                        ? DEFAULT_LLM_IMAGE_HISTORY_LIMIT
+                                        : Math.min(
+                                              MAX_LLM_IMAGE_HISTORY_LIMIT,
+                                              Math.max(
+                                                  MIN_LLM_IMAGE_HISTORY_LIMIT,
+                                                  value,
+                                              ),
+                                          ),
+                                );
+                            }}
+                        />
+                        <div class="about-slider-scale" aria-hidden="true">
+                            <span>{minimumLlmImageHistoryLabel}</span>
+                            <span>{maximumLlmImageHistoryLabel}</span>
                         </div>
                     </div>
                 </div>

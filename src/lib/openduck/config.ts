@@ -19,6 +19,8 @@ export const SELECT_LAST_SESSION_STORAGE_KEY = "openduck.select-last-session.v1"
 export const SHOW_STAT_STORAGE_KEY = "openduck.show-stat.v1";
 export const END_OF_UTTERANCE_SILENCE_STORAGE_KEY =
   "openduck.end-of-utterance-silence-ms.v1";
+export const LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY =
+  "openduck.llm-image-history-limit.v1";
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
 export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY = "openduck.global-shortcut-entire.v1";
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
@@ -30,6 +32,11 @@ export const DEFAULT_END_OF_UTTERANCE_SILENCE_MS = 2000;
 export const MIN_END_OF_UTTERANCE_SILENCE_MS = 500;
 export const MAX_END_OF_UTTERANCE_SILENCE_MS = 5000;
 export const END_OF_UTTERANCE_SILENCE_STEP_MS = 100;
+export const DEFAULT_LLM_IMAGE_HISTORY_LIMIT: number | null = null;
+export const MIN_LLM_IMAGE_HISTORY_LIMIT = 1;
+export const MAX_LLM_IMAGE_HISTORY_LIMIT = 9;
+export const LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE =
+  MAX_LLM_IMAGE_HISTORY_LIMIT + 1;
 export const DEFAULT_GLOBAL_SHORTCUT = "Command+Shift+L";
 export const DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN = "Command+Shift+Option+L";
 
