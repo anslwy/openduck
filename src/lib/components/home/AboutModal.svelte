@@ -35,6 +35,7 @@
         pongPlaybackEnabled,
         selectLastSessionEnabled,
         showStatEnabled,
+        showSubtitleEnabled,
         endOfUtteranceSilenceMs,
         llmImageHistoryLimit,
         onUpdateGlobalShortcut,
@@ -42,6 +43,7 @@
         onUpdatePongPlayback,
         onUpdateSelectLastSession,
         onUpdateShowStat,
+        onUpdateShowSubtitle,
         onUpdateEndOfUtteranceSilenceMs,
         onUpdateLlmImageHistoryLimit,
     } = $props<{
@@ -59,6 +61,7 @@
         pongPlaybackEnabled: boolean;
         selectLastSessionEnabled: boolean;
         showStatEnabled: boolean;
+        showSubtitleEnabled: boolean;
         endOfUtteranceSilenceMs: number;
         llmImageHistoryLimit: number | null;
         onUpdateGlobalShortcut: (shortcut: string) => void;
@@ -66,6 +69,7 @@
         onUpdatePongPlayback: (enabled: boolean) => void;
         onUpdateSelectLastSession: (enabled: boolean) => void;
         onUpdateShowStat: (enabled: boolean) => void;
+        onUpdateShowSubtitle: (enabled: boolean) => void;
         onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
         onUpdateLlmImageHistoryLimit: (limit: number | null) => void;
     }>();
@@ -369,6 +373,27 @@
                     <span>{showStatEnabled ? "Enabled" : "Disabled"}</span>
                 </button>
             </div>
+            {#if showStatEnabled}
+                <div class="about-metadata-row">
+                    <span class="about-metadata-label"
+                        >Show Subtitles (Live Transcript)</span
+                    >
+                    <button
+                        type="button"
+                        class="quantize-toggle"
+                        class:active={showSubtitleEnabled}
+                        onclick={() =>
+                            onUpdateShowSubtitle(!showSubtitleEnabled)}
+                    >
+                        <span class="quantize-dot"></span>
+                        <span
+                            >{showSubtitleEnabled
+                                ? "Enabled"
+                                : "Disabled"}</span
+                        >
+                    </button>
+                </div>
+            {/if}
             <div class="about-metadata-row slider-row">
                 <span class="about-metadata-label"
                     >Silence Before Sending Audio to STT</span
@@ -438,9 +463,8 @@
                             aria-label="Last images visible to LLM"
                             oninput={(event) => {
                                 const value = Number(
-                                    (
-                                        event.currentTarget as HTMLInputElement
-                                    ).value,
+                                    (event.currentTarget as HTMLInputElement)
+                                        .value,
                                 );
 
                                 onUpdateLlmImageHistoryLimit(

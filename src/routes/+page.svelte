@@ -50,6 +50,7 @@
         PONG_PLAYBACK_STORAGE_KEY,
         SELECT_LAST_SESSION_STORAGE_KEY,
         SHOW_STAT_STORAGE_KEY,
+        SHOW_SUBTITLE_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
         GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
         DEFAULT_GLOBAL_SHORTCUT,
@@ -118,6 +119,11 @@
     };
 
     type StoredShowStatPreference = {
+        version: 1;
+        enabled: boolean;
+    };
+
+    type StoredShowSubtitlePreference = {
         version: 1;
         enabled: boolean;
     };
@@ -221,9 +227,8 @@
     let pongPlaybackEnabled = $state(true);
     let selectLastSessionEnabled = $state(false);
     let showStatEnabled = $state(false);
-    let endOfUtteranceSilenceMs = $state(
-        DEFAULT_END_OF_UTTERANCE_SILENCE_MS,
-    );
+    let showSubtitleEnabled = $state(true);
+    let endOfUtteranceSilenceMs = $state(DEFAULT_END_OF_UTTERANCE_SILENCE_MS);
     let llmImageHistoryLimit = $state<number | null>(
         DEFAULT_LLM_IMAGE_HISTORY_LIMIT,
     );
@@ -269,6 +274,7 @@
     let processingAudioToAudioLatencyMs = $state<number | null>(null);
     let processingAudioToLlmLatencyMs = $state<number | null>(null);
     let processingAudioLatencyMs = $state<number | null>(null);
+    let liveTranscriptSubtitle = $state("");
     let screenCapturePhase = $state<ScreenCaptureEvent["phase"] | null>(null);
     let screenCaptureMessage = $state("");
     let screenCaptureHasPendingAttachment = $state(false);
@@ -669,6 +675,10 @@
     });
 
     function setCallStage(phase: CallStagePhase, message: string) {
+        if (phase === "speaking") {
+            // Avoid showing stale user subtitles while the assistant is talking.
+            liveTranscriptSubtitle = "";
+        }
         callStagePhase = phase;
         callStageMessage = message;
     }
@@ -1023,6 +1033,21 @@
         );
     }
 
+    function persistShowSubtitlePreference(enabled: boolean) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredShowSubtitlePreference = {
+            version: 1,
+            enabled,
+        };
+        window.localStorage.setItem(
+            SHOW_SUBTITLE_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function clampEndOfUtteranceSilenceMs(milliseconds: number) {
         if (!Number.isFinite(milliseconds)) {
             return DEFAULT_END_OF_UTTERANCE_SILENCE_MS;
@@ -1030,16 +1055,12 @@
 
         const roundedMilliseconds = Math.round(milliseconds);
         const steppedMilliseconds =
-            Math.round(
-                roundedMilliseconds / END_OF_UTTERANCE_SILENCE_STEP_MS,
-            ) * END_OF_UTTERANCE_SILENCE_STEP_MS;
+            Math.round(roundedMilliseconds / END_OF_UTTERANCE_SILENCE_STEP_MS) *
+            END_OF_UTTERANCE_SILENCE_STEP_MS;
 
         return Math.min(
             MAX_END_OF_UTTERANCE_SILENCE_MS,
-            Math.max(
-                MIN_END_OF_UTTERANCE_SILENCE_MS,
-                steppedMilliseconds,
-            ),
+            Math.max(MIN_END_OF_UTTERANCE_SILENCE_MS, steppedMilliseconds),
         );
     }
 
@@ -1058,9 +1079,7 @@
         );
     }
 
-    function clampLlmImageHistoryLimit(
-        limit: number | null,
-    ): number | null {
+    function clampLlmImageHistoryLimit(limit: number | null): number | null {
         if (limit === null) {
             return DEFAULT_LLM_IMAGE_HISTORY_LIMIT;
         }
@@ -1155,9 +1174,7 @@
             return false;
         }
 
-        const rawPayload = window.localStorage.getItem(
-            SHOW_STAT_STORAGE_KEY,
-        );
+        const rawPayload = window.localStorage.getItem(SHOW_STAT_STORAGE_KEY);
         if (!rawPayload) {
             return false;
         }
@@ -1175,6 +1192,34 @@
         } catch (err) {
             console.error("Failed to restore show stat preference:", err);
             return false;
+        }
+    }
+
+    function loadShowSubtitlePreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return true;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            SHOW_SUBTITLE_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return true;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return true;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error("Failed to restore show subtitle preference:", err);
+            return true;
         }
     }
 
@@ -1286,14 +1331,17 @@
         persistShowStatPreference(enabled);
     }
 
+    function applyShowSubtitlePreference(enabled: boolean) {
+        showSubtitleEnabled = enabled;
+        persistShowSubtitlePreference(enabled);
+    }
+
     function applyEndOfUtteranceSilencePreference(milliseconds: number) {
         const normalizedMilliseconds =
             clampEndOfUtteranceSilenceMs(milliseconds);
         endOfUtteranceSilenceMs = normalizedMilliseconds;
         persistEndOfUtteranceSilencePreference(normalizedMilliseconds);
-        syncEndOfUtteranceSilenceWithCaptureProcessor(
-            normalizedMilliseconds,
-        );
+        syncEndOfUtteranceSilenceWithCaptureProcessor(normalizedMilliseconds);
 
         void invoke("set_end_of_utterance_silence_ms", {
             milliseconds: normalizedMilliseconds,
@@ -1344,6 +1392,11 @@
     async function initializeShowStatPreference() {
         const storedEnabled = loadShowStatPreferenceFromStorage();
         applyShowStatPreference(storedEnabled);
+    }
+
+    async function initializeShowSubtitlePreference() {
+        const storedEnabled = loadShowSubtitlePreferenceFromStorage();
+        applyShowSubtitlePreference(storedEnabled);
     }
 
     async function initializeEndOfUtteranceSilencePreference() {
@@ -1600,7 +1653,10 @@
             return false;
         }
 
-        if (normalizedText === entry.text && nextImageUrls === entry.imageUrls) {
+        if (
+            normalizedText === entry.text &&
+            nextImageUrls === entry.imageUrls
+        ) {
             return true;
         }
 
@@ -1649,44 +1705,45 @@
                                       imageUrls: nextImageUrls,
                                       contextEntryId: null,
                                   }
-                          : candidate,
-                  );
-                  return true;
-              }
+                                : candidate,
+                    );
+                    return true;
+                }
 
-              console.error("Failed to update conversation entry:", err);
-              alert(`Failed to update the conversation entry.\n${errorMsg}`);
-              return false;
-          } finally {
-              isSavingConversationLogEntryEdit = false;
-          }
-      } else {
-          // No context ID. Just update locally.
-          // If it's currently being responded to, markConversationTurnAsContextBacked will sync it later.
-          conversationLogEntries = conversationLogEntries.map((candidate) =>
-              candidate.id === entryId
-                  ? {
-                        ...candidate,
-                        text: normalizedText,
-                        imageUrls: nextImageUrls,
-                    }
-                  : candidate,
-          );
-          return true;
-      }
-  }
+                console.error("Failed to update conversation entry:", err);
+                alert(`Failed to update the conversation entry.\n${errorMsg}`);
+                return false;
+            } finally {
+                isSavingConversationLogEntryEdit = false;
+            }
+        } else {
+            // No context ID. Just update locally.
+            // If it's currently being responded to, markConversationTurnAsContextBacked will sync it later.
+            conversationLogEntries = conversationLogEntries.map((candidate) =>
+                candidate.id === entryId
+                    ? {
+                          ...candidate,
+                          text: normalizedText,
+                          imageUrls: nextImageUrls,
+                      }
+                    : candidate,
+            );
+            return true;
+        }
+    }
 
-  async function clearConversationLogImages() {
-      const hasVisibleImages = conversationLogEntries.some(
-          (entry) => entry.imageUrls.length > 0,
-      );
-      if (!hasVisibleImages) {
-          return;
-      }
+    async function clearConversationLogImages() {
+        const hasVisibleImages = conversationLogEntries.some(
+            (entry) => entry.imageUrls.length > 0,
+        );
+        if (!hasVisibleImages) {
+            return;
+        }
 
-      const hasContextImages = conversationLogEntries.some(
-          (entry) => entry.contextEntryId !== null && entry.imageUrls.length > 0,
-      );
+        const hasContextImages = conversationLogEntries.some(
+            (entry) =>
+                entry.contextEntryId !== null && entry.imageUrls.length > 0,
+        );
 
         isClearingConversationLogImages = true;
 
@@ -2832,9 +2889,7 @@
         const target = event.currentTarget as HTMLSelectElement;
         const nextVariant = target.value as GemmaVariant;
 
-        if (
-            nextVariant === "ollama" && !isOllamaSupported
-        ) {
+        if (nextVariant === "ollama" && !isOllamaSupported) {
             target.value = selectedGemmaVariant;
             return;
         }
@@ -2849,7 +2904,10 @@
             void syncLmStudioModels();
         }
 
-        if (isExternalGemmaVariant(nextVariant) && selectedSttModel === "gemma") {
+        if (
+            isExternalGemmaVariant(nextVariant) &&
+            selectedSttModel === "gemma"
+        ) {
             try {
                 selectedSttModel = DEFAULT_STT_MODEL;
                 await setSttModelSelection(DEFAULT_STT_MODEL);
@@ -2975,7 +3033,8 @@
             selectedGemmaVariant = previousSelection.gemmaVariant;
             selectedCsmModel = previousSelection.csmModel;
             selectedSttModel = previousSelection.sttModel;
-            selectedOllamaModel = previousSelection.ollamaModel ?? DEFAULT_OLLAMA_MODEL;
+            selectedOllamaModel =
+                previousSelection.ollamaModel ?? DEFAULT_OLLAMA_MODEL;
             selectedLmStudioModel =
                 previousSelection.lmstudioModel ?? DEFAULT_LMSTUDIO_MODEL;
             console.error("Failed to apply model preset:", err);
@@ -3172,8 +3231,9 @@
 
     async function syncLmStudioConfig() {
         try {
-            const [url, key] =
-                await invoke<[string, string | null]>("get_lmstudio_config");
+            const [url, key] = await invoke<[string, string | null]>(
+                "get_lmstudio_config",
+            );
             lmstudioBaseUrl = url;
             lmstudioApiKey = key ?? "";
         } catch (err) {
@@ -3328,8 +3388,7 @@
                             const startedText = segments.shift();
                             if (startedText) {
                                 currentSpokenResponse = (
-                                    currentSpokenResponse +
-                                    startedText
+                                    currentSpokenResponse + startedText
                                 ).trim();
                             }
                         }
@@ -3788,6 +3847,7 @@
         calling = true;
         callStartedAtMs = Date.now();
         resetProcessingAudioLatencies();
+        liveTranscriptSubtitle = "";
         syncCallElapsedTime();
         activeTtsRequestId = null;
         syncTtsPlaybackState(false);
@@ -3835,6 +3895,7 @@
         calling = true;
         callStartedAtMs = Date.now();
         resetProcessingAudioLatencies();
+        liveTranscriptSubtitle = "";
         syncCallElapsedTime();
         activeTtsRequestId = null;
         syncTtsPlaybackState(false);
@@ -3876,6 +3937,7 @@
         resetConversationLog();
         resetScreenCaptureStatus();
         resetProcessingAudioLatencies();
+        liveTranscriptSubtitle = "";
         setCallStage("idle", "");
         stopCallTimerTracking();
 
@@ -4512,6 +4574,7 @@
                                 return;
                             }
 
+                            liveTranscriptSubtitle = nextText;
                             if (pendingConversationUserLogEntryId == null) {
                                 pendingConversationUserLogEntryId =
                                     appendConversationLogEntry(
@@ -4570,6 +4633,9 @@
                                 return;
                             }
 
+                            if (nextText) {
+                                liveTranscriptSubtitle = nextText;
+                            }
                             if (pendingConversationUserLogEntryId == null) {
                                 pendingConversationUserLogEntryId =
                                     appendConversationLogEntry(
@@ -4685,6 +4751,7 @@
             await initializePongPlaybackPreference();
             await initializeSelectLastSessionPreference();
             await initializeShowStatPreference();
+            await initializeShowSubtitlePreference();
             await initializeEndOfUtteranceSilencePreference();
             await initializeLlmImageHistoryLimitPreference();
             await initializeGlobalShortcutPreference();
@@ -4872,7 +4939,9 @@
                         class:load-all-btn-primary={loadAllNeedsAction}
                         disabled={loadAllDisabled}
                         title={loadAllButtonTitle}
-                        onclick={loadAllNeedsAction ? handleLoadAll : handleUnloadAll}
+                        onclick={loadAllNeedsAction
+                            ? handleLoadAll
+                            : handleUnloadAll}
                     >
                         {loadAllButtonLabel}
                     </button>
@@ -4905,7 +4974,7 @@
                     externalProviderSupported={selectedExternalProviderSupported}
                     externalProviderGuideText={selectedExternalProviderGuideText}
                     externalModels={selectedExternalModels}
-                    selectedExternalModel={selectedExternalModel}
+                    {selectedExternalModel}
                     handleExternalModelChange={selectedGemmaVariant ===
                     "lmstudio"
                         ? handleLmStudioModelChange
@@ -5004,6 +5073,18 @@
                     <span class="avatar-latency-label">Latency</span>
                     <span class="avatar-latency-value"
                         >{formatLatencySummary()}</span
+                    >
+                </div>
+                <div
+                    class="avatar-subtitle"
+                    class:display={showSubtitleEnabled &&
+                        liveTranscriptSubtitle.trim() &&
+                        (!assistantSpeaking || userSpeaking)}
+                    aria-live="polite"
+                    aria-atomic="true"
+                >
+                    <span class="avatar-subtitle-text"
+                        >{liveTranscriptSubtitle}</span
                     >
                 </div>
             {/if}
@@ -5107,7 +5188,7 @@
                     onClearHistory={clearConversationLogImages}
                     onClose={closeConversationPopup}
                     onFork={handleForkSession}
-                    onPreviewImage={(url) => previewImageUrl = url}
+                    onPreviewImage={(url) => (previewImageUrl = url)}
                     {saveConversationLogEntryEdit}
                     {deleteConversationLogEntry}
                     {setConversationLogViewport}
@@ -5177,6 +5258,7 @@
                     {pongPlaybackEnabled}
                     {selectLastSessionEnabled}
                     {showStatEnabled}
+                    {showSubtitleEnabled}
                     {endOfUtteranceSilenceMs}
                     {llmImageHistoryLimit}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
@@ -5184,6 +5266,7 @@
                     onUpdatePongPlayback={applyPongPlaybackPreference}
                     onUpdateSelectLastSession={applySelectLastSessionPreference}
                     onUpdateShowStat={applyShowStatPreference}
+                    onUpdateShowSubtitle={applyShowSubtitlePreference}
                     onUpdateEndOfUtteranceSilenceMs={applyEndOfUtteranceSilencePreference}
                     onUpdateLlmImageHistoryLimit={applyLlmImageHistoryLimitPreference}
                 />

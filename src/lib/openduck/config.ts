@@ -17,6 +17,7 @@ export const MODEL_PREFERENCES_STORAGE_KEY = "openduck.model-preferences.v1";
 export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
 export const SELECT_LAST_SESSION_STORAGE_KEY = "openduck.select-last-session.v1";
 export const SHOW_STAT_STORAGE_KEY = "openduck.show-stat.v1";
+export const SHOW_SUBTITLE_STORAGE_KEY = "openduck.show-subtitle.v1";
 export const END_OF_UTTERANCE_SILENCE_STORAGE_KEY =
   "openduck.end-of-utterance-silence-ms.v1";
 export const LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY =
