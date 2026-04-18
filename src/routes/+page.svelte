@@ -2613,6 +2613,11 @@
             return;
         }
 
+        if (assistantSpeaking) {
+            void handleInterruptTts();
+            return;
+        }
+
         if (previewImageUrl) {
             previewImageUrl = null;
             return;
@@ -5467,30 +5472,36 @@
                     </button>
                 {/if}
                 {#if calling}
-                    <button
-                        type="button"
-                        class="icon-btn conversation-log-btn"
-                        class:active={showConversationPopup}
-                        onclick={toggleConversationPopup}
-                        aria-label="Toggle conversation log"
-                        aria-controls="conversation-log-popup"
-                        aria-expanded={showConversationPopup}
-                    >
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            width="22"
-                            height="22"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2.2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            ><path d="M7 10h8" /><path d="M7 14h5" /><path
-                                d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"
-                            /></svg
+                    <div class="tooltip-shell control-tooltip-shell">
+                        <button
+                            type="button"
+                            class="icon-btn conversation-log-btn"
+                            class:active={showConversationPopup}
+                            onclick={toggleConversationPopup}
+                            aria-label="Toggle conversation log"
+                            aria-controls="conversation-log-popup"
+                            aria-expanded={showConversationPopup}
+                            title="Conversation Log"
                         >
-                    </button>
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="22"
+                                height="22"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2.2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                ><path d="M7 10h8" /><path d="M7 14h5" /><path
+                                    d="M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"
+                                /></svg
+                            >
+                        </button>
+                        <div class="tooltip-bubble control-tooltip">
+                            <span>Conversation Log</span>
+                        </div>
+                    </div>
                     <div class="tooltip-shell control-tooltip-shell">
                         <button
                             class="icon-btn mute-btn"
@@ -5563,36 +5574,40 @@
                             <span class="tooltip-shortcut">Space</span>
                         </div>
                     </div>
-                    <button
-                        type="button"
-                        class="icon-btn interrupt-btn"
-                        disabled={!assistantSpeaking}
-                        onclick={handleInterruptTts}
-                        aria-label="Interrupt assistant speech"
-                        title={assistantSpeaking
-                            ? "Interrupt assistant speech"
-                            : "Interrupt is available while the assistant is speaking"}
-                    >
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            width="22"
-                            height="22"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2.2"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            aria-hidden="true"
+                    <div class="tooltip-shell control-tooltip-shell">
+                        <button
+                            type="button"
+                            class="icon-btn interrupt-btn"
+                            disabled={!assistantSpeaking}
+                            onclick={handleInterruptTts}
+                            aria-label="Interrupt assistant speech"
+                            title="Interrupt assistant speech (ESC)"
                         >
-                            <path d="M6.5 11V6.5a1.5 1.5 0 0 1 3 0V11" />
-                            <path d="M9.5 11V5a1.5 1.5 0 0 1 3 0v6" />
-                            <path d="M12.5 11V4.5a1.5 1.5 0 0 1 3 0V11" />
-                            <path
-                                d="M15.5 11V6a1.5 1.5 0 0 1 3 0v7a6 6 0 0 1-6 6H11a5 5 0 0 1-4.64-3.14l-1.1-2.64a1.5 1.5 0 0 1 2.72-1.26L9.5 14V11"
-                            />
-                        </svg>
-                    </button>
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="22"
+                                height="22"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2.2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                aria-hidden="true"
+                            >
+                                <path d="M6.5 11V6.5a1.5 1.5 0 0 1 3 0V11" />
+                                <path d="M9.5 11V5a1.5 1.5 0 0 1 3 0v6" />
+                                <path d="M12.5 11V4.5a1.5 1.5 0 0 1 3 0V11" />
+                                <path
+                                    d="M15.5 11V6a1.5 1.5 0 0 1 3 0v7a6 6 0 0 1-6 6H11a5 5 0 0 1-4.64-3.14l-1.1-2.64a1.5 1.5 0 0 1 2.72-1.26L9.5 14V11"
+                                />
+                            </svg>
+                        </button>
+                        <div class="tooltip-bubble control-tooltip">
+                            <span>Interrupt</span>
+                            <span class="tooltip-shortcut">ESC</span>
+                        </div>
+                    </div>
                 {/if}
             </div>
 
