@@ -184,6 +184,18 @@
             ? `${seconds}s`
             : `${seconds.toFixed(1)}s`;
     });
+    const minimumEndOfUtteranceSilenceLabel = $derived.by(() => {
+        const seconds = MIN_END_OF_UTTERANCE_SILENCE_MS / 1000;
+        return Number.isInteger(seconds)
+            ? `${seconds.toFixed(0)}s`
+            : `${seconds.toFixed(1)}s`;
+    });
+    const maximumEndOfUtteranceSilenceLabel = $derived.by(() => {
+        const seconds = MAX_END_OF_UTTERANCE_SILENCE_MS / 1000;
+        return Number.isInteger(seconds)
+            ? `${seconds.toFixed(0)}s`
+            : `${seconds.toFixed(1)}s`;
+    });
     const endOfUtteranceSilenceProgress = $derived.by(() => {
         const range =
             MAX_END_OF_UTTERANCE_SILENCE_MS -
@@ -309,7 +321,7 @@
                 <div class="about-slider-control">
                     <div class="about-slider-header">
                         <span class="about-slider-detail"
-                            >Longer waits capture more pause-heavy speech before transcription starts.</span
+                            >Longer waits capture more pause-heavy speech before transcription starts. The minimum stays conservative to avoid mid-sentence cutoffs.</span
                         >
                         <span class="about-slider-value"
                             >{formattedEndOfUtteranceSilence}</span
@@ -335,8 +347,8 @@
                                 )}
                         />
                         <div class="about-slider-scale" aria-hidden="true">
-                            <span>0.5s</span>
-                            <span>5.0s</span>
+                            <span>{minimumEndOfUtteranceSilenceLabel}</span>
+                            <span>{maximumEndOfUtteranceSilenceLabel}</span>
                         </div>
                     </div>
                 </div>

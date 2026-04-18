@@ -2841,15 +2841,14 @@ fn start_live_transcription_loop(
                     }
                 };
 
-            let transcript = match transcribe_audio_with_stt_worker(&app_handle, &audio_wav_base64)
-                .await
-            {
-                Ok(transcript) => transcript,
-                Err(err) => {
-                    debug!("Live STT transcription failed: {}", err);
-                    continue;
-                }
-            };
+            let transcript =
+                match transcribe_audio_with_stt_worker(&app_handle, &audio_wav_base64).await {
+                    Ok(transcript) => transcript,
+                    Err(err) => {
+                        debug!("Live STT transcription failed: {}", err);
+                        continue;
+                    }
+                };
 
             if transcript.is_empty() || !is_meaningful_transcript(&transcript) {
                 continue;
@@ -2972,23 +2971,15 @@ async fn receive_audio_chunk(
     if *is_speaking {
         buffer.extend_from_slice(&prepared_chunk.samples);
 
-        let utterance_voiced_duration_ms =
-            utterance_voiced_duration_ms(*current_utterance_voiced_samples, capture_sample_rate);
-        let effective_silence_ms = adaptive_end_of_utterance_silence_ms(
-            configured_silence_ms,
-            utterance_voiced_duration_ms,
-        );
         let silence_chunks_required = required_silence_chunks(
             capture_sample_rate,
             prepared_chunk.samples.len(),
-            effective_silence_ms,
+            configured_silence_ms,
         );
 
         if *silent_count >= silence_chunks_required {
             info!(
-                "Silence detected after {} ms of voiced audio; endpointing with {} ms silence (configured {} ms) before transcription.",
-                utterance_voiced_duration_ms,
-                effective_silence_ms,
+                "Silence detected; endpointing with configured {} ms silence before transcription.",
                 configured_silence_ms
             );
             emit_call_stage(&app_handle, "processing_audio", "Processing Audio");
@@ -3000,12 +2991,7 @@ async fn receive_audio_chunk(
             } else {
                 None
             };
-            process_audio_turn(
-                &buffer,
-                capture_sample_rate,
-                app_handle,
-                cached_transcript,
-            );
+            process_audio_turn(&buffer, capture_sample_rate, app_handle, cached_transcript);
             buffer.clear();
             {
                 let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
@@ -3044,41 +3030,6 @@ fn required_silence_chunks(
         .div_ceil(samples_per_chunk * 1000);
 
     required_chunks.max(1) as usize
-}
-
-fn utterance_voiced_duration_ms(voiced_sample_count: usize, sample_rate: u32) -> u32 {
-    if voiced_sample_count == 0 || sample_rate == 0 {
-        return 0;
-    }
-
-    ((voiced_sample_count as u64) * 1000 / u64::from(sample_rate)) as u32
-}
-
-fn adaptive_end_of_utterance_silence_ms(
-    configured_silence_ms: u32,
-    utterance_voiced_duration_ms: u32,
-) -> u32 {
-    let configured_silence_ms = clamp_end_of_utterance_silence_ms(configured_silence_ms);
-    let minimum_effective_silence_ms = configured_silence_ms
-        .saturating_mul(ADAPTIVE_ENDPOINTING_MIN_SILENCE_RATIO_PERCENT)
-        .div_ceil(100)
-        .clamp(MIN_END_OF_UTTERANCE_SILENCE_MS, configured_silence_ms);
-
-    if utterance_voiced_duration_ms <= ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS {
-        return minimum_effective_silence_ms;
-    }
-
-    if utterance_voiced_duration_ms >= ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS {
-        return configured_silence_ms;
-    }
-
-    let range_ms =
-        u64::from(ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS - ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS);
-    let progress_ms =
-        u64::from(utterance_voiced_duration_ms - ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS);
-    let silence_delta_ms = u64::from(configured_silence_ms - minimum_effective_silence_ms);
-
-    minimum_effective_silence_ms + ((silence_delta_ms * progress_ms) / range_ms) as u32
 }
 
 fn process_audio_turn(
@@ -5107,20 +5058,17 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        adaptive_end_of_utterance_silence_ms, build_latest_user_turn_message,
-        build_llm_system_prompt, clamp_end_of_utterance_silence_ms, parse_gemma_stream_event,
-        pending_streamed_segment_is_in_first_sentence,
+        build_latest_user_turn_message, build_llm_system_prompt, clamp_end_of_utterance_silence_ms,
+        parse_gemma_stream_event, pending_streamed_segment_is_in_first_sentence,
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, required_silence_chunks,
-        resolve_capture_sample_rate, sanitize_for_voice_output,
+        resolve_capture_sample_rate, samples_duration_ms, sanitize_for_voice_output,
         select_conversation_turns_for_llm_context,
-        should_flush_incomplete_streamed_response_segment, suppress_playback_echo,
-        utterance_voiced_duration_ms, AudioPayload, ConversationTurn, ParsedGemmaStreamEvent,
-        AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT,
-        MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
+        should_flush_incomplete_streamed_response_segment, suppress_playback_echo, AudioPayload,
+        ConversationTurn, ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE,
+        IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
     use crate::constants::{
-        ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS, ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS,
         END_OF_UTTERANCE_SILENCE_MS, MAX_END_OF_UTTERANCE_SILENCE_MS, MAX_LLM_CONTEXT_TURNS,
         MIN_END_OF_UTTERANCE_SILENCE_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
         STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS,
@@ -5352,30 +5300,9 @@ mod tests {
     }
 
     #[test]
-    fn voiced_duration_tracks_sample_count() {
-        assert_eq!(utterance_voiced_duration_ms(48_000, 48_000), 1000);
-        assert_eq!(utterance_voiced_duration_ms(24_000, 48_000), 500);
-    }
-
-    #[test]
-    fn adaptive_endpointing_halves_silence_for_short_utterances() {
-        assert_eq!(
-            adaptive_end_of_utterance_silence_ms(2000, ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS),
-            1000
-        );
-    }
-
-    #[test]
-    fn adaptive_endpointing_keeps_full_silence_for_long_utterances() {
-        assert_eq!(
-            adaptive_end_of_utterance_silence_ms(2000, ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS),
-            2000
-        );
-    }
-
-    #[test]
-    fn adaptive_endpointing_interpolates_for_mid_length_utterances() {
-        assert_eq!(adaptive_end_of_utterance_silence_ms(2000, 2600), 1500);
+    fn sample_duration_tracks_sample_count() {
+        assert_eq!(samples_duration_ms(48_000, 48_000), 1000);
+        assert_eq!(samples_duration_ms(24_000, 48_000), 500);
     }
 
     #[test]

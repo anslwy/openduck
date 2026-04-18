@@ -213,7 +213,10 @@ pub(crate) fn emit_transcript_event(app_handle: &AppHandle, payload: TranscriptE
     }
 }
 
-pub(crate) fn emit_transcript_partial_event(app_handle: &AppHandle, payload: TranscriptPartialEvent) {
+pub(crate) fn emit_transcript_partial_event(
+    app_handle: &AppHandle,
+    payload: TranscriptPartialEvent,
+) {
     if let Err(err) = app_handle.emit(TRANSCRIPT_PARTIAL_EVENT, payload) {
         error!("Failed to emit transcript partial event: {}", err);
     }
