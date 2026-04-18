@@ -225,6 +225,8 @@ struct ChatCompletionChoice {
 #[derive(Deserialize)]
 struct ChatCompletionMessage {
     content: Option<serde_json::Value>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -245,6 +247,8 @@ struct ChatCompletionStreamChoice {
 #[derive(Deserialize)]
 struct ChatCompletionStreamDelta {
     content: Option<serde_json::Value>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -4007,7 +4011,9 @@ async fn stream_gemma_response_to_csm(
 
     let response_id = allocate_csm_response_id(app_handle);
     let mut raw_response_text = String::new();
+    let mut raw_reasoning_text = String::new();
     let mut latest_response_text = String::new();
+    let mut latest_reasoning_text = String::new();
     let mut queued_response_bytes = 0usize;
     let mut started_audio_response = false;
     let mut incomplete_stream_segment_started_at = None;
@@ -4042,14 +4048,17 @@ async fn stream_gemma_response_to_csm(
                     saw_stream_done = true;
                     break;
                 }
-                ParsedGemmaStreamEvent::Delta(text) => {
+                ParsedGemmaStreamEvent::Delta(text, reasoning) => {
                     saw_stream_event = true;
                     raw_response_text.push_str(&text);
+                    raw_reasoning_text.push_str(&reasoning);
                     emit_streamed_response_update(
                         app_handle,
                         response_id,
                         &raw_response_text,
+                        &raw_reasoning_text,
                         &mut latest_response_text,
+                        &mut latest_reasoning_text,
                         &mut queued_response_bytes,
                         &mut started_audio_response,
                         &mut incomplete_stream_segment_started_at,
@@ -4073,14 +4082,17 @@ async fn stream_gemma_response_to_csm(
                 ParsedGemmaStreamEvent::Done => {
                     saw_stream_event = true;
                 }
-                ParsedGemmaStreamEvent::Delta(text) => {
+                ParsedGemmaStreamEvent::Delta(text, reasoning) => {
                     saw_stream_event = true;
                     raw_response_text.push_str(&text);
+                    raw_reasoning_text.push_str(&reasoning);
                     emit_streamed_response_update(
                         app_handle,
                         response_id,
                         &raw_response_text,
+                        &raw_reasoning_text,
                         &mut latest_response_text,
+                        &mut latest_reasoning_text,
                         &mut queued_response_bytes,
                         &mut started_audio_response,
                         &mut incomplete_stream_segment_started_at,
@@ -4094,14 +4106,18 @@ async fn stream_gemma_response_to_csm(
     if !saw_stream_event {
         let payload = serde_json::from_slice::<ChatCompletionResponse>(&raw_body)
             .map_err(|e| format!("Failed to parse Gemma response: {e}"))?;
-        raw_response_text = payload
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|choice| choice.message.content)
-            .map(extract_chat_content_text)
+        let choice = payload.choices.into_iter().next();
+        raw_response_text = choice
+            .as_ref()
+            .and_then(|choice| choice.message.content.as_ref())
+            .map(|v| extract_chat_content_text(v.clone()))
+            .unwrap_or_default();
+        raw_reasoning_text = choice
+            .as_ref()
+            .and_then(|choice| choice.message.reasoning_content.clone())
             .unwrap_or_default();
         latest_response_text = sanitize_for_voice_output(&raw_response_text);
+        latest_reasoning_text = raw_reasoning_text.clone();
     }
 
     let response_text = sanitize_for_voice_output(&raw_response_text);
@@ -4112,15 +4128,16 @@ async fn stream_gemma_response_to_csm(
         response_text.chars().count()
     );
 
-    if response_text.is_empty() {
+    if response_text.is_empty() && raw_reasoning_text.is_empty() {
         warn!("Gemma returned an empty response, skipping CSM synthesis");
     } else {
-        if response_text != latest_response_text {
+        if response_text != latest_response_text || raw_reasoning_text != latest_reasoning_text {
             emit_assistant_response(
                 app_handle,
                 AssistantResponseEvent {
                     request_id: response_id,
                     text: response_text.clone(),
+                    reasoning_text: raw_reasoning_text.clone(),
                     is_final: false,
                 },
             );
@@ -4130,6 +4147,7 @@ async fn stream_gemma_response_to_csm(
             AssistantResponseEvent {
                 request_id: response_id,
                 text: response_text.clone(),
+                reasoning_text: raw_reasoning_text.clone(),
                 is_final: true,
             },
         );
@@ -4164,27 +4182,32 @@ async fn emit_streamed_response_update(
     app_handle: &tauri::AppHandle,
     response_id: u64,
     raw_response_text: &str,
+    raw_reasoning_text: &str,
     latest_response_text: &mut String,
+    latest_reasoning_text: &mut String,
     queued_response_bytes: &mut usize,
     started_audio_response: &mut bool,
     incomplete_stream_segment_started_at: &mut Option<Instant>,
 ) -> Result<(), String> {
     let response_text = sanitize_for_voice_output(raw_response_text);
-    if response_text.is_empty() {
-        *incomplete_stream_segment_started_at = None;
-        return Ok(());
-    }
 
-    if response_text != *latest_response_text {
+    if response_text != *latest_response_text || raw_reasoning_text != *latest_reasoning_text {
         emit_assistant_response(
             app_handle,
             AssistantResponseEvent {
                 request_id: response_id,
                 text: response_text.clone(),
+                reasoning_text: raw_reasoning_text.to_string(),
                 is_final: false,
             },
         );
         *latest_response_text = response_text.clone();
+        *latest_reasoning_text = raw_reasoning_text.to_string();
+    }
+
+    if response_text.is_empty() {
+        *incomplete_stream_segment_started_at = None;
+        return Ok(());
     }
 
     queue_spoken_response_segments_for_csm(
@@ -4756,23 +4779,47 @@ fn build_latest_user_turn_message_with_image_urls(
 }
 
 enum ParsedGemmaStreamEvent {
-    Delta(String),
+    Delta(String, String),
     Done,
     Ignore,
 }
 
-fn extract_stream_chunk_text(chunk: ChatCompletionStreamChunk) -> String {
+fn extract_stream_chunk_content(chunk: ChatCompletionStreamChunk) -> (String, String) {
     chunk
         .choices
         .into_iter()
         .find_map(|choice| {
-            choice
+            let content = choice
                 .delta
-                .and_then(|delta| delta.content)
-                .or_else(|| choice.message.and_then(|message| message.content))
-                .map(extract_chat_content_text)
-                .filter(|text| !text.is_empty())
-                .or_else(|| choice.finish_reason.map(|_| String::new()))
+                .as_ref()
+                .and_then(|delta| delta.content.as_ref())
+                .or_else(|| {
+                    choice
+                        .message
+                        .as_ref()
+                        .and_then(|message| message.content.as_ref())
+                })
+                .map(|v| extract_chat_content_text(v.clone()))
+                .unwrap_or_default();
+
+            let reasoning = choice
+                .delta
+                .as_ref()
+                .and_then(|delta| delta.reasoning_content.as_ref())
+                .or_else(|| {
+                    choice
+                        .message
+                        .as_ref()
+                        .and_then(|message| message.reasoning_content.as_ref())
+                })
+                .cloned()
+                .unwrap_or_default();
+
+            if content.is_empty() && reasoning.is_empty() {
+                choice.finish_reason.as_ref().map(|_| (String::new(), String::new()))
+            } else {
+                Some((content, reasoning))
+            }
         })
         .unwrap_or_default()
 }
@@ -4802,12 +4849,12 @@ fn parse_gemma_stream_event(event_block: &str) -> Result<ParsedGemmaStreamEvent,
 
     let chunk = serde_json::from_str::<ChatCompletionStreamChunk>(&data)
         .map_err(|err| format!("Failed to parse streamed Gemma chunk: {err}"))?;
-    let text = extract_stream_chunk_text(chunk);
-    if text.is_empty() {
+    let (text, reasoning) = extract_stream_chunk_content(chunk);
+    if text.is_empty() && reasoning.is_empty() {
         return Ok(ParsedGemmaStreamEvent::Ignore);
     }
 
-    Ok(ParsedGemmaStreamEvent::Delta(text))
+    Ok(ParsedGemmaStreamEvent::Delta(text, reasoning))
 }
 
 fn drain_next_sse_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {

@@ -271,6 +271,9 @@
     );
     let callStagePhase = $state<CallStagePhase>("idle");
     let callStageMessage = $state("");
+    let reasoningText = $state("");
+    let showReasoningPopup = $state(false);
+    let lastReasoningRequestId = $state<number | null>(null);
     let processingAudioToAudioLatencyMs = $state<number | null>(null);
     let processingAudioToLlmLatencyMs = $state<number | null>(null);
     let processingAudioLatencyMs = $state<number | null>(null);
@@ -675,10 +678,15 @@
     });
 
     function setCallStage(phase: CallStagePhase, message: string) {
-        if (phase === "speaking") {
-            // Avoid showing stale user subtitles while the assistant is talking.
-            liveTranscriptSubtitle = "";
+        if (callStagePhase === phase && callStageMessage === message) {
+            return;
         }
+
+        if (phase === "thinking") {
+            reasoningText = "";
+            showReasoningPopup = false;
+        }
+
         callStagePhase = phase;
         callStageMessage = message;
     }
@@ -4502,6 +4510,13 @@
                                 return;
                             }
 
+                            if (lastReasoningRequestId !== payload.request_id) {
+                                lastReasoningRequestId = payload.request_id;
+                                reasoningText = payload.reasoning_text;
+                            } else if (payload.reasoning_text.length > reasoningText.length) {
+                                reasoningText = payload.reasoning_text;
+                            }
+
                             upsertAssistantConversationLogEntry(
                                 payload.request_id,
                                 payload.text,
@@ -5049,9 +5064,44 @@
 
     <main class:idle-layout={!calling}>
         {#if calling && callStageMessage}
-            <div class="call-stage-banner" data-phase={callStagePhase}>
-                <span class="call-stage-dot"></span>
-                <span>{callStageMessage}</span>
+            <div class="call-stage-banner-wrapper">
+                <div 
+                    class="call-stage-banner" 
+                    class:interactive={callStagePhase === "thinking" && reasoningText}
+                    data-phase={callStagePhase}
+                    onclick={() => {
+                        if (callStagePhase === "thinking" && reasoningText) {
+                            showReasoningPopup = !showReasoningPopup;
+                        }
+                    }}
+                >
+                    <span class="call-stage-dot"></span>
+                    <span>{callStageMessage}</span>
+                    {#if callStagePhase === "thinking" && reasoningText}
+                        <div class="tooltip-shell">
+                            <div class="thinking-spinner-shell">
+                                <svg class="spinner" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                            </div>
+                            <div class="tooltip-bubble control-tooltip">
+                                Click to show thinking process
+                            </div>
+                        </div>
+                    {/if}
+                </div>
+
+                {#if showReasoningPopup && callStagePhase === "thinking" && reasoningText}
+                    <div class="reasoning-popup" transition:fade={{ duration: 150 }}>
+                        <div class="reasoning-popup-header">
+                            <span class="reasoning-popup-title">Thinking Process</span>
+                            <button class="reasoning-popup-close" onclick={() => showReasoningPopup = false}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                            </button>
+                        </div>
+                        <div class="reasoning-popup-content">
+                            {reasoningText}
+                        </div>
+                    </div>
+                {/if}
             </div>
         {/if}
         <div class="avatar-shell" style="--theme-rgb: {themeRgb}">

@@ -84,6 +84,7 @@ pub(crate) struct TranscriptPartialEvent {
 pub(crate) struct AssistantResponseEvent {
     pub(crate) request_id: u64,
     pub(crate) text: String,
+    pub(crate) reasoning_text: String,
     pub(crate) is_final: bool,
 }
 

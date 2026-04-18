@@ -64,6 +64,7 @@ export type TranscriptPartialEvent = {
 export type AssistantResponseEvent = {
     request_id: number;
     text: string;
+    reasoning_text: string;
     is_final: boolean;
 };
 
