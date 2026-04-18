@@ -57,6 +57,10 @@ export type TranscriptEvent = {
     imageDataUrls: string[];
 };
 
+export type TranscriptPartialEvent = {
+    text: string;
+};
+
 export type AssistantResponseEvent = {
     request_id: number;
     text: string;

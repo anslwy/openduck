@@ -76,6 +76,11 @@ pub(crate) struct TranscriptEvent {
 }
 
 #[derive(Clone, Serialize)]
+pub(crate) struct TranscriptPartialEvent {
+    pub(crate) text: String,
+}
+
+#[derive(Clone, Serialize)]
 pub(crate) struct AssistantResponseEvent {
     pub(crate) request_id: u64,
     pub(crate) text: String,
@@ -205,6 +210,12 @@ pub(crate) fn emit_call_stage(app_handle: &AppHandle, phase: &str, message: &str
 pub(crate) fn emit_transcript_event(app_handle: &AppHandle, payload: TranscriptEvent) {
     if let Err(err) = app_handle.emit(TRANSCRIPT_EVENT, payload) {
         error!("Failed to emit transcript event: {}", err);
+    }
+}
+
+pub(crate) fn emit_transcript_partial_event(app_handle: &AppHandle, payload: TranscriptPartialEvent) {
+    if let Err(err) = app_handle.emit(TRANSCRIPT_PARTIAL_EVENT, payload) {
+        error!("Failed to emit transcript partial event: {}", err);
     }
 }
 

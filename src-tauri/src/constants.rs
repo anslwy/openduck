@@ -73,6 +73,7 @@ pub(crate) const CSM_STATUS_EVENT: &str = "csm-status";
 pub(crate) const CALL_STAGE_EVENT: &str = "call-stage";
 pub(crate) const PROCESSING_AUDIO_LATENCY_EVENT: &str = "processing-audio-latency";
 pub(crate) const TRANSCRIPT_EVENT: &str = "transcript-ready";
+pub(crate) const TRANSCRIPT_PARTIAL_EVENT: &str = "transcript-partial";
 pub(crate) const ASSISTANT_RESPONSE_EVENT: &str = "assistant-response";
 pub(crate) const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";
 pub(crate) const RUNTIME_SETUP_EVENT: &str = "runtime-setup-status";

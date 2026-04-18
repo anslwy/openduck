@@ -97,6 +97,7 @@
         SttModelVariant,
         SttStatusEvent,
         TranscriptEvent,
+        TranscriptPartialEvent,
         TrayEndCallEvent,
         TrayPongPlaybackEvent,
         TrayToggleMuteEvent,
@@ -4403,6 +4404,52 @@
                             processingAudioLatencyMs = payload.latency_ms;
                         },
                     ),
+                    listen<TranscriptPartialEvent>(
+                        "transcript-partial",
+                        ({ payload }) => {
+                            if (!calling) {
+                                return;
+                            }
+
+                            const nextText = payload.text.trim();
+                            if (!nextText) {
+                                return;
+                            }
+
+                            if (pendingConversationUserLogEntryId == null) {
+                                pendingConversationUserLogEntryId =
+                                    appendConversationLogEntry(
+                                        "user",
+                                        nextText,
+                                        [],
+                                    );
+                                return;
+                            }
+
+                            const entryId = pendingConversationUserLogEntryId;
+                            if (
+                                !conversationLogEntries.some(
+                                    (entry) => entry.id === entryId,
+                                )
+                            ) {
+                                pendingConversationUserLogEntryId =
+                                    appendConversationLogEntry(
+                                        "user",
+                                        nextText,
+                                        [],
+                                    );
+                                return;
+                            }
+
+                            conversationLogEntries = conversationLogEntries.map(
+                                (entry) =>
+                                    entry.id === entryId
+                                        ? { ...entry, text: nextText }
+                                        : entry,
+                            );
+                            scrollConversationLogToBottom();
+                        },
+                    ),
                     listen<TranscriptEvent>(
                         "transcript-ready",
                         ({ payload }) => {
@@ -4422,12 +4469,47 @@
                                 }
                             }
 
-                            pendingConversationUserLogEntryId =
-                                appendConversationLogEntry(
-                                    "user",
-                                    payload.text,
-                                    imageUrls,
-                                );
+                            const nextText = payload.text.trim();
+                            if (!nextText && imageUrls.length === 0) {
+                                return;
+                            }
+
+                            if (pendingConversationUserLogEntryId == null) {
+                                pendingConversationUserLogEntryId =
+                                    appendConversationLogEntry(
+                                        "user",
+                                        nextText,
+                                        imageUrls,
+                                    );
+                                return;
+                            }
+
+                            const entryId = pendingConversationUserLogEntryId;
+                            if (
+                                !conversationLogEntries.some(
+                                    (entry) => entry.id === entryId,
+                                )
+                            ) {
+                                pendingConversationUserLogEntryId =
+                                    appendConversationLogEntry(
+                                        "user",
+                                        nextText,
+                                        imageUrls,
+                                    );
+                                return;
+                            }
+
+                            conversationLogEntries = conversationLogEntries.map(
+                                (entry) =>
+                                    entry.id === entryId
+                                        ? {
+                                              ...entry,
+                                              text: nextText,
+                                              imageUrls: imageUrls,
+                                          }
+                                        : entry,
+                            );
+                            scrollConversationLogToBottom();
                         },
                     ),
                     listen<ModelDownloadProgressEvent>(
