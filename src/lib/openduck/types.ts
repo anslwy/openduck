@@ -132,7 +132,16 @@ export type ModelMemoryUsageSnapshot = {
     models: ModelMemoryUsageEntry[];
 };
 
-export type GemmaVariant = "e4b" | "e2b" | "ollama" | "lmstudio";
+export type GemmaVariant =
+    | "e4b"
+    | "e2b"
+    | "ollama"
+    | "lmstudio"
+    | "openai_compatible";
+export type ExternalGemmaVariant = Extract<
+    GemmaVariant,
+    "ollama" | "lmstudio" | "openai_compatible"
+>;
 export type CsmModelVariant =
     | "expressiva_1b"
     | "kokoro_82m"
@@ -211,6 +220,7 @@ export type StoredModelPreferences = {
     sttModel: SttModelVariant;
     ollamaModel?: string | null;
     lmstudioModel?: string | null;
+    openaiCompatibleModel?: string | null;
 };
 
 export type ModelSelection = Omit<StoredModelPreferences, "version">;

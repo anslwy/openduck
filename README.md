@@ -147,6 +147,7 @@ Use an external LLM server for the LLM.
 
 - [Ollama](https://ollama.com): execute for example `ollama run gemma4:31b-cloud` in your Terminal. The model should then appear in the LLM dropdown in OpenDuck. You can also point OpenDuck at an Ollama instance running on another machine by changing the base URL.
 - [LM Studio](https://lmstudio.ai): load your model in LM Studio, start its local server, then select `LM Studio` from the LLM dropdown in OpenDuck. By default OpenDuck expects LM Studio at `http://127.0.0.1:1234`, but you can change the base URL from the config button on the home screen.
+- OpenAI-compatible API: point OpenDuck at any endpoint that exposes `/v1/models` and `/v1/chat/completions`, then pick a model from the dropdown. Use a vision-capable model if you want screen captures and pasted images to be sent to the LLM. External provider URLs and API keys are stored in `~/.openduck/config.json`.
 
 > Failed to install some packages / Cannot start the call / There is an error. What to do?
 
@@ -155,3 +156,7 @@ Click "Check for Updates..." (the option under "About OpenDuck") to see if you a
 > How do I find my conversation logs?
 
 They are all located at `~/.openduck/sessions/`
+
+> Where are my external provider settings stored?
+
+Ollama, LM Studio, and OpenAI-compatible API base URLs plus API keys are stored in `~/.openduck/config.json`

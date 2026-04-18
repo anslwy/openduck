@@ -3,6 +3,7 @@ import {
     DEFAULT_CSM_MODEL,
     DEFAULT_GEMMA_VARIANT,
     DEFAULT_LMSTUDIO_MODEL,
+    DEFAULT_OPENAI_COMPATIBLE_MODEL,
     DEFAULT_STT_MODEL,
     DEFAULT_OLLAMA_MODEL,
     MODEL_PREFERENCES_STORAGE_KEY,
@@ -25,6 +26,7 @@ export function createDefaultModelPreferences(): StoredModelPreferences {
         sttModel: DEFAULT_STT_MODEL,
         ollamaModel: DEFAULT_OLLAMA_MODEL,
         lmstudioModel: DEFAULT_LMSTUDIO_MODEL,
+        openaiCompatibleModel: DEFAULT_OPENAI_COMPATIBLE_MODEL,
     };
 }
 
@@ -33,7 +35,8 @@ export function isGemmaVariant(value: unknown): value is GemmaVariant {
         value === "e4b" ||
         value === "e2b" ||
         value === "ollama" ||
-        value === "lmstudio"
+        value === "lmstudio" ||
+        value === "openai_compatible"
     );
 }
 
@@ -75,6 +78,10 @@ export function selectionsMatch(
 
     if (left.gemmaVariant === "lmstudio") {
         return left.lmstudioModel === right.lmstudioModel;
+    }
+
+    if (left.gemmaVariant === "openai_compatible") {
+        return left.openaiCompatibleModel === right.openaiCompatibleModel;
     }
 
     return true;
@@ -126,6 +133,7 @@ export function loadModelPreferencesFromStorage(): StoredModelPreferences {
             sttModel?: unknown;
             ollamaModel?: unknown;
             lmstudioModel?: unknown;
+            openaiCompatibleModel?: unknown;
         };
 
         if (parsed.version !== 1) {
@@ -151,6 +159,10 @@ export function loadModelPreferencesFromStorage(): StoredModelPreferences {
                 typeof parsed.lmstudioModel === "string"
                     ? parsed.lmstudioModel
                     : DEFAULT_LMSTUDIO_MODEL,
+            openaiCompatibleModel:
+                typeof parsed.openaiCompatibleModel === "string"
+                    ? parsed.openaiCompatibleModel
+                    : DEFAULT_OPENAI_COMPATIBLE_MODEL,
         };
     } catch (err) {
         console.error("Failed to restore model preferences:", err);

@@ -31,6 +31,7 @@ export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
 export const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
 export const DEFAULT_OLLAMA_MODEL = "gemma2:2b";
 export const DEFAULT_LMSTUDIO_MODEL = "";
+export const DEFAULT_OPENAI_COMPATIBLE_MODEL = "";
 export const DEFAULT_END_OF_UTTERANCE_SILENCE_MS = 2000;
 export const MIN_END_OF_UTTERANCE_SILENCE_MS = 500;
 export const MAX_END_OF_UTTERANCE_SILENCE_MS = 5000;
@@ -65,6 +66,7 @@ export const MODEL_PRESETS: Record<
       sttModel: "gemma",
       ollamaModel: DEFAULT_OLLAMA_MODEL,
       lmstudioModel: DEFAULT_LMSTUDIO_MODEL,
+      openaiCompatibleModel: DEFAULT_OPENAI_COMPATIBLE_MODEL,
     },
   },
   normal: {
@@ -76,6 +78,7 @@ export const MODEL_PRESETS: Record<
       sttModel: "distil_whisper_large_v3",
       ollamaModel: DEFAULT_OLLAMA_MODEL,
       lmstudioModel: DEFAULT_LMSTUDIO_MODEL,
+      openaiCompatibleModel: DEFAULT_OPENAI_COMPATIBLE_MODEL,
     },
   },
   realistic: {
@@ -87,6 +90,7 @@ export const MODEL_PRESETS: Record<
       sttModel: "whisper_large_v3_turbo",
       ollamaModel: DEFAULT_OLLAMA_MODEL,
       lmstudioModel: DEFAULT_LMSTUDIO_MODEL,
+      openaiCompatibleModel: DEFAULT_OPENAI_COMPATIBLE_MODEL,
     },
   },
 };

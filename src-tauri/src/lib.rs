@@ -271,6 +271,32 @@ struct OpenAiModel {
     id: String,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct PersistedExternalLlmProviderConfig {
+    #[serde(default)]
+    base_url: String,
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PersistedExternalLlmProvidersConfig {
+    #[serde(default = "default_ollama_provider_config")]
+    ollama: PersistedExternalLlmProviderConfig,
+    #[serde(default = "default_lmstudio_provider_config")]
+    lmstudio: PersistedExternalLlmProviderConfig,
+    #[serde(default = "default_openai_compatible_provider_config")]
+    openai_compatible: PersistedExternalLlmProviderConfig,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PersistedAppConfig {
+    #[serde(default = "default_persisted_app_config_version")]
+    version: u32,
+    #[serde(default)]
+    external_llm_providers: PersistedExternalLlmProvidersConfig,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TrayIconVariant {
     Default,
@@ -369,6 +395,9 @@ struct AppState {
     selected_lmstudio_model: Mutex<String>,
     lmstudio_base_url: Mutex<String>,
     lmstudio_api_key: Mutex<Option<String>>,
+    selected_openai_compatible_model: Mutex<String>,
+    openai_compatible_base_url: Mutex<String>,
+    openai_compatible_api_key: Mutex<Option<String>>,
     global_shortcut_look_at_screen_region: Mutex<String>,
     global_shortcut_look_at_screen_region_hydrated: Mutex<bool>,
     global_shortcut_look_at_screen_region_modified_before_hydration: Mutex<bool>,
@@ -530,6 +559,31 @@ struct AppUpdateInfo {
     target: String,
 }
 
+impl Default for PersistedExternalLlmProviderConfig {
+    fn default() -> Self {
+        default_openai_compatible_provider_config()
+    }
+}
+
+impl Default for PersistedExternalLlmProvidersConfig {
+    fn default() -> Self {
+        Self {
+            ollama: default_ollama_provider_config(),
+            lmstudio: default_lmstudio_provider_config(),
+            openai_compatible: default_openai_compatible_provider_config(),
+        }
+    }
+}
+
+impl Default for PersistedAppConfig {
+    fn default() -> Self {
+        Self {
+            version: default_persisted_app_config_version(),
+            external_llm_providers: PersistedExternalLlmProvidersConfig::default(),
+        }
+    }
+}
+
 struct PendingAppUpdate(Mutex<Option<Update>>);
 
 const BUILD_VERSION: &str = env!("OPEN_DUCK_BUILD_VERSION");
@@ -542,6 +596,44 @@ const BUILD_GIT_DIRTY: &str = env!("OPEN_DUCK_GIT_DIRTY");
 const BUILD_GIT_DIRTY_FILES: Option<&str> = option_env!("OPEN_DUCK_GIT_DIRTY_FILES");
 const BUILD_UPDATER_PUBLIC_KEY: &str = env!("OPEN_DUCK_UPDATER_PUBLIC_KEY");
 const BUILD_UPDATER_ENDPOINT: &str = env!("OPEN_DUCK_UPDATER_ENDPOINT");
+const OPENDUCK_CONFIG_FILE_NAME: &str = "config.json";
+
+fn default_persisted_app_config_version() -> u32 {
+    1
+}
+
+fn default_ollama_base_url() -> String {
+    "http://127.0.0.1:11434".to_string()
+}
+
+fn default_lmstudio_base_url() -> String {
+    "http://127.0.0.1:1234".to_string()
+}
+
+fn default_openai_compatible_base_url() -> String {
+    String::new()
+}
+
+fn default_ollama_provider_config() -> PersistedExternalLlmProviderConfig {
+    PersistedExternalLlmProviderConfig {
+        base_url: default_ollama_base_url(),
+        api_key: None,
+    }
+}
+
+fn default_lmstudio_provider_config() -> PersistedExternalLlmProviderConfig {
+    PersistedExternalLlmProviderConfig {
+        base_url: default_lmstudio_base_url(),
+        api_key: None,
+    }
+}
+
+fn default_openai_compatible_provider_config() -> PersistedExternalLlmProviderConfig {
+    PersistedExternalLlmProviderConfig {
+        base_url: default_openai_compatible_base_url(),
+        api_key: None,
+    }
+}
 
 fn compiled_build_value(raw_value: &'static str) -> Option<String> {
     let trimmed = raw_value.trim();
@@ -1384,15 +1476,26 @@ fn normalize_optional_api_key(key: Option<String>) -> Option<String> {
         if value.trim().is_empty() {
             None
         } else {
-            Some(value)
+            Some(value.trim().to_string())
         }
     })
+}
+
+fn normalize_base_url(url: String) -> String {
+    url.trim().to_string()
 }
 
 fn selected_external_llm_model(state: &AppState, variant: GemmaVariant) -> Option<String> {
     match variant {
         GemmaVariant::Ollama => Some(state.selected_ollama_model.lock().unwrap().clone()),
         GemmaVariant::LmStudio => Some(state.selected_lmstudio_model.lock().unwrap().clone()),
+        GemmaVariant::OpenAiCompatible => Some(
+            state
+                .selected_openai_compatible_model
+                .lock()
+                .unwrap()
+                .clone(),
+        ),
         GemmaVariant::E4b | GemmaVariant::E2b => None,
     }
 }
@@ -1401,6 +1504,9 @@ fn external_llm_base_url(state: &AppState, variant: GemmaVariant) -> Option<Stri
     match variant {
         GemmaVariant::Ollama => Some(state.ollama_base_url.lock().unwrap().clone()),
         GemmaVariant::LmStudio => Some(state.lmstudio_base_url.lock().unwrap().clone()),
+        GemmaVariant::OpenAiCompatible => {
+            Some(state.openai_compatible_base_url.lock().unwrap().clone())
+        }
         GemmaVariant::E4b | GemmaVariant::E2b => None,
     }
 }
@@ -1409,6 +1515,7 @@ fn external_llm_api_key(state: &AppState, variant: GemmaVariant) -> Option<Strin
     match variant {
         GemmaVariant::Ollama => state.ollama_api_key.lock().unwrap().clone(),
         GemmaVariant::LmStudio => state.lmstudio_api_key.lock().unwrap().clone(),
+        GemmaVariant::OpenAiCompatible => state.openai_compatible_api_key.lock().unwrap().clone(),
         GemmaVariant::E4b | GemmaVariant::E2b => None,
     }
 }
@@ -1416,6 +1523,9 @@ fn external_llm_api_key(state: &AppState, variant: GemmaVariant) -> Option<Strin
 async fn ollama_service_is_running(state: &AppState) -> bool {
     let client = reqwest::Client::new();
     let base_url = state.ollama_base_url.lock().unwrap().clone();
+    if base_url.trim().is_empty() {
+        return false;
+    }
     let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
     let mut request = client.get(url);
 
@@ -1430,6 +1540,10 @@ async fn ollama_service_is_running(state: &AppState) -> bool {
 }
 
 async fn openai_compatible_service_is_running(base_url: String, api_key: Option<String>) -> bool {
+    if base_url.trim().is_empty() {
+        return false;
+    }
+
     let client = reqwest::Client::new();
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
     let mut request = client.get(url);
@@ -1450,10 +1564,17 @@ async fn lmstudio_service_is_running(state: &AppState) -> bool {
     openai_compatible_service_is_running(base_url, api_key).await
 }
 
+async fn openai_compatible_api_service_is_running(state: &AppState) -> bool {
+    let base_url = state.openai_compatible_base_url.lock().unwrap().clone();
+    let api_key = state.openai_compatible_api_key.lock().unwrap().clone();
+    openai_compatible_service_is_running(base_url, api_key).await
+}
+
 async fn external_llm_service_is_running(state: &AppState, variant: GemmaVariant) -> bool {
     match variant {
         GemmaVariant::Ollama => ollama_service_is_running(state).await,
         GemmaVariant::LmStudio => lmstudio_service_is_running(state).await,
+        GemmaVariant::OpenAiCompatible => openai_compatible_api_service_is_running(state).await,
         GemmaVariant::E4b | GemmaVariant::E2b => false,
     }
 }
@@ -1468,11 +1589,20 @@ async fn check_lmstudio_status(state: State<'_, AppState>) -> Result<bool, Strin
     Ok(lmstudio_service_is_running(state.inner()).await)
 }
 
-async fn get_openai_compatible_models(
+#[tauri::command]
+async fn check_openai_compatible_status(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(openai_compatible_api_service_is_running(state.inner()).await)
+}
+
+async fn fetch_openai_compatible_models(
     base_url: String,
     api_key: Option<String>,
     provider_label: &str,
 ) -> Result<Vec<String>, String> {
+    if base_url.trim().is_empty() {
+        return Err(format!("{provider_label} base URL is not configured."));
+    }
+
     let client = reqwest::Client::new();
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
     let mut request = client.get(url);
@@ -1533,7 +1663,14 @@ async fn get_ollama_models(state: State<'_, AppState>) -> Result<Vec<String>, St
 async fn get_lmstudio_models(state: State<'_, AppState>) -> Result<Vec<String>, String> {
     let base_url = state.lmstudio_base_url.lock().unwrap().clone();
     let api_key = state.lmstudio_api_key.lock().unwrap().clone();
-    get_openai_compatible_models(base_url, api_key, "LM Studio").await
+    fetch_openai_compatible_models(base_url, api_key, "LM Studio").await
+}
+
+#[tauri::command]
+async fn get_openai_compatible_models(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let base_url = state.openai_compatible_base_url.lock().unwrap().clone();
+    let api_key = state.openai_compatible_api_key.lock().unwrap().clone();
+    fetch_openai_compatible_models(base_url, api_key, "OpenAI-compatible API").await
 }
 
 #[tauri::command]
@@ -1547,6 +1684,15 @@ fn get_lmstudio_model(state: State<'_, AppState>) -> String {
 }
 
 #[tauri::command]
+fn get_openai_compatible_model(state: State<'_, AppState>) -> String {
+    state
+        .selected_openai_compatible_model
+        .lock()
+        .unwrap()
+        .clone()
+}
+
+#[tauri::command]
 fn set_ollama_model(state: State<'_, AppState>, model: String) {
     let mut model_guard = state.selected_ollama_model.lock().unwrap();
     *model_guard = model;
@@ -1555,6 +1701,12 @@ fn set_ollama_model(state: State<'_, AppState>, model: String) {
 #[tauri::command]
 fn set_lmstudio_model(state: State<'_, AppState>, model: String) {
     let mut model_guard = state.selected_lmstudio_model.lock().unwrap();
+    *model_guard = model;
+}
+
+#[tauri::command]
+fn set_openai_compatible_model(state: State<'_, AppState>, model: String) {
+    let mut model_guard = state.selected_openai_compatible_model.lock().unwrap();
     *model_guard = model;
 }
 
@@ -1573,19 +1725,61 @@ fn get_lmstudio_config(state: State<'_, AppState>) -> (String, Option<String>) {
 }
 
 #[tauri::command]
-fn set_ollama_config(state: State<'_, AppState>, url: String, key: Option<String>) {
-    let mut url_guard = state.ollama_base_url.lock().unwrap();
-    *url_guard = url;
-    let mut key_guard = state.ollama_api_key.lock().unwrap();
-    *key_guard = normalize_optional_api_key(key);
+fn get_openai_compatible_config(state: State<'_, AppState>) -> (String, Option<String>) {
+    let url = state.openai_compatible_base_url.lock().unwrap().clone();
+    let key = state.openai_compatible_api_key.lock().unwrap().clone();
+    (url, key)
 }
 
 #[tauri::command]
-fn set_lmstudio_config(state: State<'_, AppState>, url: String, key: Option<String>) {
-    let mut url_guard = state.lmstudio_base_url.lock().unwrap();
-    *url_guard = url;
-    let mut key_guard = state.lmstudio_api_key.lock().unwrap();
-    *key_guard = normalize_optional_api_key(key);
+fn set_ollama_config(
+    state: State<'_, AppState>,
+    url: String,
+    key: Option<String>,
+) -> Result<(), String> {
+    {
+        let mut url_guard = state.ollama_base_url.lock().unwrap();
+        *url_guard = normalize_base_url(url);
+    }
+    {
+        let mut key_guard = state.ollama_api_key.lock().unwrap();
+        *key_guard = normalize_optional_api_key(key);
+    }
+    persist_external_llm_provider_configs(state.inner())
+}
+
+#[tauri::command]
+fn set_lmstudio_config(
+    state: State<'_, AppState>,
+    url: String,
+    key: Option<String>,
+) -> Result<(), String> {
+    {
+        let mut url_guard = state.lmstudio_base_url.lock().unwrap();
+        *url_guard = normalize_base_url(url);
+    }
+    {
+        let mut key_guard = state.lmstudio_api_key.lock().unwrap();
+        *key_guard = normalize_optional_api_key(key);
+    }
+    persist_external_llm_provider_configs(state.inner())
+}
+
+#[tauri::command]
+fn set_openai_compatible_config(
+    state: State<'_, AppState>,
+    url: String,
+    key: Option<String>,
+) -> Result<(), String> {
+    {
+        let mut url_guard = state.openai_compatible_base_url.lock().unwrap();
+        *url_guard = normalize_base_url(url);
+    }
+    {
+        let mut key_guard = state.openai_compatible_api_key.lock().unwrap();
+        *key_guard = normalize_optional_api_key(key);
+    }
+    persist_external_llm_provider_configs(state.inner())
 }
 
 #[tauri::command]
@@ -2093,6 +2287,16 @@ async fn start_server(
                 selected_variant.label()
             ));
         }
+
+        let selected_model =
+            selected_external_llm_model(state.inner(), selected_variant).unwrap_or_default();
+        if selected_model.trim().is_empty() {
+            return Err(format!(
+                "Select a {} model before connecting.",
+                selected_variant.label()
+            ));
+        }
+
         let mut port_guard = state.server_port.lock().unwrap();
         *port_guard = selected_variant.external_sentinel_port();
         let mut loaded_variant_guard = state.loaded_gemma_variant.lock().unwrap();
@@ -8699,6 +8903,70 @@ fn resolve_openduck_root() -> PathBuf {
     PathBuf::from(home).join(".openduck")
 }
 
+fn resolve_openduck_config_path() -> PathBuf {
+    resolve_openduck_root().join(OPENDUCK_CONFIG_FILE_NAME)
+}
+
+fn load_persisted_app_config() -> PersistedAppConfig {
+    let config_path = resolve_openduck_config_path();
+    let Ok(raw) = std::fs::read_to_string(&config_path) else {
+        return PersistedAppConfig::default();
+    };
+
+    match serde_json::from_str::<PersistedAppConfig>(&raw) {
+        Ok(config) => config,
+        Err(err) => {
+            warn!(
+                "Failed to parse OpenDuck config at {}: {}",
+                config_path.display(),
+                err
+            );
+            PersistedAppConfig::default()
+        }
+    }
+}
+
+fn save_persisted_app_config(config: &PersistedAppConfig) -> Result<(), String> {
+    let root = resolve_openduck_root();
+    std::fs::create_dir_all(&root)
+        .map_err(|err| format!("Failed to create OpenDuck config directory: {err}"))?;
+
+    let config_path = root.join(OPENDUCK_CONFIG_FILE_NAME);
+    let payload = serde_json::to_string_pretty(config)
+        .map_err(|err| format!("Failed to serialize OpenDuck config: {err}"))?;
+
+    std::fs::write(&config_path, payload).map_err(|err| {
+        format!(
+            "Failed to write OpenDuck config to {}: {err}",
+            config_path.display()
+        )
+    })
+}
+
+fn snapshot_external_llm_provider_configs(state: &AppState) -> PersistedExternalLlmProvidersConfig {
+    PersistedExternalLlmProvidersConfig {
+        ollama: PersistedExternalLlmProviderConfig {
+            base_url: state.ollama_base_url.lock().unwrap().clone(),
+            api_key: state.ollama_api_key.lock().unwrap().clone(),
+        },
+        lmstudio: PersistedExternalLlmProviderConfig {
+            base_url: state.lmstudio_base_url.lock().unwrap().clone(),
+            api_key: state.lmstudio_api_key.lock().unwrap().clone(),
+        },
+        openai_compatible: PersistedExternalLlmProviderConfig {
+            base_url: state.openai_compatible_base_url.lock().unwrap().clone(),
+            api_key: state.openai_compatible_api_key.lock().unwrap().clone(),
+        },
+    }
+}
+
+fn persist_external_llm_provider_configs(state: &AppState) -> Result<(), String> {
+    save_persisted_app_config(&PersistedAppConfig {
+        version: default_persisted_app_config_version(),
+        external_llm_providers: snapshot_external_llm_provider_configs(state),
+    })
+}
+
 fn resolve_sessions_dir(_app_handle: &AppHandle) -> Result<PathBuf, String> {
     let mut path = resolve_openduck_root();
     path.push(SESSIONS_DIR_NAME);
@@ -9787,6 +10055,7 @@ pub fn run() {
             )
         })
         .unwrap_or(true);
+    let persisted_config = load_persisted_app_config();
 
     tauri::Builder::default()
         .menu(build_app_menu)
@@ -9927,11 +10196,50 @@ pub fn run() {
             llm_image_history_limit: Mutex::new(DEFAULT_LLM_IMAGE_HISTORY_LIMIT),
             conversation_log_has_visible_images: Mutex::new(false),
             selected_ollama_model: Mutex::new("gemma2:2b".to_string()),
-            ollama_base_url: Mutex::new("http://127.0.0.1:11434".to_string()),
-            ollama_api_key: Mutex::new(None),
+            ollama_base_url: Mutex::new(
+                persisted_config
+                    .external_llm_providers
+                    .ollama
+                    .base_url
+                    .clone(),
+            ),
+            ollama_api_key: Mutex::new(
+                persisted_config
+                    .external_llm_providers
+                    .ollama
+                    .api_key
+                    .clone(),
+            ),
             selected_lmstudio_model: Mutex::new(String::new()),
-            lmstudio_base_url: Mutex::new("http://127.0.0.1:1234".to_string()),
-            lmstudio_api_key: Mutex::new(None),
+            lmstudio_base_url: Mutex::new(
+                persisted_config
+                    .external_llm_providers
+                    .lmstudio
+                    .base_url
+                    .clone(),
+            ),
+            lmstudio_api_key: Mutex::new(
+                persisted_config
+                    .external_llm_providers
+                    .lmstudio
+                    .api_key
+                    .clone(),
+            ),
+            selected_openai_compatible_model: Mutex::new(String::new()),
+            openai_compatible_base_url: Mutex::new(
+                persisted_config
+                    .external_llm_providers
+                    .openai_compatible
+                    .base_url
+                    .clone(),
+            ),
+            openai_compatible_api_key: Mutex::new(
+                persisted_config
+                    .external_llm_providers
+                    .openai_compatible
+                    .api_key
+                    .clone(),
+            ),
             global_shortcut_look_at_screen_region: Mutex::new("Command+Shift+L".to_string()),
             global_shortcut_look_at_screen_region_hydrated: Mutex::new(false),
             global_shortcut_look_at_screen_region_modified_before_hydration: Mutex::new(false),
@@ -9998,6 +10306,12 @@ pub fn run() {
             set_lmstudio_model,
             get_lmstudio_config,
             set_lmstudio_config,
+            check_openai_compatible_status,
+            get_openai_compatible_models,
+            get_openai_compatible_model,
+            set_openai_compatible_model,
+            get_openai_compatible_config,
+            set_openai_compatible_config,
             check_csm_status,
             check_stt_status,
             clear_model_cache,

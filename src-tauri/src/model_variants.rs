@@ -7,6 +7,7 @@ pub(crate) enum GemmaVariant {
     E2b,
     Ollama,
     LmStudio,
+    OpenAiCompatible,
 }
 
 impl GemmaVariant {
@@ -16,6 +17,9 @@ impl GemmaVariant {
             "e2b" => Ok(Self::E2b),
             "ollama" => Ok(Self::Ollama),
             "lmstudio" | "lm-studio" | "lm_studio" => Ok(Self::LmStudio),
+            "openai_compatible" | "openai-compatible" | "openaicompatible" => {
+                Ok(Self::OpenAiCompatible)
+            }
             other => Err(format!("Unsupported LLM variant: {other}")),
         }
     }
@@ -26,6 +30,7 @@ impl GemmaVariant {
             Self::E2b => "e2b",
             Self::Ollama => "ollama",
             Self::LmStudio => "lmstudio",
+            Self::OpenAiCompatible => "openai_compatible",
         }
     }
 
@@ -35,6 +40,7 @@ impl GemmaVariant {
             Self::E2b => "Gemma-4-E2B",
             Self::Ollama => "Ollama",
             Self::LmStudio => "LM Studio",
+            Self::OpenAiCompatible => "OpenAI-compatible API",
         }
     }
 
@@ -42,7 +48,7 @@ impl GemmaVariant {
         match self {
             Self::E4b => Some("mlx-community/gemma-4-E4B-it-8bit"),
             Self::E2b => Some("mlx-community/gemma-4-E2B-it-4bit"),
-            Self::Ollama | Self::LmStudio => None,
+            Self::Ollama | Self::LmStudio | Self::OpenAiCompatible => None,
         }
     }
 
@@ -50,18 +56,19 @@ impl GemmaVariant {
         match self {
             Self::E4b => Some("models--mlx-community--gemma-4-E4B-it-8bit"),
             Self::E2b => Some("models--mlx-community--gemma-4-E2B-it-4bit"),
-            Self::Ollama | Self::LmStudio => None,
+            Self::Ollama | Self::LmStudio | Self::OpenAiCompatible => None,
         }
     }
 
     pub(crate) fn is_external(self) -> bool {
-        matches!(self, Self::Ollama | Self::LmStudio)
+        matches!(self, Self::Ollama | Self::LmStudio | Self::OpenAiCompatible)
     }
 
     pub(crate) fn external_sentinel_port(self) -> Option<u16> {
         match self {
             Self::Ollama => Some(11434),
             Self::LmStudio => Some(1234),
+            Self::OpenAiCompatible => Some(1),
             Self::E4b | Self::E2b => None,
         }
     }

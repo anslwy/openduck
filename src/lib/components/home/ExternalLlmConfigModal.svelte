@@ -103,8 +103,8 @@
                 class="config-input"
             />
             <p class="field-help">
-                Only needed if your {providerName} service is behind an authenticated
-                proxy.
+                Required for providers like OpenAI. Optional for local servers or
+                unauthenticated proxies.
             </p>
         </div>
     </div>

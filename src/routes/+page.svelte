@@ -37,6 +37,7 @@
         DEFAULT_LLM_CONTEXT_TURN_LIMIT,
         DEFAULT_LLM_IMAGE_HISTORY_LIMIT,
         DEFAULT_LMSTUDIO_MODEL,
+        DEFAULT_OPENAI_COMPATIBLE_MODEL,
         DEFAULT_OLLAMA_MODEL,
         DEFAULT_STT_MODEL,
         DEFAULT_VOICE_SYSTEM_PROMPT,
@@ -92,6 +93,7 @@
         CsmErrorEvent,
         CsmModelVariant,
         CsmStatusEvent,
+        ExternalGemmaVariant,
         GemmaVariant,
         ModelDownloadProgressEvent,
         ModelMemoryUsageSnapshot,
@@ -156,10 +158,15 @@
     let isGemmaLoaded = $state(false);
     let isOllamaSupported = $state(false);
     let isLmStudioSupported = $state(false);
+    let isOpenAiCompatibleSupported = $state(false);
     let ollamaModels = $state<string[]>([]);
     let selectedOllamaModel = $state<string>("");
     let lmStudioModels = $state<string[]>([]);
     let selectedLmStudioModel = $state<string>(DEFAULT_LMSTUDIO_MODEL);
+    let openAiCompatibleModels = $state<string[]>([]);
+    let selectedOpenAiCompatibleModel = $state<string>(
+        DEFAULT_OPENAI_COMPATIBLE_MODEL,
+    );
     let isCsmDownloaded = $state(false);
     let isCsmLoaded = $state(false);
     let isSttDownloaded = $state(false);
@@ -258,6 +265,8 @@
     let ollamaApiKey = $state("");
     let lmstudioBaseUrl = $state("http://127.0.0.1:1234");
     let lmstudioApiKey = $state("");
+    let openAiCompatibleBaseUrl = $state("");
+    let openAiCompatibleApiKey = $state("");
     let showConversationPopup = $state(false);
     let showSessionsPopup = $state(false);
     let sessions = $state<SessionMetadata[]>([]);
@@ -389,12 +398,26 @@
         conversationLogViewport = element;
     }
 
-    function isExternalGemmaVariant(variant: GemmaVariant) {
-        return variant === "ollama" || variant === "lmstudio";
+    function isExternalGemmaVariant(
+        variant: GemmaVariant,
+    ): variant is ExternalGemmaVariant {
+        return (
+            variant === "ollama" ||
+            variant === "lmstudio" ||
+            variant === "openai_compatible"
+        );
     }
 
     function getExternalProviderLabel(variant: GemmaVariant) {
-        return variant === "lmstudio" ? "LM Studio" : "Ollama";
+        if (variant === "lmstudio") {
+            return "LM Studio";
+        }
+
+        if (variant === "openai_compatible") {
+            return "OpenAI-compatible API";
+        }
+
+        return "Ollama";
     }
 
     function getExternalProviderGuideText(variant: GemmaVariant) {
@@ -402,13 +425,61 @@
             return "Start LM Studio's local server and load a model so it appears in the dropdown. The default URL is http://127.0.0.1:1234.";
         }
 
+        if (variant === "openai_compatible") {
+            return "Point this at a service that exposes /v1/models and /v1/chat/completions. Vision requests are sent with image_url content, so use a model and endpoint that support images.";
+        }
+
         return 'If your model does not show, run "ollama run {your_model}" in Terminal once so it appears here.';
     }
 
     function getExternalProviderUrlPlaceholder(variant: GemmaVariant) {
-        return variant === "lmstudio"
-            ? "http://127.0.0.1:1234"
-            : "http://127.0.0.1:11434";
+        if (variant === "lmstudio") {
+            return "http://127.0.0.1:1234";
+        }
+
+        if (variant === "openai_compatible") {
+            return "https://api.openai.com";
+        }
+
+        return "http://127.0.0.1:11434";
+    }
+
+    function getExternalProviderBaseUrl(variant: GemmaVariant) {
+        if (variant === "lmstudio") {
+            return lmstudioBaseUrl;
+        }
+
+        if (variant === "openai_compatible") {
+            return openAiCompatibleBaseUrl;
+        }
+
+        return ollamaBaseUrl;
+    }
+
+    function getExternalProviderApiKey(variant: GemmaVariant) {
+        if (variant === "lmstudio") {
+            return lmstudioApiKey;
+        }
+
+        if (variant === "openai_compatible") {
+            return openAiCompatibleApiKey;
+        }
+
+        return ollamaApiKey;
+    }
+
+    async function syncExternalModelsForVariant(variant: ExternalGemmaVariant) {
+        if (variant === "ollama") {
+            await syncOllamaModels();
+            return;
+        }
+
+        if (variant === "lmstudio") {
+            await syncLmStudioModels();
+            return;
+        }
+
+        await syncOpenAiCompatibleModels();
     }
 
     const modelPresetOptions: Array<SelectOption<ModelPreset>> = [
@@ -427,6 +498,10 @@
         {
             value: "lmstudio",
             label: "LM Studio",
+        },
+        {
+            value: "openai_compatible",
+            label: "OpenAI-compatible API",
         },
     ]);
     const csmModelOptions: Array<SelectOption<CsmModelVariant>> = [
@@ -458,6 +533,8 @@
               ? "E2B uses less RAM but is generally less capable. Recommended for Macs with 16 GB+ of unified memory."
               : selectedGemmaVariant === "lmstudio"
                 ? "Gemma STT is not supported with LM Studio. Start LM Studio's local server and load a model so it appears here."
+                : selectedGemmaVariant === "openai_compatible"
+                  ? "Gemma STT is not supported with OpenAI-compatible APIs. Use a text-and-image chat model here and switch STT to Whisper."
                 : 'Gemma STT is not supported with Ollama. If your model does not show, run "ollama run {your_model}" in Terminal (One-time only).',
     );
     const selectedGemmaUsesExternalProvider = $derived(
@@ -469,6 +546,8 @@
     const selectedExternalProviderSupported = $derived(
         selectedGemmaVariant === "lmstudio"
             ? isLmStudioSupported
+            : selectedGemmaVariant === "openai_compatible"
+              ? isOpenAiCompatibleSupported
             : selectedGemmaVariant === "ollama"
               ? isOllamaSupported
               : false,
@@ -479,11 +558,17 @@
             : null,
     );
     const selectedExternalModels = $derived(
-        selectedGemmaVariant === "lmstudio" ? lmStudioModels : ollamaModels,
+        selectedGemmaVariant === "lmstudio"
+            ? lmStudioModels
+            : selectedGemmaVariant === "openai_compatible"
+              ? openAiCompatibleModels
+              : ollamaModels,
     );
     const selectedExternalModel = $derived(
         selectedGemmaVariant === "lmstudio"
             ? selectedLmStudioModel
+            : selectedGemmaVariant === "openai_compatible"
+              ? selectedOpenAiCompatibleModel
             : selectedOllamaModel,
     );
     const selectedCsmModelLabel = $derived(
@@ -1010,6 +1095,7 @@
             sttModel: selectedSttModel,
             ollamaModel: selectedOllamaModel,
             lmstudioModel: selectedLmStudioModel,
+            openaiCompatibleModel: selectedOpenAiCompatibleModel,
         };
         window.localStorage.setItem(
             MODEL_PREFERENCES_STORAGE_KEY,
@@ -1908,6 +1994,7 @@
             sttModel: selectedSttModel,
             ollamaModel: selectedOllamaModel,
             lmstudioModel: selectedLmStudioModel,
+            openaiCompatibleModel: selectedOpenAiCompatibleModel,
         };
     }
 
@@ -1943,6 +2030,10 @@
         if (restoredPreferences.lmstudioModel) {
             selectedLmStudioModel = restoredPreferences.lmstudioModel;
         }
+        if (restoredPreferences.openaiCompatibleModel) {
+            selectedOpenAiCompatibleModel =
+                restoredPreferences.openaiCompatibleModel;
+        }
 
         try {
             await setGemmaVariantSelection(restoredPreferences.gemmaVariant);
@@ -1970,6 +2061,19 @@
             }
         }
 
+        if (restoredPreferences.openaiCompatibleModel) {
+            try {
+                await invoke("set_openai_compatible_model", {
+                    model: restoredPreferences.openaiCompatibleModel,
+                });
+            } catch (err) {
+                console.error(
+                    "Failed to restore OpenAI-compatible model:",
+                    err,
+                );
+            }
+        }
+
         try {
             await setCsmModelSelection(restoredPreferences.csmModel);
         } catch (err) {
@@ -1987,6 +2091,9 @@
         }
         if (isLmStudioSupported) {
             await syncLmStudioModels();
+        }
+        if (isOpenAiCompatibleSupported) {
+            await syncOpenAiCompatibleModels();
         }
     }
 
@@ -3009,10 +3116,8 @@
 
         selectedGemmaVariant = nextVariant;
 
-        if (nextVariant === "ollama") {
-            void syncOllamaModels();
-        } else if (nextVariant === "lmstudio") {
-            void syncLmStudioModels();
+        if (isExternalGemmaVariant(nextVariant)) {
+            void syncExternalModelsForVariant(nextVariant);
         }
 
         if (
@@ -3140,6 +3245,18 @@
                     model: nextSelection.lmstudioModel,
                 });
             }
+
+            if (
+                currentSelection.openaiCompatibleModel !==
+                nextSelection.openaiCompatibleModel
+            ) {
+                selectedOpenAiCompatibleModel =
+                    nextSelection.openaiCompatibleModel ??
+                    DEFAULT_OPENAI_COMPATIBLE_MODEL;
+                await invoke("set_openai_compatible_model", {
+                    model: selectedOpenAiCompatibleModel,
+                });
+            }
         } catch (err) {
             selectedGemmaVariant = previousSelection.gemmaVariant;
             selectedCsmModel = previousSelection.csmModel;
@@ -3148,6 +3265,9 @@
                 previousSelection.ollamaModel ?? DEFAULT_OLLAMA_MODEL;
             selectedLmStudioModel =
                 previousSelection.lmstudioModel ?? DEFAULT_LMSTUDIO_MODEL;
+            selectedOpenAiCompatibleModel =
+                previousSelection.openaiCompatibleModel ??
+                DEFAULT_OPENAI_COMPATIBLE_MODEL;
             console.error("Failed to apply model preset:", err);
             alert(
                 `Failed to apply the ${MODEL_PRESETS[nextPreset].label} preset.\n${normalizeErrorMessage(err)}`,
@@ -3167,6 +3287,7 @@
                 gemmaDownloaded,
                 ollamaSupported,
                 lmstudioSupported,
+                openaiCompatibleSupported,
                 gemmaLoaded,
                 csmDownloaded,
                 csmLoaded,
@@ -3180,6 +3301,7 @@
                 invoke<boolean>("check_model_status"),
                 invoke<boolean>("check_ollama_status"),
                 invoke<boolean>("check_lmstudio_status"),
+                invoke<boolean>("check_openai_compatible_status"),
                 invoke<boolean>("is_server_running"),
                 invoke<boolean>("check_csm_status"),
                 invoke<boolean>("is_csm_running"),
@@ -3194,8 +3316,11 @@
             isGemmaDownloaded = gemmaDownloaded;
             const previousOllamaSupported = isOllamaSupported;
             const previousLmStudioSupported = isLmStudioSupported;
+            const previousOpenAiCompatibleSupported =
+                isOpenAiCompatibleSupported;
             isOllamaSupported = ollamaSupported;
             isLmStudioSupported = lmstudioSupported;
+            isOpenAiCompatibleSupported = openaiCompatibleSupported;
             isGemmaLoaded = gemmaLoaded;
 
             if (
@@ -3214,6 +3339,16 @@
                 void syncLmStudioModels();
             } else if (!lmstudioSupported) {
                 lmStudioModels = [];
+            }
+
+            if (
+                openaiCompatibleSupported &&
+                (!previousOpenAiCompatibleSupported ||
+                    openAiCompatibleModels.length === 0)
+            ) {
+                void syncOpenAiCompatibleModels();
+            } else if (!openaiCompatibleSupported) {
+                openAiCompatibleModels = [];
             }
 
             isCsmDownloaded = csmDownloaded;
@@ -3329,6 +3464,51 @@
         persistModelPreferences();
     }
 
+    async function syncOpenAiCompatibleModels() {
+        if (!isOpenAiCompatibleSupported) {
+            openAiCompatibleModels = [];
+            return;
+        }
+        try {
+            const models = await invoke<string[]>("get_openai_compatible_models");
+            openAiCompatibleModels = models;
+            const current = await invoke<string>("get_openai_compatible_model");
+
+            if (selectedOpenAiCompatibleModel === "") {
+                selectedOpenAiCompatibleModel = current;
+            }
+
+            if (
+                openAiCompatibleModels.length > 0 &&
+                selectedOpenAiCompatibleModel !== "" &&
+                !openAiCompatibleModels.includes(selectedOpenAiCompatibleModel)
+            ) {
+                selectedOpenAiCompatibleModel = openAiCompatibleModels[0];
+                await invoke("set_openai_compatible_model", {
+                    model: selectedOpenAiCompatibleModel,
+                });
+            } else if (
+                openAiCompatibleModels.length > 0 &&
+                selectedOpenAiCompatibleModel === ""
+            ) {
+                selectedOpenAiCompatibleModel = openAiCompatibleModels[0];
+                await invoke("set_openai_compatible_model", {
+                    model: selectedOpenAiCompatibleModel,
+                });
+            }
+        } catch (err) {
+            console.error("Failed to fetch OpenAI-compatible models:", err);
+        }
+    }
+
+    async function handleOpenAiCompatibleModelChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        const nextModel = target.value;
+        selectedOpenAiCompatibleModel = nextModel;
+        await invoke("set_openai_compatible_model", { model: nextModel });
+        persistModelPreferences();
+    }
+
     async function syncOllamaConfig() {
         try {
             const [url, key] =
@@ -3352,29 +3532,49 @@
         }
     }
 
+    async function syncOpenAiCompatibleConfig() {
+        try {
+            const [url, key] = await invoke<[string, string | null]>(
+                "get_openai_compatible_config",
+            );
+            openAiCompatibleBaseUrl = url;
+            openAiCompatibleApiKey = key ?? "";
+        } catch (err) {
+            console.error("Failed to sync OpenAI-compatible config:", err);
+        }
+    }
+
     async function saveExternalLlmConfig(url: string, key: string) {
+        const normalizedUrl = url.trim();
+        const normalizedKey = key.trim();
+
         try {
             if (selectedGemmaVariant === "lmstudio") {
                 await invoke("set_lmstudio_config", {
-                    url,
-                    key: key.trim() || null,
+                    url: normalizedUrl,
+                    key: normalizedKey || null,
                 });
-                lmstudioBaseUrl = url;
-                lmstudioApiKey = key;
+                lmstudioBaseUrl = normalizedUrl;
+                lmstudioApiKey = normalizedKey;
+            } else if (selectedGemmaVariant === "openai_compatible") {
+                await invoke("set_openai_compatible_config", {
+                    url: normalizedUrl,
+                    key: normalizedKey || null,
+                });
+                openAiCompatibleBaseUrl = normalizedUrl;
+                openAiCompatibleApiKey = normalizedKey;
             } else {
                 await invoke("set_ollama_config", {
-                    url,
-                    key: key.trim() || null,
+                    url: normalizedUrl,
+                    key: normalizedKey || null,
                 });
-                ollamaBaseUrl = url;
-                ollamaApiKey = key;
+                ollamaBaseUrl = normalizedUrl;
+                ollamaApiKey = normalizedKey;
             }
 
             await syncModelStatus();
-            if (selectedGemmaVariant === "lmstudio") {
-                await syncLmStudioModels();
-            } else {
-                await syncOllamaModels();
+            if (isExternalGemmaVariant(selectedGemmaVariant)) {
+                await syncExternalModelsForVariant(selectedGemmaVariant);
             }
         } catch (err) {
             console.error("Failed to save external LLM config:", err);
@@ -4157,10 +4357,8 @@
     async function handleLoadGemma() {
         isLoadingGemma = true;
         try {
-            if (selectedGemmaVariant === "ollama") {
-                await syncOllamaModels();
-            } else if (selectedGemmaVariant === "lmstudio") {
-                await syncLmStudioModels();
+            if (isExternalGemmaVariant(selectedGemmaVariant)) {
+                await syncExternalModelsForVariant(selectedGemmaVariant);
             }
             await invoke("start_server");
             isGemmaLoaded = true;
@@ -4869,6 +5067,7 @@
             await restoreModelPreferences();
             await syncOllamaConfig();
             await syncLmStudioConfig();
+            await syncOpenAiCompatibleConfig();
             await initializePongPlaybackPreference();
             await initializeSelectLastSessionPreference();
             await initializeShowStatPreference();
@@ -4890,6 +5089,7 @@
             await syncModelStatus();
             await syncOllamaModels();
             await syncLmStudioModels();
+            await syncOpenAiCompatibleModels();
         })();
 
         healthCheckInterval = window.setInterval(() => {
@@ -5100,6 +5300,8 @@
                     handleExternalModelChange={selectedGemmaVariant ===
                     "lmstudio"
                         ? handleLmStudioModelChange
+                        : selectedGemmaVariant === "openai_compatible"
+                          ? handleOpenAiCompatibleModelChange
                         : handleOllamaModelChange}
                     {externalModelDisabled}
                     {openExternalConfig}
@@ -5356,12 +5558,8 @@
         {#if showExternalLlmConfig}
             <ExternalLlmConfigModal
                 providerName={selectedExternalProviderLabel}
-                baseUrl={selectedGemmaVariant === "lmstudio"
-                    ? lmstudioBaseUrl
-                    : ollamaBaseUrl}
-                apiKey={selectedGemmaVariant === "lmstudio"
-                    ? lmstudioApiKey
-                    : ollamaApiKey}
+                baseUrl={getExternalProviderBaseUrl(selectedGemmaVariant)}
+                apiKey={getExternalProviderApiKey(selectedGemmaVariant)}
                 urlPlaceholder={getExternalProviderUrlPlaceholder(
                     selectedGemmaVariant,
                 )}
