@@ -6,26 +6,38 @@ Fast, screen-aware, voice-first, local AI assistant for [rubberducking](https://
 
 ## Key Features
 
-🎙️ Real-Time Voice Interaction
+### Real-Time Voice Interaction
 
-Real-Time Conversation: Speak naturally. Interrupt the AI mid-sentence. No "push-to-talk" required.
-Voice Cloning: Upload a sample to create custom personas via CosyVoice3 support.
-Ultra-Fast TTS: Uses Kokoro-82M for high-quality, lightweight speech that feels human.
+Chat with AI hands-free. Interrupt anytime you want like in a real conversation. Live transcriptions are provided so you know what you actually send to the AI.
 
-👀 Screen-Aware Vision (Use Cases)
+### Conversation Management
 
-Contextual Rubberducking: Use `Shift+Command+L` to capture a screen region and ask: "Why is this code throwing an error?" or "What does this graph mean?"
+Being voice-first does not mean you lose control over the conversation history. With OpenDuck, all your chat history will be saved in your local disk. You can search, rename, resume, fork or delete any previous chat session. You can also edit or delete any previous message inside the session.
 
-Accessibility: Be a "Visual Prosthetic". Blind and visually impaired users can use `Shift+Command+Option+L` to have the AI describe any part of their screen in real-time.
 
-🎭 Portability with .openduck
+### Screen-Aware Vision
 
-Persona in a Box: Package prompts, custom icons, and voice clones into a single .openduck file. Share your custom characters or expert mentors with one click.
+Use `Shift+Command+L` to capture a screen region and `Shift+Command+Option+L` to capture the whole screen.
+The next time you speak the AI can view the screenshots you attached, without even changing to the OpenDuck app window.
+#### Use cases:
+Contextual Rubberducking: Capture a screen region and ask: "Why is this code throwing an error?" or "What does this graph mean?"
+Accessibility: Be a "Visual Prosthetic". Blind and visually impaired users can use shortcut to capture the whole screen then let the AI describe any part of their screen in real-time.
 
-⚡ Engineered for Efficiency
+### Portability with .openduck
 
-OpenDuck is built with a Rust backend and a Svelte frontend as a native MacOS application.
-We chose this stack specifically to maximize Unified Memory for your models. While Electron apps often idle at 500MB+ RAM, OpenDuck stays out of the way. By keeping the app overhead nearly invisible, we ensure that every possible gigabyte of your Mac's RAM is dedicated to running the smartest LLMs possible.
+Want to share your characters? With OpenDuck it's as easy as one click of a button, then the everything (Prompt, Avatar, Voice reference for CosyVoice models) will be packaged into one .openduck file then you can share it with your friends. Importing a character from .openduck is also as simple as clicking the import button then select the .openduck file.
+
+### Engineered for Efficiency
+
+OpenDuck is built with a Rust backend and a Svelte frontend as a native MacOS application. We want to make sure the UI is responsive and at the same time the memory usage for application stays lean. Use your memory to run AI models, not to run our app.
+
+The built-in models are optimized for MLX and you can optionally connect other models via Ollama, LMStudio and any OpenAI-compatible endpoints.
+
+We achieve sub-second latency (from the moment user stops talking to the moment AI speaks) on the M5 MacBook Air. Memory Usage while chatting:
+Gemma-4-E2B: ~4GB
+Distil-Whisper: ~3.7GB
+Kokoro-82M: ~1.8GB
+OpenDuck: ~80MB
 
 ## Quick Start for Installing the Beta Version
 
