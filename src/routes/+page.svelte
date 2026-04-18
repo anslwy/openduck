@@ -422,7 +422,7 @@
         { value: "e2b", label: "Gemma-4-E2B" },
         {
             value: "ollama",
-            label: isOllamaSupported ? "Ollama" : "Ollama (Not Supported)",
+            label: "Ollama",
         },
         {
             value: "lmstudio",
@@ -3004,11 +3004,6 @@
     async function handleGemmaVariantChange(event: Event) {
         const target = event.currentTarget as HTMLSelectElement;
         const nextVariant = target.value as GemmaVariant;
-
-        if (nextVariant === "ollama" && !isOllamaSupported) {
-            target.value = selectedGemmaVariant;
-            return;
-        }
 
         const previousVariant = selectedGemmaVariant;
 
