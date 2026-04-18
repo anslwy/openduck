@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "OpenDuck",
+        "title": "",
         "width": 700,
         "height": 770,
         "resizable": true,

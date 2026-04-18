@@ -6,6 +6,7 @@
     import { fade } from "svelte/transition";
     import { invoke, convertFileSrc } from "@tauri-apps/api/core";
     import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+    import { getCurrentWindow } from "@tauri-apps/api/window";
     import { save } from "@tauri-apps/plugin-dialog";
     import AboutModal from "$lib/components/home/AboutModal.svelte";
     import ContactsModal from "$lib/components/home/ContactsModal.svelte";
@@ -410,7 +411,6 @@
         {
             value: "ollama",
             label: isOllamaSupported ? "Ollama" : "Ollama (Not Supported)",
-            disabled: !isOllamaSupported,
         },
         {
             value: "lmstudio",
@@ -675,6 +675,11 @@
                 themeRgb = `${r}, ${g}, ${b}`;
             }
         };
+    });
+
+    $effect(() => {
+        const window = getCurrentWindow();
+        void window.setTitle(currentSessionTitle || "");
     });
 
     function setCallStage(phase: CallStagePhase, message: string) {
@@ -4517,7 +4522,10 @@
                             if (lastReasoningRequestId !== payload.request_id) {
                                 lastReasoningRequestId = payload.request_id;
                                 reasoningText = payload.reasoning_text;
-                            } else if (payload.reasoning_text.length > reasoningText.length) {
+                            } else if (
+                                payload.reasoning_text.length >
+                                reasoningText.length
+                            ) {
                                 reasoningText = payload.reasoning_text;
                             }
 
@@ -5069,9 +5077,10 @@
     <main class:idle-layout={!calling}>
         {#if calling && callStageMessage}
             <div class="call-stage-banner-wrapper">
-                <div 
-                    class="call-stage-banner" 
-                    class:interactive={callStagePhase === "thinking" && reasoningText}
+                <div
+                    class="call-stage-banner"
+                    class:interactive={callStagePhase === "thinking" &&
+                        reasoningText}
                     data-phase={callStagePhase}
                     onclick={() => {
                         if (callStagePhase === "thinking" && reasoningText) {
@@ -5084,7 +5093,20 @@
                     {#if callStagePhase === "thinking" && reasoningText}
                         <div class="tooltip-shell">
                             <div class="thinking-spinner-shell">
-                                <svg class="spinner" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                                <svg
+                                    class="spinner"
+                                    width="12"
+                                    height="12"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="3"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><path
+                                        d="M21 12a9 9 0 1 1-6.219-8.56"
+                                    /></svg
+                                >
                             </div>
                             <div class="tooltip-bubble control-tooltip">
                                 Click to show thinking process
@@ -5094,11 +5116,32 @@
                 </div>
 
                 {#if showReasoningPopup && callStagePhase === "thinking" && reasoningText}
-                    <div class="reasoning-popup" transition:fade={{ duration: 150 }}>
+                    <div
+                        class="reasoning-popup"
+                        transition:fade={{ duration: 150 }}
+                    >
                         <div class="reasoning-popup-header">
-                            <span class="reasoning-popup-title">Thinking Process</span>
-                            <button class="reasoning-popup-close" onclick={() => showReasoningPopup = false}>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                            <span class="reasoning-popup-title"
+                                >Thinking Process</span
+                            >
+                            <button
+                                class="reasoning-popup-close"
+                                onclick={() => (showReasoningPopup = false)}
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="14"
+                                    height="14"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><line x1="18" y1="6" x2="6" y2="18"
+                                    ></line><line x1="6" y1="6" x2="18" y2="18"
+                                    ></line></svg
+                                >
                             </button>
                         </div>
                         <div class="reasoning-popup-content">
