@@ -687,6 +687,10 @@
             showReasoningPopup = false;
         }
 
+        if (phase !== "listening") {
+            liveTranscriptSubtitle = "";
+        }
+
         callStagePhase = phase;
         callStageMessage = message;
     }
