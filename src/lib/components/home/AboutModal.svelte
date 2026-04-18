@@ -198,8 +198,7 @@
     });
     const endOfUtteranceSilenceProgress = $derived.by(() => {
         const range =
-            MAX_END_OF_UTTERANCE_SILENCE_MS -
-            MIN_END_OF_UTTERANCE_SILENCE_MS;
+            MAX_END_OF_UTTERANCE_SILENCE_MS - MIN_END_OF_UTTERANCE_SILENCE_MS;
         if (range <= 0) {
             return 0;
         }
@@ -232,8 +231,12 @@
 >
     <div class="about-modal-header">
         <div class="about-modal-copy">
-            <span class="about-modal-title" id="about-modal-title">Settings</span>
-            <span class="about-modal-subtitle">App configuration and build metadata</span>
+            <span class="about-modal-title" id="about-modal-title"
+                >Settings</span
+            >
+            <span class="about-modal-subtitle"
+                >App configuration and build metadata</span
+            >
         </div>
         <button
             type="button"
@@ -279,7 +282,10 @@
 
         <div class="about-metadata-card">
             <div class="about-metadata-row">
-                <span class="about-metadata-label">Enable Pop Sound (Screenshots / Processing Audio / Finished Response)</span>
+                <span class="about-metadata-label"
+                    >Enable Pop Sound (Screenshots / Processing Audio / Finished
+                    Response)</span
+                >
                 <button
                     type="button"
                     class="quantize-toggle"
@@ -291,19 +297,28 @@
                 </button>
             </div>
             <div class="about-metadata-row">
-                <span class="about-metadata-label">Select Last Session When Startup</span>
+                <span class="about-metadata-label"
+                    >Select Last Session When Startup</span
+                >
                 <button
                     type="button"
                     class="quantize-toggle"
                     class:active={selectLastSessionEnabled}
-                    onclick={() => onUpdateSelectLastSession(!selectLastSessionEnabled)}
+                    onclick={() =>
+                        onUpdateSelectLastSession(!selectLastSessionEnabled)}
                 >
                     <span class="quantize-dot"></span>
-                    <span>{selectLastSessionEnabled ? "Enabled" : "Disabled"}</span>
+                    <span
+                        >{selectLastSessionEnabled
+                            ? "Enabled"
+                            : "Disabled"}</span
+                    >
                 </button>
             </div>
             <div class="about-metadata-row">
-                <span class="about-metadata-label">Show Stats (Latency, Memory Usage)</span>
+                <span class="about-metadata-label"
+                    >Show Stats (Latency, Memory Usage) [Experimental]</span
+                >
                 <button
                     type="button"
                     class="quantize-toggle"
@@ -321,7 +336,9 @@
                 <div class="about-slider-control">
                     <div class="about-slider-header">
                         <span class="about-slider-detail"
-                            >Longer waits capture more pause-heavy speech before transcription starts. The minimum stays conservative to avoid mid-sentence cutoffs.</span
+                            >Longer waits capture more pause-heavy speech before
+                            transcription starts. The minimum stays conservative
+                            to avoid mid-sentence cutoffs.</span
                         >
                         <span class="about-slider-value"
                             >{formattedEndOfUtteranceSilence}</span
@@ -354,7 +371,9 @@
                 </div>
             </div>
             <div class="about-metadata-row shortcut-row">
-                <span class="about-metadata-label">Look at Screen Region (During Call)</span>
+                <span class="about-metadata-label"
+                    >Look at Screen Region (During Call)</span
+                >
                 <div class="shortcut-input-wrapper">
                     <ShortcutCapture
                         value={editedShortcut}
@@ -366,7 +385,9 @@
                 </div>
             </div>
             <div class="about-metadata-row shortcut-row">
-                <span class="about-metadata-label">Look at Entire Screen (During Call)</span>
+                <span class="about-metadata-label"
+                    >Look at Entire Screen (During Call)</span
+                >
                 <div class="shortcut-input-wrapper">
                     <ShortcutCapture
                         value={editedShortcutEntireScreen}
