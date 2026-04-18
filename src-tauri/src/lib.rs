@@ -1,5 +1,4 @@
 //! Main Tauri application entry point and runtime coordinator for the OpenDuck desktop app.
-
 mod constants;
 mod frontend_events;
 mod model_variants;
@@ -24,16 +23,16 @@ use tauri::{
     tray::TrayIconBuilder,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
-use uuid::Uuid;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState, Shortcut};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 #[derive(Clone, Deserialize)]
 struct AudioPayload {
@@ -162,26 +161,6 @@ struct SessionMetadata {
 struct SessionData {
     metadata: SessionMetadata,
     turns: Vec<ConversationTurn>,
-}
-
-struct TempAudioFile {
-    path: PathBuf,
-}
-
-impl TempAudioFile {
-    fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempAudioFile {
-    fn drop(&mut self) {
-        remove_temp_audio_file(&self.path);
-    }
 }
 
 struct TempImageFile {
@@ -702,10 +681,7 @@ fn initialize_global_shortcut_look_at_entire_screen(
         .global_shortcut_look_at_entire_screen_modified_before_hydration
         .lock()
         .unwrap();
-    let mut current_shortcut_str = state
-        .global_shortcut_look_at_entire_screen
-        .lock()
-        .unwrap();
+    let mut current_shortcut_str = state.global_shortcut_look_at_entire_screen.lock().unwrap();
 
     if !*hydrated {
         if !*modified_before_hydration && *current_shortcut_str != shortcut_str {
@@ -742,10 +718,7 @@ fn set_global_shortcut_look_at_entire_screen(
     state: State<'_, AppState>,
     shortcut_str: String,
 ) -> Result<String, String> {
-    let mut current_shortcut_str = state
-        .global_shortcut_look_at_entire_screen
-        .lock()
-        .unwrap();
+    let mut current_shortcut_str = state.global_shortcut_look_at_entire_screen.lock().unwrap();
 
     if *current_shortcut_str == shortcut_str {
         return Ok(shortcut_str);
@@ -809,10 +782,7 @@ fn initialize_global_shortcut_look_at_screen_region(
         .global_shortcut_look_at_screen_region_modified_before_hydration
         .lock()
         .unwrap();
-    let mut current_shortcut_str = state
-        .global_shortcut_look_at_screen_region
-        .lock()
-        .unwrap();
+    let mut current_shortcut_str = state.global_shortcut_look_at_screen_region.lock().unwrap();
 
     if !*hydrated {
         if !*modified_before_hydration && *current_shortcut_str != shortcut_str {
@@ -849,10 +819,7 @@ fn set_global_shortcut_look_at_screen_region(
     state: State<'_, AppState>,
     shortcut_str: String,
 ) -> Result<String, String> {
-    let mut current_shortcut_str = state
-        .global_shortcut_look_at_screen_region
-        .lock()
-        .unwrap();
+    let mut current_shortcut_str = state.global_shortcut_look_at_screen_region.lock().unwrap();
 
     if *current_shortcut_str == shortcut_str {
         return Ok(shortcut_str);
@@ -892,7 +859,6 @@ fn set_global_shortcut_look_at_screen_region(
 
     Ok(shortcut_str)
 }
-
 
 #[tauri::command]
 async fn check_for_app_update(
@@ -951,7 +917,10 @@ async fn refresh_runtime_caches(
     }
 
     if temp_dir.exists() {
-        info!("Removing runtime-bootstrap directory: {}", temp_dir.display());
+        info!(
+            "Removing runtime-bootstrap directory: {}",
+            temp_dir.display()
+        );
         std::fs::remove_dir_all(&temp_dir)
             .map_err(|err| format!("Failed to remove runtime-bootstrap directory: {err}"))?;
     }
@@ -1147,12 +1116,19 @@ fn delete_conversation_context_entry(
             let removed_turn = conversation_turns.remove(i).unwrap();
             removed_image_paths = removed_turn.image_paths;
             updated = true;
-            info!("Deleted conversation turn containing entry {}. Other entry in turn was {}.", entry_id, other_entry_id.unwrap_or(0));
+            info!(
+                "Deleted conversation turn containing entry {}. Other entry in turn was {}.",
+                entry_id,
+                other_entry_id.unwrap_or(0)
+            );
         }
     }
 
     if !updated {
-        warn!("Attempted to delete entry {}, but it was not found in the active context.", entry_id);
+        warn!(
+            "Attempted to delete entry {}, but it was not found in the active context.",
+            entry_id
+        );
         return Err("Conversation entry is no longer part of the active context.".to_string());
     }
 
@@ -1198,7 +1174,10 @@ fn update_conversation_context_entry(
                     turn.user_image_data_urls.clear();
                 }
                 updated = true;
-                info!("Updated user entry {} with text: {:?}", entry_id, turn.user_text);
+                info!(
+                    "Updated user entry {} with text: {:?}",
+                    entry_id, turn.user_text
+                );
                 break;
             }
 
@@ -1212,7 +1191,10 @@ fn update_conversation_context_entry(
 
                 turn.assistant_text = normalized_text.clone();
                 updated = true;
-                info!("Updated assistant entry {} with text: {:?}", entry_id, turn.assistant_text);
+                info!(
+                    "Updated assistant entry {} with text: {:?}",
+                    entry_id, turn.assistant_text
+                );
                 break;
             }
         }
@@ -1443,7 +1425,10 @@ async fn get_openai_compatible_models(
         .map_err(|e| format!("Failed to connect to {provider_label}: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("{provider_label} returned error: {}", resp.status()));
+        return Err(format!(
+            "{provider_label} returned error: {}",
+            resp.status()
+        ));
     }
 
     let payload = resp
@@ -2086,7 +2071,10 @@ async fn start_server(
                 "--server",
                 "--model",
                 selected_variant.repo_id().ok_or_else(|| {
-                    format!("{} does not use a local MLX server.", selected_variant.label())
+                    format!(
+                        "{} does not use a local MLX server.",
+                        selected_variant.label()
+                    )
                 })?,
                 "--port",
                 &port_arg,
@@ -2811,7 +2799,8 @@ async fn receive_audio_chunk(
     let mut buffer = state.audio_buffer.lock().unwrap();
     let mut silent_count = state.silent_chunks_count.lock().unwrap();
     let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
-    let mut current_utterance_voiced_samples = state.current_utterance_voiced_samples.lock().unwrap();
+    let mut current_utterance_voiced_samples =
+        state.current_utterance_voiced_samples.lock().unwrap();
     let mut is_speaking = state.is_speaking.lock().unwrap();
 
     if *is_speaking {
@@ -2913,13 +2902,12 @@ fn adaptive_end_of_utterance_silence_ms(
         u64::from(utterance_voiced_duration_ms - ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS);
     let silence_delta_ms = u64::from(configured_silence_ms - minimum_effective_silence_ms);
 
-    minimum_effective_silence_ms
-        + ((silence_delta_ms * progress_ms) / range_ms) as u32
+    minimum_effective_silence_ms + ((silence_delta_ms * progress_ms) / range_ms) as u32
 }
 
 fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tauri::AppHandle) {
-    let audio_path = match create_temp_wav_path(&app_handle) {
-        Ok(path) => path,
+    let audio_wav_base64 = match encode_audio_samples_as_wav_base64(samples, capture_sample_rate) {
+        Ok(audio_wav_base64) => audio_wav_base64,
         Err(err) => {
             error!("{}", err);
             emit_audio_turn_processing_error(&app_handle, err);
@@ -2942,10 +2930,7 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
         gemma_model = if variant.is_external() {
             selected_external_llm_model(state.inner(), variant).unwrap_or_default()
         } else {
-            variant
-                .repo_id()
-                .unwrap_or_default()
-                .to_string()
+            variant.repo_id().unwrap_or_default().to_string()
         };
         active_stt_model = selected_stt_model(state.inner());
         server_port = *state.server_port.lock().unwrap();
@@ -2960,56 +2945,11 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
         return;
     };
 
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: capture_sample_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-
-    let mut writer = match hound::WavWriter::create(&audio_path, spec) {
-        Ok(writer) => writer,
-        Err(e) => {
-            let message = format!(
-                "Failed to create temp WAV file at {}: {}",
-                audio_path.display(),
-                e
-            );
-            error!("{}", message);
-            emit_audio_turn_processing_error(&app_handle, message);
-            return;
-        }
-    };
-
-    for &sample in samples {
-        let amplitude = (sample * i16::MAX as f32) as i16;
-        if let Err(e) = writer.write_sample(amplitude) {
-            let message = format!("Failed to write temp WAV sample: {}", e);
-            error!("{}", message);
-            let _ = std::fs::remove_file(&audio_path);
-            emit_audio_turn_processing_error(&app_handle, message);
-            return;
-        }
-    }
-
-    if let Err(e) = writer.finalize() {
-        let message = format!(
-            "Failed to finalize temp WAV file at {}: {}",
-            audio_path.display(),
-            e
-        );
-        error!("{}", message);
-        let _ = std::fs::remove_file(&audio_path);
-        emit_audio_turn_processing_error(&app_handle, message);
-        return;
-    }
-
     let app_handle_for_task = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         info!(
-            "Dispatching audio turn for {} transcription (saved at: {})",
-            active_stt_model.label(),
-            audio_path.display()
+            "Dispatching audio turn for {} transcription",
+            active_stt_model.label()
         );
 
         let transcription_result = match active_stt_model {
@@ -3018,12 +2958,12 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                     active_gemma_variant,
                     server_port,
                     &gemma_model,
-                    &audio_path,
+                    &audio_wav_base64,
                 )
                 .await
             }
             SttModelVariant::DistilWhisperLargeV3 | SttModelVariant::WhisperLargeV3Turbo => {
-                transcribe_audio_with_stt_worker(&app_handle_for_task, &audio_path).await
+                transcribe_audio_with_stt_worker(&app_handle_for_task, &audio_wav_base64).await
             }
         };
 
@@ -3034,7 +2974,6 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                         "{} transcription was empty, skipping response generation",
                         active_stt_model.label()
                     );
-                    remove_temp_audio_file(&audio_path);
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
                 }
@@ -3044,7 +2983,6 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                         "Ignoring non-meaningful transcript for interruption: {:?}",
                         user_text
                     );
-                    remove_temp_audio_file(&audio_path);
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
                 }
@@ -3052,7 +2990,6 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                 if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
                     != conversation_session_id
                 {
-                    remove_temp_audio_file(&audio_path);
                     return;
                 }
 
@@ -3064,7 +3001,6 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                         "Skipping stale transcript for generation {} because a newer reply is active",
                         generation_id
                     );
-                    remove_temp_audio_file(&audio_path);
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
                 }
@@ -3075,7 +3011,6 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                 if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
                     != conversation_session_id
                 {
-                    remove_temp_audio_file(&audio_path);
                     return;
                 }
 
@@ -3110,10 +3045,9 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                             .collect(),
                     },
                 );
-                let latest_audio_path = if active_stt_model == SttModelVariant::Gemma {
-                    Some(audio_path)
+                let latest_audio_wav_base64 = if active_stt_model == SttModelVariant::Gemma {
+                    Some(audio_wav_base64)
                 } else {
-                    remove_temp_audio_file(&audio_path);
                     None
                 };
                 start_response_generation(
@@ -3123,7 +3057,7 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                     conversation_session_id,
                     gemma_model,
                     user_text,
-                    latest_audio_path,
+                    latest_audio_wav_base64,
                     latest_screen_capture_paths,
                 );
             }
@@ -3140,7 +3074,6 @@ fn process_audio_turn(samples: &[f32], capture_sample_rate: u32, app_handle: tau
                     active_stt_model.label(),
                     err
                 );
-                remove_temp_audio_file(&audio_path);
                 emit_call_stage(&app_handle_for_task, "listening", "Listening");
             }
         }
@@ -3154,22 +3087,23 @@ fn start_response_generation(
     conversation_session_id: u64,
     gemma_model: String,
     user_text: String,
-    latest_audio_path: Option<PathBuf>,
+    latest_audio_wav_base64: Option<String>,
     latest_image_paths: Vec<PathBuf>,
 ) {
     let app_handle_for_task = app_handle.clone();
     let cancellation_token = Arc::new(AtomicBool::new(false));
     let cancellation_token_for_task = cancellation_token.clone();
     let handle = tauri::async_runtime::spawn(async move {
-        let latest_audio_file = latest_audio_path.map(TempAudioFile::new);
-        let latest_image_files: Vec<TempImageFile> =
-            latest_image_paths.into_iter().map(TempImageFile::new).collect();
+        let latest_image_files: Vec<TempImageFile> = latest_image_paths
+            .into_iter()
+            .map(TempImageFile::new)
+            .collect();
         match stream_gemma_response_to_csm(
             &app_handle_for_task,
             server_port,
             &gemma_model,
             &user_text,
-            latest_audio_file.as_ref().map(TempAudioFile::path),
+            latest_audio_wav_base64.as_deref(),
             latest_image_files
                 .iter()
                 .map(TempImageFile::path)
@@ -3254,7 +3188,7 @@ async fn transcribe_audio_with_gemma(
     variant: GemmaVariant,
     server_port: u16,
     gemma_model: &str,
-    audio_path: &Path,
+    audio_wav_base64: &str,
 ) -> Result<String, String> {
     if variant.is_external() {
         return Err(format!(
@@ -3269,7 +3203,7 @@ async fn transcribe_audio_with_gemma(
         messages: vec![ChatMessage {
             role: "user".to_string(),
             content: vec![
-                build_input_audio_content(audio_path),
+                build_input_audio_content(audio_wav_base64),
                 ChatContent::Text {
                     text: TRANSCRIPTION_PROMPT.to_string(),
                 },
@@ -3332,7 +3266,7 @@ async fn transcribe_audio_with_gemma(
 
 async fn transcribe_audio_with_stt_worker(
     app_handle: &tauri::AppHandle,
-    audio_path: &Path,
+    audio_wav_base64: &str,
 ) -> Result<String, String> {
     let stt_started_at = Instant::now();
     let state = app_handle.state::<AppState>();
@@ -3377,7 +3311,7 @@ async fn transcribe_audio_with_stt_worker(
     let request = serde_json::json!({
         "type": "transcribe",
         "request_id": request_id,
-        "audio_path": audio_path.to_string_lossy(),
+        "audio_wav_base64": audio_wav_base64,
     });
 
     let send_result = async {
@@ -3460,8 +3394,12 @@ fn serialize_request_for_ollama(request: &ChatRequest) -> serde_json::Value {
                 })
                 .collect();
 
-            let content_value = if content.iter().all(|c| c.get("type").and_then(|t| t.as_str()) == Some("text")) {
-                let merged_text = content.iter()
+            let content_value = if content
+                .iter()
+                .all(|c| c.get("type").and_then(|t| t.as_str()) == Some("text"))
+            {
+                let merged_text = content
+                    .iter()
                     .filter_map(|c| c.get("text").and_then(|t| t.as_str()))
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -3489,7 +3427,7 @@ async fn stream_gemma_response_to_csm(
     server_port: u16,
     gemma_model: &str,
     user_text: &str,
-    latest_audio_path: Option<&Path>,
+    latest_audio_wav_base64: Option<&str>,
     latest_image_paths: &[&Path],
     cancellation_token: Arc<AtomicBool>,
 ) -> Result<(u64, String), String> {
@@ -3497,7 +3435,7 @@ async fn stream_gemma_response_to_csm(
 
     let llm_started_at = Instant::now();
     let client = reqwest::Client::new();
-    let (conversation_session_id, conversation_turns, total_turn_count) = {
+    let (_conversation_session_id, conversation_turns, total_turn_count) = {
         let state = app_handle.state::<AppState>();
         let session_id = current_conversation_session_id(state.inner());
         let turns = state
@@ -3510,11 +3448,11 @@ async fn stream_gemma_response_to_csm(
         let selected_turns = select_conversation_turns_for_llm_context(&turns);
         (session_id, selected_turns, turns.len())
     };
-    let has_latest_audio = latest_audio_path.is_some();
+    let has_latest_audio = latest_audio_wav_base64.is_some();
     let has_any_image_context = !latest_image_paths.is_empty()
-        || conversation_turns.iter().any(|turn| {
-            !turn.image_paths.is_empty() || !turn.user_image_data_urls.is_empty()
-        });
+        || conversation_turns
+            .iter()
+            .any(|turn| !turn.image_paths.is_empty() || !turn.user_image_data_urls.is_empty());
     let llm_context_text_chars = conversation_turns
         .iter()
         .map(conversation_turn_text_char_count)
@@ -3559,7 +3497,7 @@ async fn stream_gemma_response_to_csm(
 
     messages.push(build_latest_user_turn_message(
         user_text,
-        latest_audio_path,
+        latest_audio_wav_base64,
         latest_image_paths,
     ));
 
@@ -3611,12 +3549,14 @@ async fn stream_gemma_response_to_csm(
     };
 
     let mut request_builder = client
-        .post(format!("{}/v1/chat/completions", base_url.trim_end_matches('/')))
+        .post(format!(
+            "{}/v1/chat/completions",
+            base_url.trim_end_matches('/')
+        ))
         .json(&request_body);
 
     if let Some(api_key) = external_llm_api_key(state.inner(), loaded_variant).as_ref() {
-        request_builder =
-            request_builder.header("Authorization", format!("Bearer {}", api_key));
+        request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
     }
 
     let mut response = request_builder
@@ -3827,8 +3767,7 @@ async fn emit_streamed_response_update(
     )
     .await?;
 
-    let pending_response_text =
-        &response_text[(*queued_response_bytes).min(response_text.len())..];
+    let pending_response_text = &response_text[(*queued_response_bytes).min(response_text.len())..];
     if !contains_spoken_content(pending_response_text) {
         *incomplete_stream_segment_started_at = None;
         return Ok(());
@@ -3845,7 +3784,9 @@ async fn emit_streamed_response_update(
 
     if should_flush_incomplete_streamed_response_segment(
         pending_response_text,
-        incomplete_stream_segment_started_at.as_ref().map(Instant::elapsed),
+        incomplete_stream_segment_started_at
+            .as_ref()
+            .map(Instant::elapsed),
     ) {
         info!(
             "Early-flushing incomplete streamed CSM segment after {} words",
@@ -4234,10 +4175,10 @@ fn extract_chat_content_text(content: serde_json::Value) -> String {
     }
 }
 
-fn build_input_audio_content(audio_path: &Path) -> ChatContent {
+fn build_input_audio_content(audio_wav_base64: &str) -> ChatContent {
     ChatContent::InputAudio {
         input_audio: InputAudio {
-            data: audio_path.to_string_lossy().into_owned(),
+            data: audio_wav_base64.to_string(),
             format: "wav".to_string(),
         },
     }
@@ -4256,7 +4197,9 @@ fn build_user_turn_message(
     }
     for image_path in image_paths {
         if let Some(image_data_url) = load_image_data_url(image_path) {
-            content.push(ChatContent::InputImage { image_url: image_data_url });
+            content.push(ChatContent::InputImage {
+                image_url: image_data_url,
+            });
         }
     }
     content.push(ChatContent::Text {
@@ -4286,7 +4229,7 @@ fn build_llm_system_prompt(
 
 fn build_latest_user_turn_message(
     user_text: &str,
-    latest_audio_path: Option<&Path>,
+    latest_audio_wav_base64: Option<&str>,
     latest_image_paths: &[&Path],
 ) -> ChatMessage {
     let mut content = Vec::new();
@@ -4299,15 +4242,13 @@ fn build_latest_user_turn_message(
         }
     }
 
-    if let Some(audio_path) = latest_audio_path {
-        if let Ok(audio_data) = std::fs::read(audio_path) {
-            content.push(ChatContent::InputAudio {
-                input_audio: InputAudio {
-                    data: BASE64_STANDARD.encode(audio_data),
-                    format: "wav".to_string(),
-                },
-            });
-        }
+    if let Some(audio_wav_base64) = latest_audio_wav_base64 {
+        content.push(ChatContent::InputAudio {
+            input_audio: InputAudio {
+                data: audio_wav_base64.to_string(),
+                format: "wav".to_string(),
+            },
+        });
     }
     content.push(ChatContent::Text {
         text: user_text.to_string(),
@@ -4381,9 +4322,17 @@ fn drain_next_sse_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
 fn log_chat_request_debug(conversation_session_id: u64, request: &ChatRequest) {
     let mut messages_summary = Vec::new();
     for msg in &request.messages {
-        let content_text = msg.content.iter().find_map(|c| {
-            if let ChatContent::Text { text } = c { Some(text.clone()) } else { None }
-        }).unwrap_or_default();
+        let content_text = msg
+            .content
+            .iter()
+            .find_map(|c| {
+                if let ChatContent::Text { text } = c {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
         messages_summary.push(serde_json::json!({
             "role": msg.role,
             "text": content_text.chars().take(50).collect::<String>(),
@@ -4405,15 +4354,53 @@ fn log_chat_request_debug(conversation_session_id: u64, request: &ChatRequest) {
     }
 }
 
-fn remove_temp_audio_file(audio_path: &Path) {
-    match std::fs::remove_file(audio_path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => warn!(
-            "Failed to remove temp audio file {}: {}",
-            audio_path.display(),
-            err
-        ),
+fn encode_audio_samples_as_wav_base64(samples: &[f32], sample_rate: u32) -> Result<String, String> {
+    let data_bytes_len = samples
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| "Captured audio was too large to encode.".to_string())?;
+    if data_bytes_len > u32::MAX as usize {
+        return Err("Captured audio was too large to encode.".to_string());
+    }
+
+    let data_bytes_len = data_bytes_len as u32;
+    let byte_rate = sample_rate
+        .checked_mul(2)
+        .ok_or_else(|| "Captured audio sample rate was invalid.".to_string())?;
+    let riff_chunk_size = 36u32
+        .checked_add(data_bytes_len)
+        .ok_or_else(|| "Captured audio was too large to encode.".to_string())?;
+    let mut wav_bytes = Vec::with_capacity(44 + data_bytes_len as usize);
+
+    wav_bytes.extend_from_slice(b"RIFF");
+    wav_bytes.extend_from_slice(&riff_chunk_size.to_le_bytes());
+    wav_bytes.extend_from_slice(b"WAVE");
+    wav_bytes.extend_from_slice(b"fmt ");
+    wav_bytes.extend_from_slice(&16u32.to_le_bytes());
+    wav_bytes.extend_from_slice(&1u16.to_le_bytes());
+    wav_bytes.extend_from_slice(&1u16.to_le_bytes());
+    wav_bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    wav_bytes.extend_from_slice(&byte_rate.to_le_bytes());
+    wav_bytes.extend_from_slice(&2u16.to_le_bytes());
+    wav_bytes.extend_from_slice(&16u16.to_le_bytes());
+    wav_bytes.extend_from_slice(b"data");
+    wav_bytes.extend_from_slice(&data_bytes_len.to_le_bytes());
+
+    for &sample in samples {
+        let amplitude = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        wav_bytes.extend_from_slice(&amplitude.to_le_bytes());
+    }
+
+    Ok(BASE64_STANDARD.encode(wav_bytes))
+}
+
+#[cfg(test)]
+fn input_audio_looks_inline(audio_data: &str) -> bool {
+    audio_data.starts_with("data:") || audio_data.contains(";base64,") || {
+        audio_data.len() >= 16
+            && audio_data
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '='))
     }
 }
 
@@ -4915,29 +4902,29 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        adaptive_end_of_utterance_silence_ms,
-        build_latest_user_turn_message, build_llm_system_prompt, parse_gemma_stream_event,
-        clamp_end_of_utterance_silence_ms,
+        adaptive_end_of_utterance_silence_ms, build_latest_user_turn_message,
+        build_llm_system_prompt, clamp_end_of_utterance_silence_ms, parse_gemma_stream_event,
         pending_streamed_segment_is_in_first_sentence,
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, required_silence_chunks,
         resolve_capture_sample_rate, sanitize_for_voice_output,
         select_conversation_turns_for_llm_context,
-        should_flush_incomplete_streamed_response_segment,
-        suppress_playback_echo, AudioPayload, ConversationTurn, ParsedGemmaStreamEvent,
-        AUDIO_CONTEXT_SYSTEM_PROMPT,
-        DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
-        utterance_voiced_duration_ms,
+        should_flush_incomplete_streamed_response_segment, suppress_playback_echo,
+        utterance_voiced_duration_ms, AudioPayload, ConversationTurn, ParsedGemmaStreamEvent,
+        AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT,
+        MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
     use crate::constants::{
         ADAPTIVE_ENDPOINTING_LONG_UTTERANCE_MS, ADAPTIVE_ENDPOINTING_SHORT_UTTERANCE_MS,
-        END_OF_UTTERANCE_SILENCE_MS, MAX_END_OF_UTTERANCE_SILENCE_MS,
-        MAX_LLM_CONTEXT_TURNS, MIN_END_OF_UTTERANCE_SILENCE_MS,
-        STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS,
+        END_OF_UTTERANCE_SILENCE_MS, MAX_END_OF_UTTERANCE_SILENCE_MS, MAX_LLM_CONTEXT_TURNS,
+        MIN_END_OF_UTTERANCE_SILENCE_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
+        STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS,
     };
     use std::{path::Path, time::Duration};
 
-    fn serialize_chat_messages_for_debug(messages: &[super::ChatMessage]) -> Vec<serde_json::Value> {
+    fn serialize_chat_messages_for_debug(
+        messages: &[super::ChatMessage],
+    ) -> Vec<serde_json::Value> {
         messages
             .iter()
             .map(|message| {
@@ -4966,9 +4953,13 @@ mod tests {
                             }
                         }
                         super::ChatContent::InputAudio { input_audio } => {
-                            let file_name = Path::new(&input_audio.data)
-                                .file_name()
-                                .and_then(|name| name.to_str());
+                            let file_name = if super::input_audio_looks_inline(&input_audio.data) {
+                                None
+                            } else {
+                                Path::new(&input_audio.data)
+                                    .file_name()
+                                    .and_then(|name| name.to_str())
+                            };
 
                             match file_name {
                                 Some(file_name) => serde_json::json!({
@@ -5102,8 +5093,7 @@ mod tests {
 
     #[test]
     fn completed_spoken_segments_keep_decimal_model_names_intact() {
-        let response_text =
-            "I am not familiar with Claude 3.5. Are you asking about a specific AI";
+        let response_text = "I am not familiar with Claude 3.5. Are you asking about a specific AI";
         let (segments, consumed_len) =
             prepare_completed_spoken_response_segments_for_csm(response_text);
 
@@ -5111,7 +5101,10 @@ mod tests {
             segments,
             vec!["I am not familiar with Claude 3.5.".to_string()]
         );
-        assert_eq!(&response_text[consumed_len..], "Are you asking about a specific AI");
+        assert_eq!(
+            &response_text[consumed_len..],
+            "Are you asking about a specific AI"
+        );
     }
 
     #[test]
@@ -5216,9 +5209,7 @@ mod tests {
     fn incomplete_streamed_segments_flush_after_timeout() {
         assert!(should_flush_incomplete_streamed_response_segment(
             "Still thinking through this response",
-            Some(Duration::from_millis(
-                STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS
-            ))
+            Some(Duration::from_millis(STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS))
         ));
     }
 
@@ -5232,7 +5223,8 @@ mod tests {
 
     #[test]
     fn incomplete_streamed_segments_stay_eligible_within_first_sentence() {
-        let response_text = "This first sentence has already been partially queued but it is still unfinished";
+        let response_text =
+            "This first sentence has already been partially queued but it is still unfinished";
         let queued_response_bytes = "This first sentence has already".len();
 
         assert!(pending_streamed_segment_is_in_first_sentence(
@@ -5321,6 +5313,24 @@ mod tests {
     }
 
     #[test]
+    fn latest_user_turn_message_includes_inline_audio_when_available() {
+        let audio_wav_base64 = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=";
+        let message = build_latest_user_turn_message("hello there", Some(audio_wav_base64), &[]);
+        let serialized = serde_json::to_value(&message).unwrap();
+
+        assert_eq!(serialized["role"], "user");
+        assert_eq!(serialized["content"].as_array().unwrap().len(), 2);
+        assert_eq!(serialized["content"][0]["type"], "input_audio");
+        assert_eq!(
+            serialized["content"][0]["input_audio"]["data"],
+            audio_wav_base64
+        );
+        assert_eq!(serialized["content"][0]["input_audio"]["format"], "wav");
+        assert_eq!(serialized["content"][1]["type"], "text");
+        assert_eq!(serialized["content"][1]["text"], "hello there");
+    }
+
+    #[test]
     fn debug_chat_messages_show_image_file_name() {
         let messages = vec![build_latest_user_turn_message(
             "hello there",
@@ -5337,6 +5347,24 @@ mod tests {
             "openduck-screen-test.png"
         );
         assert!(serialized[0]["content"][0].get("image_url").is_none());
+        assert_eq!(serialized[0]["content"][1]["type"], "text");
+        assert_eq!(serialized[0]["content"][1]["text"], "hello there");
+    }
+
+    #[test]
+    fn debug_chat_messages_hide_inline_audio_payloads() {
+        let messages = vec![build_latest_user_turn_message(
+            "hello there",
+            Some("UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA="),
+            &[],
+        )];
+        let serialized = serialize_chat_messages_for_debug(&messages);
+
+        assert_eq!(serialized[0]["role"], "user");
+        assert_eq!(serialized[0]["content"].as_array().unwrap().len(), 2);
+        assert_eq!(serialized[0]["content"][0]["type"], "input_audio");
+        assert_eq!(serialized[0]["content"][0]["format"], "wav");
+        assert!(serialized[0]["content"][0].get("file_name").is_none());
         assert_eq!(serialized[0]["content"][1]["type"], "text");
         assert_eq!(serialized[0]["content"][1]["text"], "hello there");
     }
@@ -5702,8 +5730,16 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
 
     let mut builder = MenuBuilder::new(app_handle).text(TRAY_SHOW_MENU_ID, "Show OpenDuck");
     if call_in_progress {
-        let region_shortcut_str = state.global_shortcut_look_at_screen_region.lock().unwrap().clone();
-        let entire_shortcut_str = state.global_shortcut_look_at_entire_screen.lock().unwrap().clone();
+        let region_shortcut_str = state
+            .global_shortcut_look_at_screen_region
+            .lock()
+            .unwrap()
+            .clone();
+        let entire_shortcut_str = state
+            .global_shortcut_look_at_entire_screen
+            .lock()
+            .unwrap()
+            .clone();
 
         let look_at_screen_label = if screen_capture_in_progress {
             "Selecting Screen...".to_string()
@@ -6499,7 +6535,9 @@ async fn cancel_active_generation(app_handle: &tauri::AppHandle, stop_csm_worker
 
     if let Some(active_generation) = active_generation {
         info!("Interrupting active generation {}", active_generation.id);
-        active_generation.cancellation_token.store(true, Ordering::Relaxed);
+        active_generation
+            .cancellation_token
+            .store(true, Ordering::Relaxed);
         // We give it a moment to handle cancellation gracefully (e.g. saving partial history)
         // but we still abort to ensure it doesn't hang forever if the loop is blocked.
         let handle = active_generation.handle;
@@ -6703,7 +6741,12 @@ fn append_conversation_turn_with_save(
         if title_guard.is_none() {
             let turns = state.conversation_turns.lock().unwrap();
             if turns.len() == 1 {
-                let first_sentence = turns[0].user_text.split(|c| c == '.' || c == '?' || c == '!').next().unwrap_or(&turns[0].user_text).trim();
+                let first_sentence = turns[0]
+                    .user_text
+                    .split(|c| c == '.' || c == '?' || c == '!')
+                    .next()
+                    .unwrap_or(&turns[0].user_text)
+                    .trim();
                 *title_guard = Some(first_sentence.chars().take(100).collect());
             }
         }
@@ -7279,7 +7322,9 @@ async fn run_interactive_screen_capture(app_handle: &AppHandle) -> Result<Option
         };
 
         if let Some(mut child) = child {
-            let status = child.wait().map_err(|err| format!("Failed to wait for screencapture: {err}"))?;
+            let status = child
+                .wait()
+                .map_err(|err| format!("Failed to wait for screencapture: {err}"))?;
             // screencapture doesn't output much to stdout/stderr in interactive mode unless it fails.
             // We just care about the status and if the file exists.
             Ok::<std::process::ExitStatus, String>(status)
@@ -7338,7 +7383,13 @@ async fn run_entire_screen_capture() -> Result<Option<PathBuf>, String> {
             if metadata.len() > 0 {
                 // Resize image to max 1024px width/height to avoid large payload issues with LLM providers
                 let _ = std::process::Command::new("/usr/bin/sips")
-                    .args(["-Z", "1024", &capture_path.to_string_lossy(), "--out", &capture_path.to_string_lossy()])
+                    .args([
+                        "-Z",
+                        "1024",
+                        &capture_path.to_string_lossy(),
+                        "--out",
+                        &capture_path.to_string_lossy(),
+                    ])
                     .output();
                 return Ok(Some(capture_path));
             }
@@ -7364,7 +7415,9 @@ async fn run_entire_screen_capture() -> Result<Option<PathBuf>, String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn run_interactive_screen_capture(_app_handle: &AppHandle) -> Result<Option<PathBuf>, String> {
+async fn run_interactive_screen_capture(
+    _app_handle: &AppHandle,
+) -> Result<Option<PathBuf>, String> {
     Err("Interactive screen capture is only supported on macOS right now.".to_string())
 }
 
@@ -7494,29 +7547,6 @@ fn emit_audio_turn_processing_error(app_handle: &tauri::AppHandle, message: Stri
         },
     );
     emit_call_stage(app_handle, "listening", "Listening");
-}
-
-fn create_temp_wav_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let timestamp_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
-
-    let mut path = app_handle
-        .path()
-        .app_cache_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("openduck"));
-    path.push("audio-capture");
-
-    std::fs::create_dir_all(&path).map_err(|err| {
-        format!(
-            "Failed to create the audio capture directory at {}: {err}",
-            path.display()
-        )
-    })?;
-
-    path.push(format!("openduck-audio-{}.wav", timestamp_ms));
-    Ok(path)
 }
 
 fn create_temp_screen_capture_path() -> PathBuf {
@@ -7975,14 +8005,16 @@ fn resolve_openduck_root() -> PathBuf {
 fn resolve_sessions_dir(_app_handle: &AppHandle) -> Result<PathBuf, String> {
     let mut path = resolve_openduck_root();
     path.push(SESSIONS_DIR_NAME);
-    std::fs::create_dir_all(&path).map_err(|err| format!("Failed to create sessions directory: {err}"))?;
+    std::fs::create_dir_all(&path)
+        .map_err(|err| format!("Failed to create sessions directory: {err}"))?;
     Ok(path)
 }
 
 fn resolve_session_dir(app_handle: &AppHandle, session_id: &str) -> Result<PathBuf, String> {
     let mut path = resolve_sessions_dir(app_handle)?;
     path.push(session_id);
-    std::fs::create_dir_all(&path).map_err(|err| format!("Failed to create session directory: {err}"))?;
+    std::fs::create_dir_all(&path)
+        .map_err(|err| format!("Failed to create session directory: {err}"))?;
     Ok(path)
 }
 
@@ -7995,7 +8027,8 @@ fn resolve_session_file(app_handle: &AppHandle, session_id: &str) -> Result<Path
 fn resolve_session_images_dir(app_handle: &AppHandle, session_id: &str) -> Result<PathBuf, String> {
     let mut path = resolve_session_dir(app_handle, session_id)?;
     path.push(SESSION_IMAGES_DIR_NAME);
-    std::fs::create_dir_all(&path).map_err(|err| format!("Failed to create session images directory: {err}"))?;
+    std::fs::create_dir_all(&path)
+        .map_err(|err| format!("Failed to create session images directory: {err}"))?;
     Ok(path)
 }
 
@@ -8014,34 +8047,44 @@ fn save_current_session(app_handle: &AppHandle, state: &AppState) -> Result<(), 
     let (turns, title) = {
         let turns_guard = state.conversation_turns.lock().unwrap();
         let title_guard = state.current_session_title.lock().unwrap();
-        (turns_guard.iter().cloned().collect::<Vec<_>>(), title_guard.clone())
+        (
+            turns_guard.iter().cloned().collect::<Vec<_>>(),
+            title_guard.clone(),
+        )
     };
 
     let metadata = if session_file.exists() {
         let content = std::fs::read_to_string(&session_file).map_err(|err| err.to_string())?;
-        let existing_data: SessionData = serde_json::from_str(&content).map_err(|err| err.to_string())?;
+        let existing_data: SessionData =
+            serde_json::from_str(&content).map_err(|err| err.to_string())?;
         let mut metadata = existing_data.metadata;
-        metadata.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        metadata.updated_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         if let Some(new_title) = title {
             metadata.title = new_title;
         }
         metadata
     } else {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         SessionMetadata {
             id: session_id.clone(),
             title: title.unwrap_or_else(|| {
-                turns.first().map(|t| t.user_text.chars().take(50).collect()).unwrap_or_else(|| "New Session".to_string())
+                turns
+                    .first()
+                    .map(|t| t.user_text.chars().take(50).collect())
+                    .unwrap_or_else(|| "New Session".to_string())
             }),
             created_at: now,
             updated_at: now,
         }
     };
 
-    let data = SessionData {
-        metadata,
-        turns,
-    };
+    let data = SessionData { metadata, turns };
 
     let content = serde_json::to_string_pretty(&data).map_err(|err| err.to_string())?;
     std::fs::write(session_file, content).map_err(|err| err.to_string())?;
@@ -8074,7 +8117,11 @@ fn get_sessions(app_handle: AppHandle) -> Result<Vec<SessionMetadata>, String> {
 }
 
 #[tauri::command]
-async fn load_session(app_handle: AppHandle, state: State<'_, AppState>, session_id: String) -> Result<Vec<ConversationTurn>, String> {
+async fn load_session(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<ConversationTurn>, String> {
     let session_file = resolve_session_file(&app_handle, &session_id)?;
     if !session_file.exists() {
         return Err("Session not found".to_string());
@@ -8115,8 +8162,15 @@ async fn load_session(app_handle: AppHandle, state: State<'_, AppState>, session
         *title_guard = Some(data.metadata.title);
     }
 
-    let max_id = data.turns.iter().map(|t| t.user_entry_id.max(t.assistant_entry_id)).max().unwrap_or(0);
-    state.next_conversation_entry_id.store(max_id + 1, Ordering::Relaxed);
+    let max_id = data
+        .turns
+        .iter()
+        .map(|t| t.user_entry_id.max(t.assistant_entry_id))
+        .max()
+        .unwrap_or(0);
+    state
+        .next_conversation_entry_id
+        .store(max_id + 1, Ordering::Relaxed);
 
     Ok(data.turns)
 }
@@ -8131,7 +8185,11 @@ fn delete_session(app_handle: AppHandle, session_id: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-fn rename_session(app_handle: AppHandle, session_id: String, new_title: String) -> Result<(), String> {
+fn rename_session(
+    app_handle: AppHandle,
+    session_id: String,
+    new_title: String,
+) -> Result<(), String> {
     let session_file = resolve_session_file(&app_handle, &session_id)?;
     if !session_file.exists() {
         return Err("Session not found".to_string());
@@ -8140,7 +8198,10 @@ fn rename_session(app_handle: AppHandle, session_id: String, new_title: String) 
     let content = std::fs::read_to_string(&session_file).map_err(|err| err.to_string())?;
     let mut data: SessionData = serde_json::from_str(&content).map_err(|err| err.to_string())?;
     data.metadata.title = new_title;
-    data.metadata.updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    data.metadata.updated_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
 
     let content = serde_json::to_string_pretty(&data).map_err(|err| err.to_string())?;
     std::fs::write(session_file, content).map_err(|err| err.to_string())?;
@@ -8242,8 +8303,7 @@ fn update_current_session_title(app_handle: AppHandle, state: State<'_, AppState
     }
 }
 
-fn resolve_runtime_root
-(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn resolve_runtime_root(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     app_handle
         .path()
         .app_data_dir()
@@ -8440,12 +8500,7 @@ fn resolve_csm_context_audio_file(
 
     if let Ok(current_dir) = std::env::current_dir() {
         candidates.push(current_dir.join(file_name));
-        candidates.push(
-            current_dir
-                .join("src-tauri")
-                .join("..")
-                .join(file_name),
-        );
+        candidates.push(current_dir.join("src-tauri").join("..").join(file_name));
 
         if current_dir.ends_with("src-tauri") {
             candidates.push(current_dir.join("..").join(file_name));
@@ -8585,7 +8640,10 @@ fn clear_model_cache(state: State<'_, AppState>, model: String) -> Result<(), St
             }
 
             let cache_dir = selected_variant.cache_dir().ok_or_else(|| {
-                format!("{} does not use a local cache directory.", selected_variant.label())
+                format!(
+                    "{} does not use a local cache directory.",
+                    selected_variant.label()
+                )
             })?;
             clear_huggingface_cache(cache_dir)?;
         }
@@ -9044,10 +9102,16 @@ pub fn run() {
                 .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
                         let state = app.state::<AppState>();
-                        let region_shortcut_str =
-                            state.global_shortcut_look_at_screen_region.lock().unwrap().clone();
-                        let entire_shortcut_str =
-                            state.global_shortcut_look_at_entire_screen.lock().unwrap().clone();
+                        let region_shortcut_str = state
+                            .global_shortcut_look_at_screen_region
+                            .lock()
+                            .unwrap()
+                            .clone();
+                        let entire_shortcut_str = state
+                            .global_shortcut_look_at_entire_screen
+                            .lock()
+                            .unwrap()
+                            .clone();
 
                         if let Ok(region_shortcut) = region_shortcut_str.parse::<Shortcut>() {
                             if shortcut == &region_shortcut {
@@ -9074,11 +9138,19 @@ pub fn run() {
         )
         .setup(|app| {
             let state = app.state::<AppState>();
-            let region_shortcut_str = state.global_shortcut_look_at_screen_region.lock().unwrap().clone();
+            let region_shortcut_str = state
+                .global_shortcut_look_at_screen_region
+                .lock()
+                .unwrap()
+                .clone();
             if let Ok(shortcut) = region_shortcut_str.parse::<Shortcut>() {
                 let _ = app.global_shortcut().register(shortcut);
             }
-            let entire_shortcut_str = state.global_shortcut_look_at_entire_screen.lock().unwrap().clone();
+            let entire_shortcut_str = state
+                .global_shortcut_look_at_entire_screen
+                .lock()
+                .unwrap()
+                .clone();
             if let Ok(shortcut) = entire_shortcut_str.parse::<Shortcut>() {
                 let _ = app.global_shortcut().register(shortcut);
             }
@@ -9210,20 +9282,20 @@ pub fn run() {
             set_gemma_variant,
             get_stt_model_variant,
             set_stt_model_variant,
-                check_model_status,
-                check_ollama_status,
-                get_ollama_models,
-                get_ollama_model,
-                set_ollama_model,
-                get_ollama_config,
-                set_ollama_config,
-                check_lmstudio_status,
-                get_lmstudio_models,
-                get_lmstudio_model,
-                set_lmstudio_model,
-                get_lmstudio_config,
-                set_lmstudio_config,
-                check_csm_status,
+            check_model_status,
+            check_ollama_status,
+            get_ollama_models,
+            get_ollama_model,
+            set_ollama_model,
+            get_ollama_config,
+            set_ollama_config,
+            check_lmstudio_status,
+            get_lmstudio_models,
+            get_lmstudio_model,
+            set_lmstudio_model,
+            get_lmstudio_config,
+            set_lmstudio_config,
+            check_csm_status,
             check_stt_status,
             clear_model_cache,
             get_model_download_status,

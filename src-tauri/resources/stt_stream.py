@@ -1,9 +1,11 @@
 import argparse
+import base64
 import contextlib
 import json
 import os
 import sys
 import traceback
+from io import BytesIO
 from pathlib import Path
 
 try:
@@ -72,6 +74,35 @@ def extract_transcription_text(result) -> str:
     return str(result).strip()
 
 
+def load_inline_audio(audio_wav_base64: str):
+    from mlx_audio.audio_io import read as audio_read
+    from mlx_audio.stt.utils import SAMPLE_RATE, resample_audio
+
+    audio_data = (
+        audio_wav_base64.split("base64,", 1)[1]
+        if "base64," in audio_wav_base64
+        else audio_wav_base64
+    )
+    decoded_audio = base64.b64decode(audio_data)
+    audio, sample_rate = audio_read(BytesIO(decoded_audio), always_2d=True)
+    if sample_rate != SAMPLE_RATE:
+        audio = resample_audio(audio, sample_rate, SAMPLE_RATE)
+
+    return np.asarray(audio, dtype=np.float32).mean(axis=1)
+
+
+def resolve_audio_input(request: dict):
+    audio_wav_base64 = request.get("audio_wav_base64")
+    if audio_wav_base64:
+        return load_inline_audio(str(audio_wav_base64)), "inline WAV payload"
+
+    audio_path = request.get("audio_path")
+    if audio_path:
+        return str(audio_path), Path(str(audio_path)).name
+
+    raise ValueError("Missing audio_path or audio_wav_base64 for STT request.")
+
+
 def run_server(repo_id: str) -> int:
     try:
         model = load_stt_model(repo_id)
@@ -110,23 +141,12 @@ def run_server(repo_id: str) -> int:
             )
             continue
 
-        audio_path = request.get("audio_path")
-        if not audio_path:
-            emit(
-                {
-                    "type": "error",
-                    "request_id": request_id,
-                    "message": "Missing audio_path for STT request.",
-                }
-            )
-            continue
-
-        emit_status(f"Transcribing {Path(str(audio_path)).name}...")
-
         try:
+            audio_input, audio_label = resolve_audio_input(request)
+            emit_status(f"Transcribing {audio_label}...")
             with redirect_library_stdout():
                 result = model.generate(
-                    audio=str(audio_path),
+                    audio=audio_input,
                     verbose=False,
                     condition_on_previous_text=False,
                     temperature=0.0,
