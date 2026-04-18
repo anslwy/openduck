@@ -360,6 +360,7 @@ struct AppState {
     tray_pong_playback_hydrated: Mutex<bool>,
     tray_pong_playback_modified_before_hydration: Mutex<bool>,
     end_of_utterance_silence_ms: Mutex<u32>,
+    llm_context_turn_limit: Mutex<Option<usize>>,
     llm_image_history_limit: Mutex<Option<usize>>,
     conversation_log_has_visible_images: Mutex<bool>,
     selected_ollama_model: Mutex<String>,
@@ -1111,6 +1112,13 @@ fn clamp_end_of_utterance_silence_ms(milliseconds: u32) -> u32 {
     )
 }
 
+fn clamp_llm_context_turn_limit(limit: u32) -> usize {
+    limit.clamp(
+        MIN_LLM_CONTEXT_TURN_LIMIT as u32,
+        MAX_LLM_CONTEXT_TURN_LIMIT as u32,
+    ) as usize
+}
+
 fn clamp_llm_image_history_limit(limit: u32) -> usize {
     limit.clamp(
         MIN_LLM_IMAGE_HISTORY_LIMIT as u32,
@@ -1123,6 +1131,13 @@ fn set_end_of_utterance_silence_ms(state: State<'_, AppState>, milliseconds: u32
     let effective_milliseconds = clamp_end_of_utterance_silence_ms(milliseconds);
     *state.end_of_utterance_silence_ms.lock().unwrap() = effective_milliseconds;
     effective_milliseconds
+}
+
+#[tauri::command]
+fn set_llm_context_turn_limit(state: State<'_, AppState>, limit: Option<u32>) -> Option<u32> {
+    let effective_limit = limit.map(clamp_llm_context_turn_limit);
+    *state.llm_context_turn_limit.lock().unwrap() = effective_limit;
+    effective_limit.map(|value| value as u32)
 }
 
 #[tauri::command]
@@ -3843,7 +3858,15 @@ async fn stream_gemma_response_to_csm(
 
     let llm_started_at = Instant::now();
     let client = reqwest::Client::new();
-    let (_conversation_session_id, conversation_turns, total_turn_count, llm_image_history_limit) = {
+    let (
+        _conversation_session_id,
+        conversation_turns,
+        total_turn_count,
+        llm_context_turn_limit,
+        llm_context_text_chars,
+        llm_context_trimmed_by_turn_limit,
+        llm_image_history_limit,
+    ) = {
         let state = app_handle.state::<AppState>();
         let session_id = current_conversation_session_id(state.inner());
         let turns = state
@@ -3853,9 +3876,18 @@ async fn stream_gemma_response_to_csm(
             .iter()
             .cloned()
             .collect::<Vec<_>>();
-        let selected_turns = select_conversation_turns_for_llm_context(&turns);
+        let llm_context_turn_limit = *state.llm_context_turn_limit.lock().unwrap();
+        let selection = select_conversation_turns_for_llm_context(&turns, llm_context_turn_limit);
         let image_history_limit = *state.llm_image_history_limit.lock().unwrap();
-        (session_id, selected_turns, turns.len(), image_history_limit)
+        (
+            session_id,
+            selection.turns,
+            turns.len(),
+            llm_context_turn_limit,
+            selection.total_text_chars,
+            selection.trimmed_by_turn_limit,
+            image_history_limit,
+        )
     };
     let has_latest_audio = latest_audio_wav_base64.is_some();
     let mut conversation_turn_image_urls = conversation_turns
@@ -3885,16 +3917,22 @@ async fn stream_gemma_response_to_csm(
         );
     }
     let has_any_image_context = retained_image_count > 0;
-    let llm_context_text_chars = conversation_turns
-        .iter()
-        .map(conversation_turn_text_char_count)
-        .sum::<usize>();
     if conversation_turns.len() != total_turn_count {
+        let effective_turn_limit = llm_context_turn_limit
+            .map(|limit| limit.max(MIN_LLM_CONTEXT_TURN_LIMIT))
+            .map(|limit| limit.to_string())
+            .unwrap_or_else(|| "unlimited".to_string());
+        let trim_reason = if llm_context_trimmed_by_turn_limit {
+            format!("turn limit ({effective_turn_limit})")
+        } else {
+            "turn selection changed unexpectedly".to_string()
+        };
         info!(
-            "Trimmed LLM voice context from {} to {} turns ({} text chars)",
+            "Trimmed LLM voice context from {} to {} turns ({} text chars kept, reason: {})",
             total_turn_count,
             conversation_turns.len(),
-            llm_context_text_chars
+            llm_context_text_chars,
+            trim_reason
         );
     }
     let mut messages = vec![ChatMessage {
@@ -3967,7 +4005,7 @@ async fn stream_gemma_response_to_csm(
     }
 
     // Hide the logs for now
-    // log_chat_request_debug(conversation_session_id, &request);
+    // log_chat_request_debug(0, &request);
 
     let request_body = if is_external {
         serialize_external_chat_request(&request)
@@ -4585,22 +4623,38 @@ fn conversation_turn_text_char_count(turn: &ConversationTurn) -> usize {
     turn.user_text.chars().count() + turn.assistant_text.chars().count()
 }
 
-fn select_conversation_turns_for_llm_context(turns: &[ConversationTurn]) -> Vec<ConversationTurn> {
+struct LlmContextSelection {
+    turns: Vec<ConversationTurn>,
+    total_text_chars: usize,
+    trimmed_by_turn_limit: bool,
+}
+
+fn select_conversation_turns_for_llm_context(
+    turns: &[ConversationTurn],
+    turn_limit: Option<usize>,
+) -> LlmContextSelection {
     if turns.is_empty() {
-        return Vec::new();
+        return LlmContextSelection {
+            turns: Vec::new(),
+            total_text_chars: 0,
+            trimmed_by_turn_limit: false,
+        };
     }
 
+    let effective_turn_limit = turn_limit.map(|limit| limit.max(MIN_LLM_CONTEXT_TURN_LIMIT));
     let mut selected_turns = Vec::new();
     let mut total_text_chars = 0usize;
+    let mut trimmed_by_turn_limit = false;
 
     for turn in turns.iter().rev() {
-        let keep_for_minimum = selected_turns.len() < MIN_LLM_CONTEXT_TURNS;
+        let keep_for_minimum = selected_turns.len() < MIN_LLM_CONTEXT_TURN_LIMIT;
         let turn_text_chars = conversation_turn_text_char_count(turn);
-        let exceeds_turn_limit = selected_turns.len() >= MAX_LLM_CONTEXT_TURNS;
-        let exceeds_char_budget = !selected_turns.is_empty()
-            && total_text_chars + turn_text_chars > MAX_LLM_CONTEXT_TEXT_CHARS;
+        let exceeds_turn_limit = effective_turn_limit
+            .map(|limit| selected_turns.len() >= limit)
+            .unwrap_or(false);
 
-        if !keep_for_minimum && (exceeds_turn_limit || exceeds_char_budget) {
+        if !keep_for_minimum && exceeds_turn_limit {
+            trimmed_by_turn_limit |= exceeds_turn_limit;
             break;
         }
 
@@ -4609,7 +4663,11 @@ fn select_conversation_turns_for_llm_context(turns: &[ConversationTurn]) -> Vec<
     }
 
     selected_turns.reverse();
-    selected_turns
+    LlmContextSelection {
+        turns: selected_turns,
+        total_text_chars,
+        trimmed_by_turn_limit,
+    }
 }
 
 fn load_image_data_urls_from_paths<'a>(
@@ -4816,7 +4874,10 @@ fn extract_stream_chunk_content(chunk: ChatCompletionStreamChunk) -> (String, St
                 .unwrap_or_default();
 
             if content.is_empty() && reasoning.is_empty() {
-                choice.finish_reason.as_ref().map(|_| (String::new(), String::new()))
+                choice
+                    .finish_reason
+                    .as_ref()
+                    .map(|_| (String::new(), String::new()))
             } else {
                 Some((content, reasoning))
             }
@@ -5446,8 +5507,9 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 mod tests {
     use super::{
         apply_llm_image_history_limit, build_latest_user_turn_message, build_llm_system_prompt,
-        build_user_turn_message, clamp_end_of_utterance_silence_ms, clamp_llm_image_history_limit,
-        parse_gemma_stream_event, pending_streamed_segment_is_in_first_sentence,
+        build_user_turn_message, clamp_end_of_utterance_silence_ms, clamp_llm_context_turn_limit,
+        clamp_llm_image_history_limit, parse_gemma_stream_event,
+        pending_streamed_segment_is_in_first_sentence,
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, required_silence_chunks,
         resolve_capture_sample_rate, samples_duration_ms, sanitize_for_voice_output,
@@ -5458,8 +5520,9 @@ mod tests {
         MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
     use crate::constants::{
-        END_OF_UTTERANCE_SILENCE_MS, MAX_END_OF_UTTERANCE_SILENCE_MS, MAX_LLM_CONTEXT_TURNS,
-        MAX_LLM_IMAGE_HISTORY_LIMIT, MIN_END_OF_UTTERANCE_SILENCE_MS, MIN_LLM_IMAGE_HISTORY_LIMIT,
+        DEFAULT_LLM_CONTEXT_TURN_LIMIT, END_OF_UTTERANCE_SILENCE_MS,
+        MAX_END_OF_UTTERANCE_SILENCE_MS, MAX_LLM_CONTEXT_TURN_LIMIT, MAX_LLM_IMAGE_HISTORY_LIMIT,
+        MIN_END_OF_UTTERANCE_SILENCE_MS, MIN_LLM_CONTEXT_TURN_LIMIT, MIN_LLM_IMAGE_HISTORY_LIMIT,
         STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS,
     };
     use std::{fs, path::Path, time::Duration};
@@ -5716,11 +5779,42 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let selected = select_conversation_turns_for_llm_context(&turns);
+        let selected =
+            select_conversation_turns_for_llm_context(&turns, DEFAULT_LLM_CONTEXT_TURN_LIMIT);
 
-        assert_eq!(selected.len(), MAX_LLM_CONTEXT_TURNS);
-        assert_eq!(selected.first().unwrap().user_text, "user turn 3");
-        assert_eq!(selected.last().unwrap().assistant_text, "assistant turn 9");
+        assert_eq!(
+            selected.turns.len(),
+            DEFAULT_LLM_CONTEXT_TURN_LIMIT.unwrap()
+        );
+        assert!(selected.trimmed_by_turn_limit);
+        assert_eq!(selected.turns.first().unwrap().user_text, "user turn 3");
+        assert_eq!(
+            selected.turns.last().unwrap().assistant_text,
+            "assistant turn 9"
+        );
+    }
+
+    #[test]
+    fn llm_context_selection_can_be_unlimited() {
+        let turns = (0..4)
+            .map(|index| ConversationTurn {
+                user_entry_id: index * 2,
+                assistant_entry_id: index * 2 + 1,
+                user_text: format!("u{index}"),
+                assistant_text: format!("a{index}"),
+                image_paths: Vec::new(),
+                user_image_data_urls: Vec::new(),
+                image_path: None,
+                user_image_data_url: None,
+            })
+            .collect::<Vec<_>>();
+
+        let selected = select_conversation_turns_for_llm_context(&turns, None);
+
+        assert_eq!(selected.turns.len(), turns.len());
+        assert!(!selected.trimmed_by_turn_limit);
+        assert_eq!(selected.turns.first().unwrap().user_text, "u0");
+        assert_eq!(selected.turns.last().unwrap().assistant_text, "a3");
     }
 
     #[test]
@@ -5791,6 +5885,18 @@ mod tests {
     }
 
     #[test]
+    fn clamp_llm_context_turn_limit_stays_in_supported_range() {
+        assert_eq!(
+            clamp_llm_context_turn_limit((MIN_LLM_CONTEXT_TURN_LIMIT - 1) as u32),
+            MIN_LLM_CONTEXT_TURN_LIMIT
+        );
+        assert_eq!(
+            clamp_llm_context_turn_limit((MAX_LLM_CONTEXT_TURN_LIMIT + 1) as u32),
+            MAX_LLM_CONTEXT_TURN_LIMIT
+        );
+    }
+
+    #[test]
     fn clamp_llm_image_history_limit_stays_in_supported_range() {
         assert_eq!(
             clamp_llm_image_history_limit((MIN_LLM_IMAGE_HISTORY_LIMIT - 1) as u32),
@@ -5810,7 +5916,8 @@ mod tests {
 
         assert!(matches!(
             event,
-            ParsedGemmaStreamEvent::Delta(text) if text == "Hello there."
+            ParsedGemmaStreamEvent::Delta(text, reasoning)
+                if text == "Hello there." && reasoning.is_empty()
         ));
     }
 
@@ -5923,7 +6030,10 @@ mod tests {
         assert_eq!(serialized["role"], "user");
         assert_eq!(serialized["content"].as_array().unwrap().len(), 2);
         assert_eq!(serialized["content"][0]["type"], "image_url");
-        assert_eq!(serialized["content"][0]["image_url"]["url"], TEST_IMAGE_DATA_URL);
+        assert_eq!(
+            serialized["content"][0]["image_url"]["url"],
+            TEST_IMAGE_DATA_URL
+        );
         assert_eq!(serialized["content"][1]["type"], "text");
         assert_eq!(serialized["content"][1]["text"], "hello there");
     }
@@ -9813,6 +9923,7 @@ pub fn run() {
             tray_pong_playback_hydrated: Mutex::new(false),
             tray_pong_playback_modified_before_hydration: Mutex::new(false),
             end_of_utterance_silence_ms: Mutex::new(END_OF_UTTERANCE_SILENCE_MS),
+            llm_context_turn_limit: Mutex::new(DEFAULT_LLM_CONTEXT_TURN_LIMIT),
             llm_image_history_limit: Mutex::new(DEFAULT_LLM_IMAGE_HISTORY_LIMIT),
             conversation_log_has_visible_images: Mutex::new(false),
             selected_ollama_model: Mutex::new("gemma2:2b".to_string()),
@@ -9860,6 +9971,7 @@ pub fn run() {
             set_pong_playback_enabled,
             initialize_pong_playback_preference,
             set_end_of_utterance_silence_ms,
+            set_llm_context_turn_limit,
             set_llm_image_history_limit,
             get_global_shortcut_look_at_entire_screen,
             initialize_global_shortcut_look_at_entire_screen,

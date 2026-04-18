@@ -34,6 +34,7 @@
         DEFAULT_CSM_MODEL,
         DEFAULT_END_OF_UTTERANCE_SILENCE_MS,
         DEFAULT_GEMMA_VARIANT,
+        DEFAULT_LLM_CONTEXT_TURN_LIMIT,
         DEFAULT_LLM_IMAGE_HISTORY_LIMIT,
         DEFAULT_LMSTUDIO_MODEL,
         DEFAULT_OLLAMA_MODEL,
@@ -41,11 +42,14 @@
         DEFAULT_VOICE_SYSTEM_PROMPT,
         END_OF_UTTERANCE_SILENCE_STEP_MS,
         END_OF_UTTERANCE_SILENCE_STORAGE_KEY,
+        LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY,
         LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY,
         MODEL_PREFERENCES_STORAGE_KEY,
         MAX_END_OF_UTTERANCE_SILENCE_MS,
+        MAX_LLM_CONTEXT_TURN_LIMIT,
         MAX_LLM_IMAGE_HISTORY_LIMIT,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
+        MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_LLM_IMAGE_HISTORY_LIMIT,
         MODEL_PRESETS,
         PONG_PLAYBACK_STORAGE_KEY,
@@ -132,6 +136,11 @@
     type StoredEndOfUtteranceSilencePreference = {
         version: 1;
         milliseconds: number;
+    };
+
+    type StoredLlmContextTurnLimitPreference = {
+        version: 1;
+        limit: number | null;
     };
 
     type StoredLlmImageHistoryLimitPreference = {
@@ -230,6 +239,9 @@
     let showStatEnabled = $state(false);
     let showSubtitleEnabled = $state(true);
     let endOfUtteranceSilenceMs = $state(DEFAULT_END_OF_UTTERANCE_SILENCE_MS);
+    let llmContextTurnLimit = $state<number | null>(
+        DEFAULT_LLM_CONTEXT_TURN_LIMIT,
+    );
     let llmImageHistoryLimit = $state<number | null>(
         DEFAULT_LLM_IMAGE_HISTORY_LIMIT,
     );
@@ -1096,6 +1108,37 @@
         );
     }
 
+    function clampLlmContextTurnLimit(limit: number | null): number | null {
+        if (limit === null) {
+            return null;
+        }
+
+        if (!Number.isFinite(limit)) {
+            return DEFAULT_LLM_CONTEXT_TURN_LIMIT;
+        }
+
+        const roundedLimit = Math.round(limit);
+        return Math.min(
+            MAX_LLM_CONTEXT_TURN_LIMIT,
+            Math.max(MIN_LLM_CONTEXT_TURN_LIMIT, roundedLimit),
+        );
+    }
+
+    function persistLlmContextTurnLimitPreference(limit: number | null) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredLlmContextTurnLimitPreference = {
+            version: 1,
+            limit,
+        };
+        window.localStorage.setItem(
+            LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function clampLlmImageHistoryLimit(limit: number | null): number | null {
         if (limit === null) {
             return DEFAULT_LLM_IMAGE_HISTORY_LIMIT;
@@ -1274,6 +1317,40 @@
         }
     }
 
+    function loadLlmContextTurnLimitPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_LLM_CONTEXT_TURN_LIMIT;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_LLM_CONTEXT_TURN_LIMIT;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                limit?: unknown;
+            };
+            if (
+                parsed.version !== 1 ||
+                (parsed.limit !== null && typeof parsed.limit !== "number")
+            ) {
+                return DEFAULT_LLM_CONTEXT_TURN_LIMIT;
+            }
+
+            return clampLlmContextTurnLimit(parsed.limit ?? null);
+        } catch (err) {
+            console.error(
+                "Failed to restore LLM context turn limit preference:",
+                err,
+            );
+            return DEFAULT_LLM_CONTEXT_TURN_LIMIT;
+        }
+    }
+
     function loadLlmImageHistoryLimitPreferenceFromStorage() {
         if (typeof window === "undefined") {
             return DEFAULT_LLM_IMAGE_HISTORY_LIMIT;
@@ -1370,6 +1447,18 @@
         });
     }
 
+    function applyLlmContextTurnLimitPreference(limit: number | null) {
+        const normalizedLimit = clampLlmContextTurnLimit(limit);
+        llmContextTurnLimit = normalizedLimit;
+        persistLlmContextTurnLimitPreference(normalizedLimit);
+
+        void invoke("set_llm_context_turn_limit", {
+            limit: normalizedLimit,
+        }).catch((err) => {
+            console.error("Failed to update LLM context turn limit:", err);
+        });
+    }
+
     function applyLlmImageHistoryLimitPreference(limit: number | null) {
         const normalizedLimit = clampLlmImageHistoryLimit(limit);
         llmImageHistoryLimit = normalizedLimit;
@@ -1420,6 +1509,11 @@
         const storedMilliseconds =
             loadEndOfUtteranceSilencePreferenceFromStorage();
         applyEndOfUtteranceSilencePreference(storedMilliseconds);
+    }
+
+    async function initializeLlmContextTurnLimitPreference() {
+        const storedLimit = loadLlmContextTurnLimitPreferenceFromStorage();
+        applyLlmContextTurnLimitPreference(storedLimit);
     }
 
     async function initializeLlmImageHistoryLimitPreference() {
@@ -4785,6 +4879,7 @@
             await initializeShowStatPreference();
             await initializeShowSubtitlePreference();
             await initializeEndOfUtteranceSilencePreference();
+            await initializeLlmContextTurnLimitPreference();
             await initializeLlmImageHistoryLimitPreference();
             await initializeGlobalShortcutPreference();
             await initializeGlobalShortcutEntireScreenPreference();
@@ -5362,6 +5457,7 @@
                     {showStatEnabled}
                     {showSubtitleEnabled}
                     {endOfUtteranceSilenceMs}
+                    {llmContextTurnLimit}
                     {llmImageHistoryLimit}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
                     onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
@@ -5370,6 +5466,7 @@
                     onUpdateShowStat={applyShowStatPreference}
                     onUpdateShowSubtitle={applyShowSubtitlePreference}
                     onUpdateEndOfUtteranceSilenceMs={applyEndOfUtteranceSilencePreference}
+                    onUpdateLlmContextTurnLimit={applyLlmContextTurnLimitPreference}
                     onUpdateLlmImageHistoryLimit={applyLlmImageHistoryLimitPreference}
                 />
             </div>

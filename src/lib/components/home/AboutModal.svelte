@@ -6,10 +6,13 @@
 
     import {
         DEFAULT_LLM_IMAGE_HISTORY_LIMIT,
+        LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE,
         END_OF_UTTERANCE_SILENCE_STEP_MS,
         LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE,
+        MAX_LLM_CONTEXT_TURN_LIMIT,
         MAX_END_OF_UTTERANCE_SILENCE_MS,
         MAX_LLM_IMAGE_HISTORY_LIMIT,
+        MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
         MIN_LLM_IMAGE_HISTORY_LIMIT,
     } from "$lib/openduck/config";
@@ -37,6 +40,7 @@
         showStatEnabled,
         showSubtitleEnabled,
         endOfUtteranceSilenceMs,
+        llmContextTurnLimit,
         llmImageHistoryLimit,
         onUpdateGlobalShortcut,
         onUpdateGlobalShortcutEntireScreen,
@@ -45,6 +49,7 @@
         onUpdateShowStat,
         onUpdateShowSubtitle,
         onUpdateEndOfUtteranceSilenceMs,
+        onUpdateLlmContextTurnLimit,
         onUpdateLlmImageHistoryLimit,
     } = $props<{
         buildInfo: BuildInfo | null;
@@ -63,6 +68,7 @@
         showStatEnabled: boolean;
         showSubtitleEnabled: boolean;
         endOfUtteranceSilenceMs: number;
+        llmContextTurnLimit: number | null;
         llmImageHistoryLimit: number | null;
         onUpdateGlobalShortcut: (shortcut: string) => void;
         onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
@@ -71,6 +77,7 @@
         onUpdateShowStat: (enabled: boolean) => void;
         onUpdateShowSubtitle: (enabled: boolean) => void;
         onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
+        onUpdateLlmContextTurnLimit: (limit: number | null) => void;
         onUpdateLlmImageHistoryLimit: (limit: number | null) => void;
     }>();
 
@@ -221,6 +228,35 @@
             100
         );
     });
+    const llmContextTurnSliderValue = $derived.by(() => {
+        if (llmContextTurnLimit === null) {
+            return LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE;
+        }
+
+        return llmContextTurnLimit;
+    });
+    const formattedLlmContextTurnLimit = $derived.by(() => {
+        if (llmContextTurnLimit === null) {
+            return "Unlimited";
+        }
+
+        return `${llmContextTurnLimit} turns`;
+    });
+    const llmContextTurnProgress = $derived.by(() => {
+        const range =
+            LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE -
+            MIN_LLM_CONTEXT_TURN_LIMIT;
+        if (range <= 0) {
+            return 0;
+        }
+
+        return (
+            ((llmContextTurnSliderValue - MIN_LLM_CONTEXT_TURN_LIMIT) / range) *
+            100
+        );
+    });
+    const minimumLlmContextTurnLabel = `${MIN_LLM_CONTEXT_TURN_LIMIT}`;
+    const maximumLlmContextTurnLabel = "Unlimited";
     const llmImageHistorySliderValue = $derived.by(() => {
         if (llmImageHistoryLimit === DEFAULT_LLM_IMAGE_HISTORY_LIMIT) {
             return LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE;
@@ -431,6 +467,59 @@
                         <div class="about-slider-scale" aria-hidden="true">
                             <span>{minimumEndOfUtteranceSilenceLabel}</span>
                             <span>{maximumEndOfUtteranceSilenceLabel}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="about-metadata-row slider-row">
+                <span class="about-metadata-label"
+                    >Last Conversation Turns Visible to AI</span
+                >
+                <div class="about-slider-control">
+                    <div class="about-slider-header">
+                        <span class="about-slider-detail"
+                            >Caps how many recent back-and-forth turns the
+                            model can inspect across the active conversation
+                            context. Move it to Unlimited to keep the full
+                            conversation history.</span
+                        >
+                        <span class="about-slider-value"
+                            >{formattedLlmContextTurnLimit}</span
+                        >
+                    </div>
+                    <div class="about-slider-surface">
+                        <input
+                            type="range"
+                            class="about-slider"
+                            min={MIN_LLM_CONTEXT_TURN_LIMIT}
+                            max={LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE}
+                            step="1"
+                            value={llmContextTurnSliderValue}
+                            style={`--slider-progress: ${llmContextTurnProgress}%;`}
+                            aria-label="Last conversation turns visible to AI"
+                            oninput={(event) => {
+                                const value = Number(
+                                    (event.currentTarget as HTMLInputElement)
+                                        .value,
+                                );
+
+                                onUpdateLlmContextTurnLimit(
+                                    value >=
+                                        LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE
+                                        ? null
+                                        : Math.min(
+                                              MAX_LLM_CONTEXT_TURN_LIMIT,
+                                              Math.max(
+                                                  MIN_LLM_CONTEXT_TURN_LIMIT,
+                                                  value,
+                                              ),
+                                          ),
+                                );
+                            }}
+                        />
+                        <div class="about-slider-scale" aria-hidden="true">
+                            <span>{minimumLlmContextTurnLabel}</span>
+                            <span>{maximumLlmContextTurnLabel}</span>
                         </div>
                     </div>
                 </div>
