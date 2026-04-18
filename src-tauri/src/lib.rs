@@ -10,6 +10,7 @@ use frontend_events::*;
 use model_variants::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -270,6 +271,11 @@ struct LiveTranscriptionState {
     last_emitted_text: String,
     cached_text: Option<String>,
     cached_voiced_samples: usize,
+    next_attempt_id: u64,
+    in_flight_attempt_id: Option<u64>,
+    in_flight_voiced_samples: usize,
+    in_flight_started_in_silence: bool,
+    in_flight_handle: Option<tauri::async_runtime::JoinHandle<Result<String, String>>>,
 }
 
 struct AppState {
@@ -2741,6 +2747,22 @@ const LIVE_STT_SPEECH_INTERVAL_MS: u64 = 1500;
 const LIVE_STT_SILENCE_INTERVAL_MS: u64 = 450;
 const LIVE_STT_MIN_BUFFER_MS: u32 = 450;
 const LIVE_STT_MIN_VOICED_MS: u32 = 250;
+const LIVE_STT_MIN_VOICED_MS_IN_SILENCE: u32 = 80;
+const LIVE_STT_ENDPOINT_VOICED_GRACE_MS: u32 = 120;
+
+fn noop_waker() -> std::task::Waker {
+    unsafe fn clone(_: *const ()) -> std::task::RawWaker {
+        std::task::RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+    unsafe fn wake(_: *const ()) {}
+    unsafe fn wake_by_ref(_: *const ()) {}
+    unsafe fn drop(_: *const ()) {}
+
+    static VTABLE: std::task::RawWakerVTable =
+        std::task::RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+
+    unsafe { std::task::Waker::from_raw(std::task::RawWaker::new(std::ptr::null(), &VTABLE)) }
+}
 
 fn samples_duration_ms(sample_count: usize, sample_rate: u32) -> u32 {
     if sample_count == 0 || sample_rate == 0 {
@@ -2758,21 +2780,49 @@ fn begin_live_transcription_utterance(state: &AppState) -> u64 {
         last_emitted_text: String::new(),
         cached_text: None,
         cached_voiced_samples: 0,
+        next_attempt_id: 1,
+        in_flight_attempt_id: None,
+        in_flight_voiced_samples: 0,
+        in_flight_started_in_silence: false,
+        in_flight_handle: None,
     };
     utterance_id
 }
 
-fn take_live_transcript_for_endpoint(
+fn take_live_transcription_handoff_for_endpoint(
     state: &AppState,
     utterance_voiced_samples: usize,
-) -> Option<String> {
+    capture_sample_rate: u32,
+) -> (
+    Option<String>,
+    Option<tauri::async_runtime::JoinHandle<Result<String, String>>>,
+) {
     let mut live_guard = state.live_transcription.lock().unwrap();
+
     let transcript = live_guard
         .cached_text
         .clone()
         .filter(|_| live_guard.cached_voiced_samples >= utterance_voiced_samples);
+
+    let mut handle = None;
+    if let Some(in_flight) = live_guard.in_flight_handle.take() {
+        let coverage_delta_samples =
+            utterance_voiced_samples.saturating_sub(live_guard.in_flight_voiced_samples);
+        let coverage_delta_ms = samples_duration_ms(coverage_delta_samples, capture_sample_rate);
+        let should_wait = transcript.is_none()
+            && (live_guard.in_flight_started_in_silence
+                || live_guard.in_flight_voiced_samples >= utterance_voiced_samples
+                || coverage_delta_ms <= LIVE_STT_ENDPOINT_VOICED_GRACE_MS);
+
+        if should_wait {
+            handle = Some(in_flight);
+        } else {
+            in_flight.abort();
+        }
+    }
+
     *live_guard = LiveTranscriptionState::default();
-    transcript
+    (transcript, handle)
 }
 
 fn start_live_transcription_loop(
@@ -2787,16 +2837,92 @@ fn start_live_transcription_loop(
         loop {
             tokio::time::sleep(Duration::from_millis(LIVE_STT_TICK_MS)).await;
 
-            // Step 1: Check whether the utterance is still active and whether we need an update.
-            let cached_voiced_samples = {
+            // Step 1: If the utterance ended, stop looping.
+            {
                 let state = app_handle.state::<AppState>();
                 let live_guard = state.live_transcription.lock().unwrap();
                 if live_guard.utterance_id != Some(utterance_id) {
                     return;
                 }
-                live_guard.cached_voiced_samples
+            }
+
+            // Step 2: If we have an in-flight transcription that completed, commit it.
+            let finished_attempt = {
+                let state = app_handle.state::<AppState>();
+                let mut live_guard = state.live_transcription.lock().unwrap();
+                if live_guard.utterance_id != Some(utterance_id) {
+                    return;
+                }
+
+                if live_guard.in_flight_handle.is_none() {
+                    None
+                } else {
+                    let handle = live_guard
+                        .in_flight_handle
+                        .as_mut()
+                        .expect("handle should exist when checked above");
+                    let waker = noop_waker();
+                    let mut cx = std::task::Context::from_waker(&waker);
+                    match std::pin::Pin::new(handle).poll(&mut cx) {
+                        std::task::Poll::Ready(result) => {
+                            live_guard.in_flight_handle.take();
+                            let attempt_id = live_guard.in_flight_attempt_id.take();
+                            let voiced_samples = live_guard.in_flight_voiced_samples;
+                            live_guard.in_flight_voiced_samples = 0;
+                            live_guard.in_flight_started_in_silence = false;
+                            Some((result, attempt_id, voiced_samples))
+                        }
+                        std::task::Poll::Pending => None,
+                    }
+                }
             };
 
+            if let Some((result, attempt_id, attempt_voiced_samples)) = finished_attempt {
+                match result {
+                    Ok(Ok(transcript)) => {
+                        if !transcript.is_empty() && is_meaningful_transcript(&transcript) {
+                            let should_emit = {
+                                let state = app_handle.state::<AppState>();
+                                let mut live_guard = state.live_transcription.lock().unwrap();
+                                if live_guard.utterance_id != Some(utterance_id) {
+                                    return;
+                                }
+
+                                live_guard.cached_text = Some(transcript.clone());
+                                live_guard.cached_voiced_samples = attempt_voiced_samples;
+                                let changed = transcript != live_guard.last_emitted_text;
+                                if changed {
+                                    live_guard.last_emitted_text = transcript.clone();
+                                }
+                                changed
+                            };
+
+                            if should_emit {
+                                emit_transcript_partial_event(
+                                    &app_handle,
+                                    TranscriptPartialEvent { text: transcript },
+                                );
+                            }
+                        }
+                    }
+                    Ok(Err(err)) => {
+                        debug!(
+                            "Live STT attempt {:?} failed: {}",
+                            attempt_id.unwrap_or_default(),
+                            err
+                        );
+                    }
+                    Err(err) => {
+                        debug!(
+                            "Live STT attempt {:?} join failed: {}",
+                            attempt_id.unwrap_or_default(),
+                            err
+                        );
+                    }
+                }
+            }
+
+            // Step 3: Check whether we should start a new transcription attempt.
             let (buffer_len_samples, voiced_samples, silent_count) = {
                 let state = app_handle.state::<AppState>();
                 let voiced_samples = *state.current_utterance_voiced_samples.lock().unwrap();
@@ -2805,13 +2931,32 @@ fn start_live_transcription_loop(
                 (buffer_len_samples, voiced_samples, silent_count)
             };
 
-            if samples_duration_ms(buffer_len_samples, capture_sample_rate) < LIVE_STT_MIN_BUFFER_MS
-                || samples_duration_ms(voiced_samples, capture_sample_rate) < LIVE_STT_MIN_VOICED_MS
-            {
+            let buffer_len_ms = samples_duration_ms(buffer_len_samples, capture_sample_rate);
+            if buffer_len_ms < LIVE_STT_MIN_BUFFER_MS {
                 continue;
             }
 
-            if voiced_samples <= cached_voiced_samples {
+            let voiced_ms = samples_duration_ms(voiced_samples, capture_sample_rate);
+            let min_voiced_ms = if silent_count > 0 {
+                LIVE_STT_MIN_VOICED_MS_IN_SILENCE
+            } else {
+                LIVE_STT_MIN_VOICED_MS
+            };
+            if voiced_ms < min_voiced_ms {
+                continue;
+            }
+
+            let should_start_attempt = {
+                let state = app_handle.state::<AppState>();
+                let live_guard = state.live_transcription.lock().unwrap();
+                if live_guard.utterance_id != Some(utterance_id) {
+                    return;
+                }
+
+                live_guard.in_flight_handle.is_none() && voiced_samples > live_guard.cached_voiced_samples
+            };
+
+            if !should_start_attempt {
                 continue;
             }
 
@@ -2841,41 +2986,32 @@ fn start_live_transcription_loop(
                     }
                 };
 
-            let transcript =
-                match transcribe_audio_with_stt_worker(&app_handle, &audio_wav_base64).await {
-                    Ok(transcript) => transcript,
-                    Err(err) => {
-                        debug!("Live STT transcription failed: {}", err);
-                        continue;
-                    }
-                };
+            let app_handle_for_task = app_handle.clone();
+            let handle = tauri::async_runtime::spawn(async move {
+                transcribe_audio_with_stt_worker(&app_handle_for_task, &audio_wav_base64).await
+            });
 
-            if transcript.is_empty() || !is_meaningful_transcript(&transcript) {
-                continue;
-            }
-
-            // Step 2: Commit the latest transcript if the utterance is still active.
-            let should_emit = {
+            // Step 4: Store the in-flight attempt so endpointing can reuse it.
+            let attempt_started_in_silence = silent_count > 0;
+            {
                 let state = app_handle.state::<AppState>();
                 let mut live_guard = state.live_transcription.lock().unwrap();
                 if live_guard.utterance_id != Some(utterance_id) {
+                    handle.abort();
                     return;
                 }
 
-                live_guard.cached_text = Some(transcript.clone());
-                live_guard.cached_voiced_samples = voiced_samples;
-                let changed = transcript != live_guard.last_emitted_text;
-                if changed {
-                    live_guard.last_emitted_text = transcript.clone();
+                if live_guard.in_flight_handle.is_some() {
+                    handle.abort();
+                    continue;
                 }
-                changed
-            };
 
-            if should_emit {
-                emit_transcript_partial_event(
-                    &app_handle,
-                    TranscriptPartialEvent { text: transcript },
-                );
+                let attempt_id = live_guard.next_attempt_id;
+                live_guard.next_attempt_id = attempt_id.saturating_add(1);
+                live_guard.in_flight_attempt_id = Some(attempt_id);
+                live_guard.in_flight_voiced_samples = voiced_samples;
+                live_guard.in_flight_started_in_silence = attempt_started_in_silence;
+                live_guard.in_flight_handle = Some(handle);
             }
         }
     });
@@ -2961,61 +3097,81 @@ async fn receive_audio_chunk(
         start_live_transcription_loop(app_handle.clone(), utterance_id, capture_sample_rate);
     }
 
-    let mut buffer = state.audio_buffer.lock().unwrap();
-    let mut silent_count = state.silent_chunks_count.lock().unwrap();
-    let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
-    let mut current_utterance_voiced_samples =
-        state.current_utterance_voiced_samples.lock().unwrap();
-    let mut is_speaking = state.is_speaking.lock().unwrap();
+    let mut endpoint_audio: Option<Vec<f32>> = None;
+    let mut endpoint_voiced_samples: usize = 0;
+    {
+        let mut buffer = state.audio_buffer.lock().unwrap();
+        let mut silent_count = state.silent_chunks_count.lock().unwrap();
+        let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
+        let mut current_utterance_voiced_samples =
+            state.current_utterance_voiced_samples.lock().unwrap();
+        let mut is_speaking = state.is_speaking.lock().unwrap();
 
-    if *is_speaking {
-        buffer.extend_from_slice(&prepared_chunk.samples);
+        if *is_speaking {
+            buffer.extend_from_slice(&prepared_chunk.samples);
 
-        let silence_chunks_required = required_silence_chunks(
-            capture_sample_rate,
-            prepared_chunk.samples.len(),
-            configured_silence_ms,
-        );
-
-        if *silent_count >= silence_chunks_required {
-            info!(
-                "Silence detected; endpointing with configured {} ms silence before transcription.",
-                configured_silence_ms
+            let silence_chunks_required = required_silence_chunks(
+                capture_sample_rate,
+                prepared_chunk.samples.len(),
+                configured_silence_ms,
             );
-            emit_call_stage(&app_handle, "processing_audio", "Processing Audio");
-            if *state.tray_pong_playback_enabled.lock().unwrap() {
-                emit_play_tray_pong(&app_handle);
-            }
-            let cached_transcript = if active_stt_model.uses_worker() {
-                take_live_transcript_for_endpoint(state.inner(), *current_utterance_voiced_samples)
-            } else {
-                None
-            };
-            process_audio_turn(&buffer, capture_sample_rate, app_handle, cached_transcript);
-            buffer.clear();
-            {
-                let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
-                pre_buffer.clear();
-            }
-            *is_speaking = false;
-            *silent_count = 0;
-            *speaking_count = 0;
-            *current_utterance_voiced_samples = 0;
 
-            let mut vad_guard = state.vad.lock().unwrap();
-            if let Some(vad) = vad_guard.as_mut() {
-                vad.reset();
+            if *silent_count >= silence_chunks_required {
+                endpoint_voiced_samples = *current_utterance_voiced_samples;
+                endpoint_audio = Some(std::mem::take(&mut *buffer));
+                {
+                    let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
+                    pre_buffer.clear();
+                }
+                *is_speaking = false;
+                *silent_count = 0;
+                *speaking_count = 0;
+                *current_utterance_voiced_samples = 0;
+
+                let mut vad_guard = state.vad.lock().unwrap();
+                if let Some(vad) = vad_guard.as_mut() {
+                    vad.reset();
+                }
+            }
+        } else {
+            let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
+            pre_buffer.extend(prepared_chunk.samples.iter().copied());
+            let max_pre_buffer_samples =
+                (capture_sample_rate as u64 * PRE_SPEECH_BUFFER_MS as u64 / 1000) as usize;
+            if pre_buffer.len() > max_pre_buffer_samples {
+                let to_remove = pre_buffer.len() - max_pre_buffer_samples;
+                pre_buffer.drain(..to_remove);
             }
         }
-    } else {
-        let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
-        pre_buffer.extend(prepared_chunk.samples.iter().copied());
-        let max_pre_buffer_samples =
-            (capture_sample_rate as u64 * PRE_SPEECH_BUFFER_MS as u64 / 1000) as usize;
-        if pre_buffer.len() > max_pre_buffer_samples {
-            let to_remove = pre_buffer.len() - max_pre_buffer_samples;
-            pre_buffer.drain(..to_remove);
+    }
+
+    if let Some(endpoint_audio) = endpoint_audio {
+        info!(
+            "Silence detected; endpointing with configured {} ms silence before transcription.",
+            configured_silence_ms
+        );
+        emit_call_stage(&app_handle, "processing_audio", "Processing Audio");
+        if *state.tray_pong_playback_enabled.lock().unwrap() {
+            emit_play_tray_pong(&app_handle);
         }
+
+        let (cached_transcript, in_flight_transcript) = if active_stt_model.uses_worker() {
+            take_live_transcription_handoff_for_endpoint(
+                state.inner(),
+                endpoint_voiced_samples,
+                capture_sample_rate,
+            )
+        } else {
+            (None, None)
+        };
+
+        process_audio_turn(
+            endpoint_audio,
+            capture_sample_rate,
+            app_handle,
+            cached_transcript,
+            in_flight_transcript,
+        );
     }
     Ok(())
 }
@@ -3033,10 +3189,11 @@ fn required_silence_chunks(
 }
 
 fn process_audio_turn(
-    samples: &[f32],
+    samples: Vec<f32>,
     capture_sample_rate: u32,
     app_handle: tauri::AppHandle,
     cached_transcript: Option<String>,
+    in_flight_transcript: Option<tauri::async_runtime::JoinHandle<Result<String, String>>>,
 ) {
     let generation_id;
     let conversation_session_id;
@@ -3073,19 +3230,6 @@ fn process_audio_turn(
         .map(|text| sanitize_for_voice_output(&text))
         .filter(|text| !text.is_empty());
 
-    let audio_wav_base64 = if cached_transcript.is_some() && active_stt_model.uses_worker() {
-        None
-    } else {
-        match encode_audio_samples_as_wav_base64(samples, capture_sample_rate) {
-            Ok(audio_wav_base64) => Some(audio_wav_base64),
-            Err(err) => {
-                error!("{}", err);
-                emit_audio_turn_processing_error(&app_handle, err);
-                return;
-            }
-        }
-    };
-
     let app_handle_for_task = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         info!(
@@ -3093,14 +3237,84 @@ fn process_audio_turn(
             active_stt_model.label()
         );
 
+        let mut audio_wav_base64: Option<String> = None;
         let transcription_result = if active_stt_model.uses_worker() {
             if let Some(transcript) = cached_transcript.clone() {
                 Ok(transcript)
+            } else if let Some(handle) = in_flight_transcript {
+                match handle.await {
+                    Ok(Ok(transcript)) => Ok(transcript),
+                    Ok(Err(err)) => {
+                        debug!("In-flight STT failed, falling back: {}", err);
+                        let audio_wav_base64 = match audio_wav_base64.as_deref() {
+                            Some(audio_wav_base64) => audio_wav_base64,
+                            None => {
+                                let encoded = match encode_audio_samples_as_wav_base64(
+                                    &samples,
+                                    capture_sample_rate,
+                                ) {
+                                    Ok(encoded) => encoded,
+                                    Err(err) => {
+                                        error!("{}", err);
+                                        emit_audio_turn_processing_error(
+                                            &app_handle_for_task,
+                                            err,
+                                        );
+                                        return;
+                                    }
+                                };
+                                audio_wav_base64 = Some(encoded);
+                                audio_wav_base64.as_deref().unwrap()
+                            }
+                        };
+
+                        transcribe_audio_with_stt_worker(&app_handle_for_task, audio_wav_base64)
+                            .await
+                    }
+                    Err(err) => {
+                        debug!("In-flight STT join failed, falling back: {}", err);
+                        let audio_wav_base64 = match audio_wav_base64.as_deref() {
+                            Some(audio_wav_base64) => audio_wav_base64,
+                            None => {
+                                let encoded = match encode_audio_samples_as_wav_base64(
+                                    &samples,
+                                    capture_sample_rate,
+                                ) {
+                                    Ok(encoded) => encoded,
+                                    Err(err) => {
+                                        error!("{}", err);
+                                        emit_audio_turn_processing_error(
+                                            &app_handle_for_task,
+                                            err,
+                                        );
+                                        return;
+                                    }
+                                };
+                                audio_wav_base64 = Some(encoded);
+                                audio_wav_base64.as_deref().unwrap()
+                            }
+                        };
+
+                        transcribe_audio_with_stt_worker(&app_handle_for_task, audio_wav_base64)
+                            .await
+                    }
+                }
             } else {
                 let audio_wav_base64 = match audio_wav_base64.as_deref() {
                     Some(audio_wav_base64) => audio_wav_base64,
                     None => {
-                        return;
+                        let encoded =
+                            match encode_audio_samples_as_wav_base64(&samples, capture_sample_rate)
+                            {
+                                Ok(encoded) => encoded,
+                                Err(err) => {
+                                    error!("{}", err);
+                                    emit_audio_turn_processing_error(&app_handle_for_task, err);
+                                    return;
+                                }
+                            };
+                        audio_wav_base64 = Some(encoded);
+                        audio_wav_base64.as_deref().unwrap()
                     }
                 };
 
@@ -3110,7 +3324,17 @@ fn process_audio_turn(
             let audio_wav_base64 = match audio_wav_base64.as_deref() {
                 Some(audio_wav_base64) => audio_wav_base64,
                 None => {
-                    return;
+                    let encoded =
+                        match encode_audio_samples_as_wav_base64(&samples, capture_sample_rate) {
+                            Ok(encoded) => encoded,
+                            Err(err) => {
+                                error!("{}", err);
+                                emit_audio_turn_processing_error(&app_handle_for_task, err);
+                                return;
+                            }
+                        };
+                    audio_wav_base64 = Some(encoded);
+                    audio_wav_base64.as_deref().unwrap()
                 }
             };
 
@@ -3122,6 +3346,8 @@ fn process_audio_turn(
             )
             .await
         };
+
+        drop(samples);
 
         match transcription_result {
             Ok(user_text) => {
