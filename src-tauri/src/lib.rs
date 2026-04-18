@@ -55,9 +55,21 @@ struct ChatMessage {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ChatContent {
-    Text { text: String },
-    InputImage { image_url: String },
-    InputAudio { input_audio: InputAudio },
+    Text {
+        text: String,
+    },
+    #[serde(rename = "image_url")]
+    InputImage {
+        image_url: ImageUrlContent,
+    },
+    InputAudio {
+        input_audio: InputAudio,
+    },
+}
+
+#[derive(Serialize)]
+struct ImageUrlContent {
+    url: String,
 }
 
 #[derive(Serialize)]
@@ -3753,7 +3765,7 @@ async fn transcribe_audio_with_stt_worker(
     Ok(sanitized_transcript)
 }
 
-fn serialize_request_for_ollama(request: &ChatRequest) -> serde_json::Value {
+fn serialize_external_chat_request(request: &ChatRequest) -> serde_json::Value {
     let messages: Vec<serde_json::Value> = request
         .messages
         .iter()
@@ -3767,10 +3779,10 @@ fn serialize_request_for_ollama(request: &ChatRequest) -> serde_json::Value {
                         "text": text
                     })),
                     ChatContent::InputImage { image_url } => {
-                        let data_url = if image_url.starts_with("data:") {
-                            Some(image_url.clone())
+                        let data_url = if image_url.url.starts_with("data:") {
+                            Some(image_url.url.clone())
                         } else {
-                            load_image_data_url(Path::new(image_url))
+                            load_image_data_url(Path::new(&image_url.url))
                         };
 
                         data_url.map(|url| {
@@ -3928,20 +3940,20 @@ async fn stream_gemma_response_to_csm(
     let state = app_handle.state::<AppState>();
     let loaded_variant = loaded_gemma_variant(state.inner())
         .unwrap_or_else(|| selected_gemma_variant(state.inner()));
-    let is_ollama = loaded_variant == GemmaVariant::Ollama;
-    let provider_label = if loaded_variant.is_external() {
+    let is_external = loaded_variant.is_external();
+    let provider_label = if is_external {
         loaded_variant.label()
     } else {
         "MLX"
     };
     let mut _temp_image_files = Vec::new();
-    if !is_ollama {
+    if !is_external {
         for msg in &mut request.messages {
             for content in &mut msg.content {
                 if let ChatContent::InputImage { image_url } = content {
-                    if image_url.starts_with("data:") {
-                        if let Some(path) = write_data_url_to_temp_file(image_url) {
-                            *image_url = path.to_string_lossy().into_owned();
+                    if image_url.url.starts_with("data:") {
+                        if let Some(path) = write_data_url_to_temp_file(&image_url.url) {
+                            image_url.url = path.to_string_lossy().into_owned();
                             _temp_image_files.push(TempImageFile::new(path));
                         }
                     }
@@ -3953,8 +3965,8 @@ async fn stream_gemma_response_to_csm(
     // Hide the logs for now
     // log_chat_request_debug(conversation_session_id, &request);
 
-    let request_body = if is_ollama {
-        serialize_request_for_ollama(&request)
+    let request_body = if is_external {
+        serialize_external_chat_request(&request)
     } else {
         serde_json::to_value(&request).unwrap()
     };
@@ -4667,7 +4679,9 @@ fn build_user_turn_message_with_image_urls(user_text: &str, image_urls: &[String
     let mut content = Vec::new();
     for image_data_url in image_urls {
         content.push(ChatContent::InputImage {
-            image_url: image_data_url.clone(),
+            image_url: ImageUrlContent {
+                url: image_data_url.clone(),
+            },
         });
     }
     content.push(ChatContent::Text {
@@ -4718,7 +4732,9 @@ fn build_latest_user_turn_message_with_image_urls(
 
     for image_data_url in latest_image_urls {
         content.push(ChatContent::InputImage {
-            image_url: image_data_url.clone(),
+            image_url: ImageUrlContent {
+                url: image_data_url.clone(),
+            },
         });
     }
 
@@ -5419,22 +5435,22 @@ mod tests {
                             "text": text,
                         }),
                         super::ChatContent::InputImage { image_url } => {
-                            let file_name = if image_url.starts_with("data:") {
+                            let file_name = if image_url.url.starts_with("data:") {
                                 None
                             } else {
-                                Path::new(image_url)
+                                Path::new(&image_url.url)
                                     .file_name()
                                     .and_then(|name| name.to_str())
                             };
 
                             match file_name {
                                 Some(file_name) => serde_json::json!({
-                                    "type": "input_image",
+                                    "type": "image_url",
                                     "file_name": file_name,
                                 }),
                                 None => serde_json::json!({
-                                    "type": "input_image",
-                                    "image_url": image_url,
+                                    "type": "image_url",
+                                    "image_url": image_url.url,
                                 }),
                             }
                         }
@@ -5779,8 +5795,8 @@ mod tests {
 
         assert_eq!(serialized["role"], "user");
         assert_eq!(serialized["content"].as_array().unwrap().len(), 2);
-        assert_eq!(serialized["content"][0]["type"], "input_image");
-        assert!(serialized["content"][0]["image_url"]
+        assert_eq!(serialized["content"][0]["type"], "image_url");
+        assert!(serialized["content"][0]["image_url"]["url"]
             .as_str()
             .unwrap()
             .starts_with("data:image/png;base64,"));
@@ -5820,7 +5836,7 @@ mod tests {
 
         assert_eq!(serialized[0]["role"], "user");
         assert_eq!(serialized[0]["content"].as_array().unwrap().len(), 2);
-        assert_eq!(serialized[0]["content"][0]["type"], "input_image");
+        assert_eq!(serialized[0]["content"][0]["type"], "image_url");
         assert!(serialized[0]["content"][0]["image_url"]
             .as_str()
             .unwrap()
@@ -5859,8 +5875,8 @@ mod tests {
 
         assert_eq!(serialized["role"], "user");
         assert_eq!(serialized["content"].as_array().unwrap().len(), 2);
-        assert_eq!(serialized["content"][0]["type"], "input_image");
-        assert_eq!(serialized["content"][0]["image_url"], TEST_IMAGE_DATA_URL);
+        assert_eq!(serialized["content"][0]["type"], "image_url");
+        assert_eq!(serialized["content"][0]["image_url"]["url"], TEST_IMAGE_DATA_URL);
         assert_eq!(serialized["content"][1]["type"], "text");
         assert_eq!(serialized["content"][1]["text"], "hello there");
     }
