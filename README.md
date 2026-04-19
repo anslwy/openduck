@@ -4,7 +4,7 @@
   <img src="icon.png" alt="OpenDuck Logo" width="200">
 </p>
 
-Screen-aware, voice-first, local AI tool that stays lean and out of your away until you ask. Built for Apple Silicon (M1 or later).
+Screen-aware, voice-first, local AI tool that stays lean and out of your away until you ask questions. Built for Apple Silicon (M1 or later).
 
 ![Rust](https://img.shields.io/badge/rust-1.80+-orange.svg)
 ![Svelte](https://img.shields.io/badge/svelte-5.0+-ff3e00.svg)
