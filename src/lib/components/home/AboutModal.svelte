@@ -36,6 +36,7 @@
     import ShortcutCapture from "./ShortcutCapture.svelte";
 
     let {
+        calling,
         buildInfo,
         buildInfoError,
         availableAppUpdate,
@@ -78,6 +79,7 @@
         onUpdateLlmContextTurnLimit,
         onUpdateLlmImageHistoryLimit,
     } = $props<{
+        calling: boolean;
         buildInfo: BuildInfo | null;
         buildInfoError: string | null;
         availableAppUpdate: AppUpdateInfo | null;
@@ -463,623 +465,626 @@
             >
         </button>
     </div>
-
-    {#if buildInfo}
-        <div class="about-hero">
-            <img class="about-app-icon" src="/icon.png" alt="" />
-            <div class="about-hero-copy">
-                <div class="about-app-name-row">
-                    <span class="about-app-name">{buildInfo.app_name}</span>
-                    {#if buildInfo.version_label}
-                        <span class="about-version-label"
-                            >{buildInfo.version_label}</span
-                        >
-                    {/if}
-                </div>
-                <span class="about-version-number">{buildInfo.version}</span>
-            </div>
-        </div>
-
-        <div class="about-metadata-card">
-            <div class="about-metadata-row">
-                <span class="about-metadata-label"
-                    >Enable Pop Sound (Screenshots / Processing Audio / Finished
-                    Response)</span
-                >
-                <button
-                    type="button"
-                    class="quantize-toggle"
-                    class:active={pongPlaybackEnabled}
-                    onclick={() => onUpdatePongPlayback(!pongPlaybackEnabled)}
-                >
-                    <span class="quantize-dot"></span>
-                    <span>{pongPlaybackEnabled ? "Enabled" : "Disabled"}</span>
-                </button>
-            </div>
-            <div class="about-metadata-row">
-                <span class="about-metadata-label"
-                    >Auto-Unmute After Attaching Screenshot</span
-                >
-                <button
-                    type="button"
-                    class="quantize-toggle"
-                    class:active={autoUnmuteOnPastedScreenshotEnabled}
-                    onclick={() =>
-                        onUpdateAutoUnmuteOnPastedScreenshot(
-                            !autoUnmuteOnPastedScreenshotEnabled,
-                        )}
-                >
-                    <span class="quantize-dot"></span>
-                    <span
-                        >{autoUnmuteOnPastedScreenshotEnabled
-                            ? "Enabled"
-                            : "Disabled"}</span
-                    >
-                </button>
-            </div>
-            <div class="about-metadata-row">
-                <span class="about-metadata-label"
-                    >Select Last Session When Startup</span
-                >
-                <button
-                    type="button"
-                    class="quantize-toggle"
-                    class:active={selectLastSessionEnabled}
-                    onclick={() =>
-                        onUpdateSelectLastSession(!selectLastSessionEnabled)}
-                >
-                    <span class="quantize-dot"></span>
-                    <span
-                        >{selectLastSessionEnabled
-                            ? "Enabled"
-                            : "Disabled"}</span
-                    >
-                </button>
-            </div>
-            <div class="about-metadata-row">
-                <span class="about-metadata-label"
-                    >Show Stats (Latency, Memory Usage) [Experimental]</span
-                >
-                <button
-                    type="button"
-                    class="quantize-toggle"
-                    class:active={showStatEnabled}
-                    onclick={() => onUpdateShowStat(!showStatEnabled)}
-                >
-                    <span class="quantize-dot"></span>
-                    <span>{showStatEnabled ? "Enabled" : "Disabled"}</span>
-                </button>
-            </div>
-            <div class="about-metadata-row">
-                <span class="about-metadata-label"
-                    >Show Subtitles (Live Transcript)</span
-                >
-                <button
-                    type="button"
-                    class="quantize-toggle"
-                    class:active={showSubtitleEnabled}
-                    onclick={() => onUpdateShowSubtitle(!showSubtitleEnabled)}
-                >
-                    <span class="quantize-dot"></span>
-                    <span>{showSubtitleEnabled ? "Enabled" : "Disabled"}</span>
-                </button>
-            </div>
-            <div class="about-metadata-row">
-                <span class="about-metadata-label"
-                    >Show AI Subtitle</span
-                >
-                <button
-                    type="button"
-                    class="quantize-toggle"
-                    class:active={showAiSubtitleEnabled}
-                    onclick={() => onUpdateShowAiSubtitle(!showAiSubtitleEnabled)}
-                >
-                    <span class="quantize-dot"></span>
-                    <span>{showAiSubtitleEnabled ? "Enabled" : "Disabled"}</span>
-                </button>
-            </div>
-            <div class="about-metadata-row">
-                <span class="about-metadata-label"
-                    >Show Hidden-Window Overlay (Toasts, Live Transcript, AI
-                    Subtitle)</span
-                >
-                <button
-                    type="button"
-                    class="quantize-toggle"
-                    class:active={showHiddenWindowOverlayEnabled}
-                    onclick={() =>
-                        onUpdateShowHiddenWindowOverlay(
-                            !showHiddenWindowOverlayEnabled,
-                        )}
-                >
-                    <span class="quantize-dot"></span>
-                    <span
-                        >{showHiddenWindowOverlayEnabled
-                            ? "Enabled"
-                            : "Disabled"}</span
-                    >
-                </button>
-            </div>
-            <div class="about-metadata-row slider-row">
-                <span class="about-metadata-label"
-                    >Silence Before Sending Audio to STT</span
-                >
-                <div class="about-slider-control">
-                    <div class="about-slider-header">
-                        <span class="about-slider-detail"
-                            >Longer waits capture more pause-heavy speech before
-                            transcription starts. The minimum stays conservative
-                            to avoid mid-sentence cutoffs.</span
-                        >
-                        <span class="about-slider-value"
-                            >{formattedEndOfUtteranceSilence}</span
-                        >
+    <div class="about-modal-content">
+        {#if buildInfo}
+            <div class="about-hero">
+                <img class="about-app-icon" src="/icon.png" alt="" />
+                <div class="about-hero-copy">
+                    <div class="about-app-name-row">
+                        <span class="about-app-name">{buildInfo.app_name}</span>
+                        {#if buildInfo.version_label}
+                            <span class="about-version-label"
+                                >{buildInfo.version_label}</span
+                            >
+                        {/if}
                     </div>
-                    <div class="about-slider-surface">
-                        <input
-                            type="range"
-                            class="about-slider"
-                            min={MIN_END_OF_UTTERANCE_SILENCE_MS}
-                            max={MAX_END_OF_UTTERANCE_SILENCE_MS}
-                            step={END_OF_UTTERANCE_SILENCE_STEP_MS}
-                            value={endOfUtteranceSilenceMs}
-                            style={`--slider-progress: ${endOfUtteranceSilenceProgress}%;`}
-                            aria-label="Silence before sending audio to STT"
-                            oninput={(event) =>
-                                onUpdateEndOfUtteranceSilenceMs(
-                                    Number(
+                    <span class="about-version-number">{buildInfo.version}</span>
+                </div>
+            </div>
+
+            <div class="about-metadata-card">
+                <div class="about-metadata-row">
+                    <span class="about-metadata-label"
+                        >Enable Pop Sound (Screenshots / Processing Audio / Finished
+                        Response)</span
+                    >
+                    <button
+                        type="button"
+                        class="quantize-toggle"
+                        class:active={pongPlaybackEnabled}
+                        onclick={() => onUpdatePongPlayback(!pongPlaybackEnabled)}
+                    >
+                        <span class="quantize-dot"></span>
+                        <span>{pongPlaybackEnabled ? "Enabled" : "Disabled"}</span>
+                    </button>
+                </div>
+                <div class="about-metadata-row">
+                    <span class="about-metadata-label"
+                        >Auto-Unmute After Attaching Screenshot</span
+                    >
+                    <button
+                        type="button"
+                        class="quantize-toggle"
+                        class:active={autoUnmuteOnPastedScreenshotEnabled}
+                        onclick={() =>
+                            onUpdateAutoUnmuteOnPastedScreenshot(
+                                !autoUnmuteOnPastedScreenshotEnabled,
+                            )}
+                    >
+                        <span class="quantize-dot"></span>
+                        <span
+                            >{autoUnmuteOnPastedScreenshotEnabled
+                                ? "Enabled"
+                                : "Disabled"}</span
+                        >
+                    </button>
+                </div>
+                <div class="about-metadata-row">
+                    <span class="about-metadata-label"
+                        >Select Last Session When Startup</span
+                    >
+                    <button
+                        type="button"
+                        class="quantize-toggle"
+                        class:active={selectLastSessionEnabled}
+                        onclick={() =>
+                            onUpdateSelectLastSession(!selectLastSessionEnabled)}
+                    >
+                        <span class="quantize-dot"></span>
+                        <span
+                            >{selectLastSessionEnabled
+                                ? "Enabled"
+                                : "Disabled"}</span
+                        >
+                    </button>
+                </div>
+                <div class="about-metadata-row">
+                    <span class="about-metadata-label"
+                        >Show Stats (Latency, Memory Usage) [Experimental]</span
+                    >
+                    <button
+                        type="button"
+                        class="quantize-toggle"
+                        class:active={showStatEnabled}
+                        onclick={() => onUpdateShowStat(!showStatEnabled)}
+                    >
+                        <span class="quantize-dot"></span>
+                        <span>{showStatEnabled ? "Enabled" : "Disabled"}</span>
+                    </button>
+                </div>
+                <div class="about-metadata-row">
+                    <span class="about-metadata-label"
+                        >Show Subtitles (Live Transcript)</span
+                    >
+                    <button
+                        type="button"
+                        class="quantize-toggle"
+                        class:active={showSubtitleEnabled}
+                        onclick={() => onUpdateShowSubtitle(!showSubtitleEnabled)}
+                    >
+                        <span class="quantize-dot"></span>
+                        <span>{showSubtitleEnabled ? "Enabled" : "Disabled"}</span>
+                    </button>
+                </div>
+                <div class="about-metadata-row">
+                    <span class="about-metadata-label"
+                        >Show AI Subtitle</span
+                    >
+                    <button
+                        type="button"
+                        class="quantize-toggle"
+                        class:active={showAiSubtitleEnabled}
+                        onclick={() => onUpdateShowAiSubtitle(!showAiSubtitleEnabled)}
+                    >
+                        <span class="quantize-dot"></span>
+                        <span>{showAiSubtitleEnabled ? "Enabled" : "Disabled"}</span>
+                    </button>
+                </div>
+                <div class="about-metadata-row">
+                    <span class="about-metadata-label"
+                        >Show Hidden-Window Overlay (Toasts, Live Transcript, AI
+                        Subtitle)</span
+                    >
+                    <button
+                        type="button"
+                        class="quantize-toggle"
+                        class:active={showHiddenWindowOverlayEnabled}
+                        onclick={() =>
+                            onUpdateShowHiddenWindowOverlay(
+                                !showHiddenWindowOverlayEnabled,
+                            )}
+                    >
+                        <span class="quantize-dot"></span>
+                        <span
+                            >{showHiddenWindowOverlayEnabled
+                                ? "Enabled"
+                                : "Disabled"}</span
+                        >
+                    </button>
+                </div>
+                <div class="about-metadata-row slider-row">
+                    <span class="about-metadata-label"
+                        >Silence Before Sending Audio to STT</span
+                    >
+                    <div class="about-slider-control">
+                        <div class="about-slider-header">
+                            <span class="about-slider-detail"
+                                >Longer waits capture more pause-heavy speech before
+                                transcription starts. The minimum stays conservative
+                                to avoid mid-sentence cutoffs.</span
+                            >
+                            <span class="about-slider-value"
+                                >{formattedEndOfUtteranceSilence}</span
+                            >
+                        </div>
+                        <div class="about-slider-surface">
+                            <input
+                                type="range"
+                                class="about-slider"
+                                min={MIN_END_OF_UTTERANCE_SILENCE_MS}
+                                max={MAX_END_OF_UTTERANCE_SILENCE_MS}
+                                step={END_OF_UTTERANCE_SILENCE_STEP_MS}
+                                value={endOfUtteranceSilenceMs}
+                                style={`--slider-progress: ${endOfUtteranceSilenceProgress}%;`}
+                                aria-label="Silence before sending audio to STT"
+                                oninput={(event) =>
+                                    onUpdateEndOfUtteranceSilenceMs(
+                                        Number(
+                                            (
+                                                event.currentTarget as HTMLInputElement
+                                            ).value,
+                                        ),
+                                    )}
+                            />
+                            <div class="about-slider-scale" aria-hidden="true">
+                                <span>{minimumEndOfUtteranceSilenceLabel}</span>
+                                <span>{maximumEndOfUtteranceSilenceLabel}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="about-metadata-row slider-row">
+                    <span class="about-metadata-label"
+                        >AI Auto-Continue After Silence</span
+                    >
+                    <div class="about-slider-control">
+                        <div class="about-slider-header">
+                            <span class="about-slider-detail"
+                                >After the assistant finishes speaking, wait this
+                                long with no user speech before it adds a short
+                                continuation to the same assistant message.</span
+                            >
+                            <span class="about-slider-value"
+                                >{formattedAutoContinueSilence}</span
+                            >
+                        </div>
+                        <div class="about-slider-surface">
+                            <input
+                                type="range"
+                                class="about-slider"
+                                min={MIN_AUTO_CONTINUE_SILENCE_MS}
+                                max={AUTO_CONTINUE_NEVER_SLIDER_VALUE}
+                                step={AUTO_CONTINUE_SILENCE_STEP_MS}
+                                value={autoContinueSilenceSliderValue}
+                                style={`--slider-progress: ${autoContinueSilenceProgress}%;`}
+                                aria-label="AI auto-continue after silence"
+                                oninput={(event) => {
+                                    const sliderValue = Number(
                                         (
                                             event.currentTarget as HTMLInputElement
                                         ).value,
-                                    ),
-                                )}
-                        />
-                        <div class="about-slider-scale" aria-hidden="true">
-                            <span>{minimumEndOfUtteranceSilenceLabel}</span>
-                            <span>{maximumEndOfUtteranceSilenceLabel}</span>
+                                    );
+                                    onUpdateAutoContinueSilenceMs(
+                                        sliderValue >=
+                                            AUTO_CONTINUE_NEVER_SLIDER_VALUE
+                                            ? DEFAULT_AUTO_CONTINUE_SILENCE_MS
+                                            : sliderValue,
+                                    );
+                                }}
+                            />
+                            <div class="about-slider-scale" aria-hidden="true">
+                                <span>{minimumAutoContinueSilenceLabel}</span>
+                                <span>{maximumAutoContinueSilenceLabel}</span>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-            <div class="about-metadata-row slider-row">
-                <span class="about-metadata-label"
-                    >AI Auto-Continue After Silence</span
-                >
-                <div class="about-slider-control">
-                    <div class="about-slider-header">
-                        <span class="about-slider-detail"
-                            >After the assistant finishes speaking, wait this
-                            long with no user speech before it adds a short
-                            continuation to the same assistant message.</span
-                        >
-                        <span class="about-slider-value"
-                            >{formattedAutoContinueSilence}</span
-                        >
-                    </div>
-                    <div class="about-slider-surface">
-                        <input
-                            type="range"
-                            class="about-slider"
-                            min={MIN_AUTO_CONTINUE_SILENCE_MS}
-                            max={AUTO_CONTINUE_NEVER_SLIDER_VALUE}
-                            step={AUTO_CONTINUE_SILENCE_STEP_MS}
-                            value={autoContinueSilenceSliderValue}
-                            style={`--slider-progress: ${autoContinueSilenceProgress}%;`}
-                            aria-label="AI auto-continue after silence"
-                            oninput={(event) => {
-                                const sliderValue = Number(
-                                    (
-                                        event.currentTarget as HTMLInputElement
-                                    ).value,
-                                );
-                                onUpdateAutoContinueSilenceMs(
-                                    sliderValue >=
-                                        AUTO_CONTINUE_NEVER_SLIDER_VALUE
-                                        ? DEFAULT_AUTO_CONTINUE_SILENCE_MS
-                                        : sliderValue,
-                                );
-                            }}
-                        />
-                        <div class="about-slider-scale" aria-hidden="true">
-                            <span>{minimumAutoContinueSilenceLabel}</span>
-                            <span>{maximumAutoContinueSilenceLabel}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="about-metadata-row slider-row">
-                <span class="about-metadata-label"
-                    >Max Auto-Continues Per Reply</span
-                >
-                <div class="about-slider-control">
-                    <div class="about-slider-header">
-                        <span class="about-slider-detail"
-                            >Limits how many extra follow-up bursts the
-                            assistant can add to the same reply before waiting
-                            for you to speak.</span
-                        >
-                        <span class="about-slider-value"
-                            >{autoContinueMaxCountDisabled
-                                ? "Disabled"
-                                : formattedAutoContinueMaxCount}</span
-                        >
-                    </div>
-                    {#if showContinuousAutoContinueWarning}
+                <div class="about-metadata-row slider-row">
+                    <span class="about-metadata-label"
+                        >Max Auto-Continues Per Reply</span
+                    >
+                    <div class="about-slider-control">
                         <div class="about-slider-header">
                             <span class="about-slider-detail"
-                                >Warning: Continuous can keep the assistant
-                                talking indefinitely until you interrupt it or
-                                speak.</span
+                                >Limits how many extra follow-up bursts the
+                                assistant can add to the same reply before waiting
+                                for you to speak.</span
+                            >
+                            <span class="about-slider-value"
+                                >{autoContinueMaxCountDisabled
+                                    ? "Disabled"
+                                    : formattedAutoContinueMaxCount}</span
                             >
                         </div>
-                    {/if}
-                    <div class="about-slider-surface">
-                        <input
-                            type="range"
-                            class="about-slider"
-                            min={MIN_AUTO_CONTINUE_MAX_COUNT}
-                            max={AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE}
-                            step="1"
-                            value={autoContinueMaxCountSliderValue}
-                            style={`--slider-progress: ${autoContinueMaxCountProgress}%;`}
-                            aria-label="Max auto-continues per reply"
-                            disabled={autoContinueMaxCountDisabled}
-                            oninput={(event) => {
-                                const sliderValue = Number(
-                                    (
-                                        event.currentTarget as HTMLInputElement
-                                    ).value,
-                                );
-                                onUpdateAutoContinueMaxCount(
-                                    sliderValue >=
-                                        AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE
-                                        ? null
-                                        : Math.min(
-                                              MAX_AUTO_CONTINUE_MAX_COUNT,
-                                              Math.max(
-                                                  MIN_AUTO_CONTINUE_MAX_COUNT,
-                                                  sliderValue,
-                                              ),
-                                          ),
-                                );
-                            }}
-                        />
-                        <div class="about-slider-scale" aria-hidden="true">
-                            <span>{minimumAutoContinueMaxCountLabel}</span>
-                            <span>{maximumAutoContinueMaxCountLabel}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="about-metadata-row slider-row">
-                <span class="about-metadata-label"
-                    >Last Conversation Turns Visible to AI</span
-                >
-                <div class="about-slider-control">
-                    <div class="about-slider-header">
-                        <span class="about-slider-detail"
-                            >Caps how many recent back-and-forth turns the
-                            model can inspect across the active conversation
-                            context. Move it to Unlimited to keep the full
-                            conversation history.</span
-                        >
-                        <span class="about-slider-value"
-                            >{formattedLlmContextTurnLimit}</span
-                        >
-                    </div>
-                    <div class="about-slider-surface">
-                        <input
-                            type="range"
-                            class="about-slider"
-                            min={MIN_LLM_CONTEXT_TURN_LIMIT}
-                            max={LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE}
-                            step="1"
-                            value={llmContextTurnSliderValue}
-                            style={`--slider-progress: ${llmContextTurnProgress}%;`}
-                            aria-label="Last conversation turns visible to AI"
-                            oninput={(event) => {
-                                const value = Number(
-                                    (event.currentTarget as HTMLInputElement)
-                                        .value,
-                                );
-
-                                onUpdateLlmContextTurnLimit(
-                                    value >=
-                                        LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE
-                                        ? null
-                                        : Math.min(
-                                              MAX_LLM_CONTEXT_TURN_LIMIT,
-                                              Math.max(
-                                                  MIN_LLM_CONTEXT_TURN_LIMIT,
-                                                  value,
-                                              ),
-                                          ),
-                                );
-                            }}
-                        />
-                        <div class="about-slider-scale" aria-hidden="true">
-                            <span>{minimumLlmContextTurnLabel}</span>
-                            <span>{maximumLlmContextTurnLabel}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="about-metadata-row slider-row">
-                <span class="about-metadata-label"
-                    >Last Images Visible to LLM</span
-                >
-                <div class="about-slider-control">
-                    <div class="about-slider-header">
-                        <span class="about-slider-detail"
-                            >Caps how many recent screenshots the model can
-                            inspect across the active conversation context. Move
-                            it to Unlimited to keep every image that still fits
-                            in the context window.</span
-                        >
-                        <span class="about-slider-value"
-                            >{formattedLlmImageHistoryLimit}</span
-                        >
-                    </div>
-                    <div class="about-slider-surface">
-                        <input
-                            type="range"
-                            class="about-slider"
-                            min={MIN_LLM_IMAGE_HISTORY_LIMIT}
-                            max={LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE}
-                            step="1"
-                            value={llmImageHistorySliderValue}
-                            style={`--slider-progress: ${llmImageHistoryProgress}%;`}
-                            aria-label="Last images visible to LLM"
-                            oninput={(event) => {
-                                const value = Number(
-                                    (event.currentTarget as HTMLInputElement)
-                                        .value,
-                                );
-
-                                onUpdateLlmImageHistoryLimit(
-                                    value >=
-                                        LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE
-                                        ? DEFAULT_LLM_IMAGE_HISTORY_LIMIT
-                                        : Math.min(
-                                              MAX_LLM_IMAGE_HISTORY_LIMIT,
-                                              Math.max(
-                                                  MIN_LLM_IMAGE_HISTORY_LIMIT,
-                                                  value,
-                                              ),
-                                          ),
-                                );
-                            }}
-                        />
-                        <div class="about-slider-scale" aria-hidden="true">
-                            <span>{minimumLlmImageHistoryLabel}</span>
-                            <span>{maximumLlmImageHistoryLabel}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="about-metadata-row shortcut-row">
-                <span class="about-metadata-label"
-                    >Look at Screen Region (During Call)</span
-                >
-                <div class="shortcut-input-wrapper">
-                    <ShortcutCapture
-                        value={editedShortcut}
-                        onUpdate={(newValue) => {
-                            editedShortcut = newValue;
-                            onUpdateGlobalShortcut(newValue);
-                        }}
-                        onRemove={() => {
-                            editedShortcut = NO_GLOBAL_SHORTCUT;
-                            onUpdateGlobalShortcut(NO_GLOBAL_SHORTCUT);
-                        }}
-                        onDefault={() => {
-                            editedShortcut = DEFAULT_GLOBAL_SHORTCUT;
-                            onUpdateGlobalShortcut(DEFAULT_GLOBAL_SHORTCUT);
-                        }}
-                    />
-                </div>
-            </div>
-            <div class="about-metadata-row shortcut-row">
-                <span class="about-metadata-label"
-                    >Look at Entire Screen (During Call)</span
-                >
-                <div class="shortcut-input-wrapper">
-                    <ShortcutCapture
-                        value={editedShortcutEntireScreen}
-                        onUpdate={(newValue) => {
-                            editedShortcutEntireScreen = newValue;
-                            onUpdateGlobalShortcutEntireScreen(newValue);
-                        }}
-                        onRemove={() => {
-                            editedShortcutEntireScreen = NO_GLOBAL_SHORTCUT;
-                            onUpdateGlobalShortcutEntireScreen(NO_GLOBAL_SHORTCUT);
-                        }}
-                        onDefault={() => {
-                            editedShortcutEntireScreen = DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN;
-                            onUpdateGlobalShortcutEntireScreen(
-                                DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
-                            );
-                        }}
-                    />
-                </div>
-            </div>
-            <div class="about-metadata-row shortcut-row">
-                <span class="about-metadata-label"
-                    >Toggle Mute / Unmute (During Call)</span
-                >
-                <div class="shortcut-input-wrapper">
-                    <ShortcutCapture
-                        value={editedShortcutToggleMute}
-                        onUpdate={(newValue) => {
-                            editedShortcutToggleMute = newValue;
-                            onUpdateGlobalShortcutToggleMute(newValue);
-                        }}
-                        onRemove={() => {
-                            editedShortcutToggleMute = NO_GLOBAL_SHORTCUT;
-                            onUpdateGlobalShortcutToggleMute(NO_GLOBAL_SHORTCUT);
-                        }}
-                        onDefault={() => {
-                            editedShortcutToggleMute = DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE;
-                            onUpdateGlobalShortcutToggleMute(
-                                DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
-                            );
-                        }}
-                    />
-                </div>
-            </div>
-            <div class="about-metadata-row shortcut-row">
-                <span class="about-metadata-label"
-                    >Interrupt Speech (During Call)</span
-                >
-                <div class="shortcut-input-wrapper">
-                    <ShortcutCapture
-                        value={editedShortcutInterrupt}
-                        onUpdate={(newValue) => {
-                            editedShortcutInterrupt = newValue;
-                            onUpdateGlobalShortcutInterrupt(newValue);
-                        }}
-                        onRemove={() => {
-                            editedShortcutInterrupt = NO_GLOBAL_SHORTCUT;
-                            onUpdateGlobalShortcutInterrupt(NO_GLOBAL_SHORTCUT);
-                        }}
-                        onDefault={() => {
-                            editedShortcutInterrupt = DEFAULT_GLOBAL_SHORTCUT_INTERRUPT;
-                            onUpdateGlobalShortcutInterrupt(
-                                DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
-                            );
-                        }}
-                    />
-                </div>
-            </div>
-        </div>
-
-        <div class="about-update-card">
-            <div class="about-update-header">
-                <div class="about-update-copy">
-                    <span class="about-update-title">Runtime Cache</span>
-                    <span class="about-update-detail"
-                        >Clear local Python environment and bootstrap caches.</span
-                    >
-                </div>
-                <button
-                    type="button"
-                    class="utility-btn"
-                    onclick={refreshRuntimeCaches}
-                    disabled={isRefreshing}
-                >
-                    <div class="refresh-btn-content">
-                        {#if isRefreshing}
-                            <svg
-                                class="spinner"
-                                xmlns="http://www.w3.org/2000/svg"
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="3"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            >
-                                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                            </svg>
+                        {#if showContinuousAutoContinueWarning}
+                            <div class="about-slider-header">
+                                <span class="about-slider-detail"
+                                    >Warning: Continuous can keep the assistant
+                                    talking indefinitely until you interrupt it or
+                                    speak.</span
+                                >
+                            </div>
                         {/if}
-                        Refresh Caches
+                        <div class="about-slider-surface">
+                            <input
+                                type="range"
+                                class="about-slider"
+                                min={MIN_AUTO_CONTINUE_MAX_COUNT}
+                                max={AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE}
+                                step="1"
+                                value={autoContinueMaxCountSliderValue}
+                                style={`--slider-progress: ${autoContinueMaxCountProgress}%;`}
+                                aria-label="Max auto-continues per reply"
+                                disabled={autoContinueMaxCountDisabled}
+                                oninput={(event) => {
+                                    const sliderValue = Number(
+                                        (
+                                            event.currentTarget as HTMLInputElement
+                                        ).value,
+                                    );
+                                    onUpdateAutoContinueMaxCount(
+                                        sliderValue >=
+                                            AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE
+                                            ? null
+                                            : Math.min(
+                                                  MAX_AUTO_CONTINUE_MAX_COUNT,
+                                                  Math.max(
+                                                      MIN_AUTO_CONTINUE_MAX_COUNT,
+                                                      sliderValue,
+                                                  ),
+                                              ),
+                                    );
+                                }}
+                            />
+                            <div class="about-slider-scale" aria-hidden="true">
+                                <span>{minimumAutoContinueMaxCountLabel}</span>
+                                <span>{maximumAutoContinueMaxCountLabel}</span>
+                            </div>
+                        </div>
                     </div>
-                </button>
-            </div>
-
-            <div class="about-update-header">
-                <div class="about-update-copy">
-                    <span class="about-update-title">Updates</span>
-                    <span class="about-update-detail">{updateStatusDetail}</span
-                    >
                 </div>
-                <button
-                    type="button"
-                    class="utility-btn about-update-check-btn"
-                    onclick={checkForUpdates}
-                    disabled={updateActionDisabled}
-                >
-                    {checkButtonLabel}
-                </button>
-            </div>
-
-            {#if availableAppUpdate}
-                <div class="about-update-metadata">
-                    <div class="about-update-row">
-                        <span class="about-update-label">Latest Version</span>
-                        <span class="about-update-value about-metadata-mono">
-                            {availableAppUpdate.version}
-                        </span>
-                    </div>
-                    <div class="about-update-row">
-                        <span class="about-update-label">Current Version</span>
-                        <span class="about-update-value about-metadata-mono">
-                            {availableAppUpdate.currentVersion}
-                        </span>
-                    </div>
-                    {#if formattedPublishedAt}
-                        <div class="about-update-row">
-                            <span class="about-update-label">Published</span>
-                            <span class="about-update-value"
-                                >{formattedPublishedAt}</span
+                <div class="about-metadata-row slider-row">
+                    <span class="about-metadata-label"
+                        >Last Conversation Turns Visible to AI</span
+                    >
+                    <div class="about-slider-control">
+                        <div class="about-slider-header">
+                            <span class="about-slider-detail"
+                                >Caps how many recent back-and-forth turns the
+                                model can inspect across the active conversation
+                                context. Move it to Unlimited to keep the full
+                                conversation history.</span
+                            >
+                            <span class="about-slider-value"
+                                >{formattedLlmContextTurnLimit}</span
                             >
                         </div>
-                    {/if}
-                    <div class="about-update-row">
-                        <span class="about-update-label">Target</span>
-                        <span class="about-update-value about-metadata-mono">
-                            {availableAppUpdate.target}
-                        </span>
+                        <div class="about-slider-surface">
+                            <input
+                                type="range"
+                                class="about-slider"
+                                min={MIN_LLM_CONTEXT_TURN_LIMIT}
+                                max={LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE}
+                                step="1"
+                                value={llmContextTurnSliderValue}
+                                style={`--slider-progress: ${llmContextTurnProgress}%;`}
+                                aria-label="Last conversation turns visible to AI"
+                                oninput={(event) => {
+                                    const value = Number(
+                                        (event.currentTarget as HTMLInputElement)
+                                            .value,
+                                    );
+
+                                    onUpdateLlmContextTurnLimit(
+                                        value >=
+                                            LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE
+                                            ? null
+                                            : Math.min(
+                                                  MAX_LLM_CONTEXT_TURN_LIMIT,
+                                                  Math.max(
+                                                      MIN_LLM_CONTEXT_TURN_LIMIT,
+                                                      value,
+                                                  ),
+                                              ),
+                                    );
+                                }}
+                            />
+                            <div class="about-slider-scale" aria-hidden="true">
+                                <span>{minimumLlmContextTurnLabel}</span>
+                                <span>{maximumLlmContextTurnLabel}</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
+                <div class="about-metadata-row slider-row">
+                    <span class="about-metadata-label"
+                        >Last Images Visible to LLM</span
+                    >
+                    <div class="about-slider-control">
+                        <div class="about-slider-header">
+                            <span class="about-slider-detail"
+                                >Caps how many recent screenshots the model can
+                                inspect across the active conversation context. Move
+                                it to Unlimited to keep every image that still fits
+                                in the context window.</span
+                            >
+                            <span class="about-slider-value"
+                                >{formattedLlmImageHistoryLimit}</span
+                            >
+                        </div>
+                        <div class="about-slider-surface">
+                            <input
+                                type="range"
+                                class="about-slider"
+                                min={MIN_LLM_IMAGE_HISTORY_LIMIT}
+                                max={LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE}
+                                step="1"
+                                value={llmImageHistorySliderValue}
+                                style={`--slider-progress: ${llmImageHistoryProgress}%;`}
+                                aria-label="Last images visible to LLM"
+                                oninput={(event) => {
+                                    const value = Number(
+                                        (event.currentTarget as HTMLInputElement)
+                                            .value,
+                                    );
 
-                {#if availableAppUpdate.notes}
-                    <div class="about-update-notes">
-                        {availableAppUpdate.notes}
+                                    onUpdateLlmImageHistoryLimit(
+                                        value >=
+                                            LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE
+                                            ? DEFAULT_LLM_IMAGE_HISTORY_LIMIT
+                                            : Math.min(
+                                                  MAX_LLM_IMAGE_HISTORY_LIMIT,
+                                                  Math.max(
+                                                      MIN_LLM_IMAGE_HISTORY_LIMIT,
+                                                      value,
+                                                  ),
+                                              ),
+                                    );
+                                }}
+                            />
+                            <div class="about-slider-scale" aria-hidden="true">
+                                <span>{minimumLlmImageHistoryLabel}</span>
+                                <span>{maximumLlmImageHistoryLabel}</span>
+                            </div>
+                        </div>
                     </div>
-                {/if}
-
-                <div class="about-update-actions">
-                    {#if appUpdateStatus === "available"}
-                        <button
-                            type="button"
-                            class="utility-btn about-update-install-btn"
-                            onclick={handleDownloadFromGithub}
-                        >
-                            Download from Github
-                        </button>
-                    {:else if appUpdateStatus === "installed"}
-                        <button
-                            type="button"
-                            class="utility-btn about-update-install-btn"
-                            onclick={restartToApplyUpdate}
-                        >
-                            Restart to Apply
-                        </button>
-                    {/if}
                 </div>
-            {:else if appUpdateError}
-                <div class="about-empty-state error">
-                    <span class="about-empty-title">Update Check Failed</span>
-                    <span class="about-empty-detail">{appUpdateError}</span>
+                <div class="about-metadata-row shortcut-row">
+                    <span class="about-metadata-label"
+                        >Look at Screen Region (During Call)</span
+                    >
+                    <div class="shortcut-input-wrapper">
+                        <ShortcutCapture
+                            value={editedShortcut}
+                            onUpdate={(newValue) => {
+                                editedShortcut = newValue;
+                                onUpdateGlobalShortcut(newValue);
+                            }}
+                            onRemove={() => {
+                                editedShortcut = NO_GLOBAL_SHORTCUT;
+                                onUpdateGlobalShortcut(NO_GLOBAL_SHORTCUT);
+                            }}
+                            onDefault={() => {
+                                editedShortcut = DEFAULT_GLOBAL_SHORTCUT;
+                                onUpdateGlobalShortcut(DEFAULT_GLOBAL_SHORTCUT);
+                            }}
+                        />
+                    </div>
+                </div>
+                <div class="about-metadata-row shortcut-row">
+                    <span class="about-metadata-label"
+                        >Look at Entire Screen (During Call)</span
+                    >
+                    <div class="shortcut-input-wrapper">
+                        <ShortcutCapture
+                            value={editedShortcutEntireScreen}
+                            onUpdate={(newValue) => {
+                                editedShortcutEntireScreen = newValue;
+                                onUpdateGlobalShortcutEntireScreen(newValue);
+                            }}
+                            onRemove={() => {
+                                editedShortcutEntireScreen = NO_GLOBAL_SHORTCUT;
+                                onUpdateGlobalShortcutEntireScreen(NO_GLOBAL_SHORTCUT);
+                            }}
+                            onDefault={() => {
+                                editedShortcutEntireScreen = DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN;
+                                onUpdateGlobalShortcutEntireScreen(
+                                    DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
+                                );
+                            }}
+                        />
+                    </div>
+                </div>
+                <div class="about-metadata-row shortcut-row">
+                    <span class="about-metadata-label"
+                        >Toggle Mute / Unmute (During Call)</span
+                    >
+                    <div class="shortcut-input-wrapper">
+                        <ShortcutCapture
+                            value={editedShortcutToggleMute}
+                            onUpdate={(newValue) => {
+                                editedShortcutToggleMute = newValue;
+                                onUpdateGlobalShortcutToggleMute(newValue);
+                            }}
+                            onRemove={() => {
+                                editedShortcutToggleMute = NO_GLOBAL_SHORTCUT;
+                                onUpdateGlobalShortcutToggleMute(NO_GLOBAL_SHORTCUT);
+                            }}
+                            onDefault={() => {
+                                editedShortcutToggleMute = DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE;
+                                onUpdateGlobalShortcutToggleMute(
+                                    DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
+                                );
+                            }}
+                        />
+                    </div>
+                </div>
+                <div class="about-metadata-row shortcut-row">
+                    <span class="about-metadata-label"
+                        >Interrupt Speech (During Call)</span
+                    >
+                    <div class="shortcut-input-wrapper">
+                        <ShortcutCapture
+                            value={editedShortcutInterrupt}
+                            onUpdate={(newValue) => {
+                                editedShortcutInterrupt = newValue;
+                                onUpdateGlobalShortcutInterrupt(newValue);
+                            }}
+                            onRemove={() => {
+                                editedShortcutInterrupt = NO_GLOBAL_SHORTCUT;
+                                onUpdateGlobalShortcutInterrupt(NO_GLOBAL_SHORTCUT);
+                            }}
+                            onDefault={() => {
+                                editedShortcutInterrupt = DEFAULT_GLOBAL_SHORTCUT_INTERRUPT;
+                                onUpdateGlobalShortcutInterrupt(
+                                    DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
+                                );
+                            }}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {#if !calling}
+                <div class="about-update-card">
+                    <div class="about-update-header">
+                        <div class="about-update-copy">
+                            <span class="about-update-title">Runtime Cache</span>
+                            <span class="about-update-detail"
+                                >Clear local Python environment and bootstrap caches.</span
+                            >
+                        </div>
+                        <button
+                            type="button"
+                            class="utility-btn"
+                            onclick={refreshRuntimeCaches}
+                            disabled={isRefreshing}
+                        >
+                            <div class="refresh-btn-content">
+                                {#if isRefreshing}
+                                    <svg
+                                        class="spinner"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        width="14"
+                                        height="14"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="3"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                    >
+                                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                                    </svg>
+                                {/if}
+                                Refresh Caches
+                            </div>
+                        </button>
+                    </div>
+
+                    <div class="about-update-header">
+                        <div class="about-update-copy">
+                            <span class="about-update-title">Updates</span>
+                            <span class="about-update-detail">{updateStatusDetail}</span
+                            >
+                        </div>
+                        <button
+                            type="button"
+                            class="utility-btn about-update-check-btn"
+                            onclick={checkForUpdates}
+                            disabled={updateActionDisabled}
+                        >
+                            {checkButtonLabel}
+                        </button>
+                    </div>
+
+                    {#if availableAppUpdate}
+                        <div class="about-update-metadata">
+                            <div class="about-update-row">
+                                <span class="about-update-label">Latest Version</span>
+                                <span class="about-update-value about-metadata-mono">
+                                    {availableAppUpdate.version}
+                                </span>
+                            </div>
+                            <div class="about-update-row">
+                                <span class="about-update-label">Current Version</span>
+                                <span class="about-update-value about-metadata-mono">
+                                    {availableAppUpdate.currentVersion}
+                                </span>
+                            </div>
+                            {#if formattedPublishedAt}
+                                <div class="about-update-row">
+                                    <span class="about-update-label">Published</span>
+                                    <span class="about-update-value"
+                                        >{formattedPublishedAt}</span
+                                    >
+                                </div>
+                            {/if}
+                            <div class="about-update-row">
+                                <span class="about-update-label">Target</span>
+                                <span class="about-update-value about-metadata-mono">
+                                    {availableAppUpdate.target}
+                                </span>
+                            </div>
+                        </div>
+
+                        {#if availableAppUpdate.notes}
+                            <div class="about-update-notes">
+                                {availableAppUpdate.notes}
+                            </div>
+                        {/if}
+
+                        <div class="about-update-actions">
+                            {#if appUpdateStatus === "available"}
+                                <button
+                                    type="button"
+                                    class="utility-btn about-update-install-btn"
+                                    onclick={handleDownloadFromGithub}
+                                >
+                                    Download from Github
+                                </button>
+                            {:else if appUpdateStatus === "installed"}
+                                <button
+                                    type="button"
+                                    class="utility-btn about-update-install-btn"
+                                    onclick={restartToApplyUpdate}
+                                >
+                                    Restart to Apply
+                                </button>
+                            {/if}
+                        </div>
+                    {:else if appUpdateError}
+                        <div class="about-empty-state error">
+                            <span class="about-empty-title">Update Check Failed</span>
+                            <span class="about-empty-detail">{appUpdateError}</span>
+                        </div>
+                    {/if}
                 </div>
             {/if}
-        </div>
-    {:else if buildInfoError}
-        <div class="about-empty-state error">
-            <span class="about-empty-title">Unable to load build info</span>
-            <span class="about-empty-detail">{buildInfoError}</span>
-        </div>
-    {:else}
-        <div class="about-empty-state">
-            <span class="about-empty-title">Loading build info...</span>
-            <span class="about-empty-detail"
-                >Preparing version and commit metadata.</span
-            >
-        </div>
-    {/if}
+        {:else if buildInfoError}
+            <div class="about-empty-state error">
+                <span class="about-empty-title">Unable to load build info</span>
+                <span class="about-empty-detail">{buildInfoError}</span>
+            </div>
+        {:else}
+            <div class="about-empty-state">
+                <span class="about-empty-title">Loading build info...</span>
+                <span class="about-empty-detail"
+                    >Preparing version and commit metadata.</span
+                >
+            </div>
+        {/if}
+    </div>
 </div>
 
 <style>

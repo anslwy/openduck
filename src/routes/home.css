@@ -722,12 +722,9 @@ main.idle-layout {
     transform: translate(-50%, -50%);
     width: min(80vw, 1040px);
     max-height: calc(100vh - 40px);
-    overflow-y: auto;
+    overflow-y: hidden;
     display: flex;
     flex-direction: column;
-    gap: 18px;
-    padding: 24px;
-    border-radius: 30px;
     background: linear-gradient(
         180deg,
         rgba(42, 38, 22, 0.96) 0%,
@@ -740,6 +737,7 @@ main.idle-layout {
     backdrop-filter: blur(22px);
     box-sizing: border-box;
     z-index: 26;
+    border-radius: 30px;
 }
 
 .about-modal-header {
@@ -747,6 +745,17 @@ main.idle-layout {
     align-items: center;
     justify-content: space-between;
     gap: 16px;
+    padding: 24px 24px 18px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.about-modal-content {
+    overflow-y: auto;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    padding: 18px 24px 24px;
 }
 
 .about-modal-copy {
