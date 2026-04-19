@@ -7479,6 +7479,7 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
 
     let menu = match builder
         .separator()
+        .text(TRAY_SETTINGS_MENU_ID, "Settings")
         .text(TRAY_QUIT_MENU_ID, "Quit OpenDuck")
         .build()
     {
@@ -7508,6 +7509,7 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
     let menu = MenuBuilder::new(app_handle)
         .text(TRAY_SHOW_MENU_ID, "Show OpenDuck")
         .separator()
+        .text(TRAY_SETTINGS_MENU_ID, "Settings")
         .text(TRAY_QUIT_MENU_ID, "Quit OpenDuck")
         .build()?;
 
@@ -7522,6 +7524,12 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
                 if let Err(err) = show_main_window(app_handle) {
                     error!("Failed to show OpenDuck from tray: {}", err);
                 }
+            }
+            TRAY_SETTINGS_MENU_ID => {
+                if let Err(err) = show_main_window(app_handle) {
+                    error!("Failed to show OpenDuck from tray before settings: {}", err);
+                }
+                emit_show_about_modal(app_handle);
             }
             TRAY_LOOK_AT_SCREEN_MENU_ID => {
                 let app_handle = app_handle.clone();

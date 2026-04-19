@@ -112,6 +112,7 @@ pub(crate) const TRAY_UNLOAD_GEMMA_MENU_ID: &str = "tray-unload-gemma";
 pub(crate) const TRAY_UNLOAD_STT_MENU_ID: &str = "tray-unload-stt";
 pub(crate) const TRAY_UNLOAD_CSM_MENU_ID: &str = "tray-unload-csm";
 pub(crate) const TRAY_UNLOAD_ALL_MODELS_MENU_ID: &str = "tray-unload-all-models";
+pub(crate) const TRAY_SETTINGS_MENU_ID: &str = "tray-settings";
 pub(crate) const TRAY_QUIT_MENU_ID: &str = "tray-quit-openduck";
 pub(crate) const TRAY_END_CALL_EVENT: &str = "tray-end-call";
 pub(crate) const TRAY_TOGGLE_MUTE_EVENT: &str = "tray-toggle-mute";
