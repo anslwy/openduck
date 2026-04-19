@@ -850,29 +850,31 @@ fn set_global_shortcut_look_at_entire_screen(
     state: State<'_, AppState>,
     shortcut_str: String,
 ) -> Result<String, String> {
-    let mut current_shortcut_str = state.global_shortcut_look_at_entire_screen.lock().unwrap();
+    {
+        let mut current_shortcut_str = state.global_shortcut_look_at_entire_screen.lock().unwrap();
 
-    if *current_shortcut_str == shortcut_str {
-        return Ok(shortcut_str);
+        if *current_shortcut_str == shortcut_str {
+            return Ok(shortcut_str);
+        }
+
+        // Try to parse the new shortcut first to validate it
+        let new_shortcut = shortcut_str
+            .parse::<Shortcut>()
+            .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+        // Unregister old
+        if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+            let _ = app_handle.global_shortcut().unregister(old_shortcut);
+        }
+
+        // Register new
+        app_handle
+            .global_shortcut()
+            .register(new_shortcut)
+            .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+
+        *current_shortcut_str = shortcut_str.clone();
     }
-
-    // Try to parse the new shortcut first to validate it
-    let new_shortcut = shortcut_str
-        .parse::<Shortcut>()
-        .map_err(|err| format!("Invalid shortcut format: {}", err))?;
-
-    // Unregister old
-    if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
-        let _ = app_handle.global_shortcut().unregister(old_shortcut);
-    }
-
-    // Register new
-    app_handle
-        .global_shortcut()
-        .register(new_shortcut)
-        .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
-
-    *current_shortcut_str = shortcut_str.clone();
 
     let hydrated = state
         .global_shortcut_look_at_entire_screen_hydrated
@@ -885,6 +887,7 @@ fn set_global_shortcut_look_at_entire_screen(
             .unwrap();
         *modified_before_hydration = true;
     }
+    drop(hydrated);
 
     refresh_tray_menu(&app_handle);
 
@@ -951,29 +954,31 @@ fn set_global_shortcut_look_at_screen_region(
     state: State<'_, AppState>,
     shortcut_str: String,
 ) -> Result<String, String> {
-    let mut current_shortcut_str = state.global_shortcut_look_at_screen_region.lock().unwrap();
+    {
+        let mut current_shortcut_str = state.global_shortcut_look_at_screen_region.lock().unwrap();
 
-    if *current_shortcut_str == shortcut_str {
-        return Ok(shortcut_str);
+        if *current_shortcut_str == shortcut_str {
+            return Ok(shortcut_str);
+        }
+
+        // Try to parse the new shortcut first to validate it
+        let new_shortcut = shortcut_str
+            .parse::<Shortcut>()
+            .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+        // Unregister old
+        if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+            let _ = app_handle.global_shortcut().unregister(old_shortcut);
+        }
+
+        // Register new
+        app_handle
+            .global_shortcut()
+            .register(new_shortcut)
+            .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+
+        *current_shortcut_str = shortcut_str.clone();
     }
-
-    // Try to parse the new shortcut first to validate it
-    let new_shortcut = shortcut_str
-        .parse::<Shortcut>()
-        .map_err(|err| format!("Invalid shortcut format: {}", err))?;
-
-    // Unregister old
-    if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
-        let _ = app_handle.global_shortcut().unregister(old_shortcut);
-    }
-
-    // Register new
-    app_handle
-        .global_shortcut()
-        .register(new_shortcut)
-        .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
-
-    *current_shortcut_str = shortcut_str.clone();
 
     let hydrated = state
         .global_shortcut_look_at_screen_region_hydrated
@@ -986,6 +991,7 @@ fn set_global_shortcut_look_at_screen_region(
             .unwrap();
         *modified_before_hydration = true;
     }
+    drop(hydrated);
 
     refresh_tray_menu(&app_handle);
 
@@ -1043,26 +1049,28 @@ fn set_global_shortcut_toggle_mute(
     state: State<'_, AppState>,
     shortcut_str: String,
 ) -> Result<String, String> {
-    let mut current_shortcut_str = state.global_shortcut_toggle_mute.lock().unwrap();
+    {
+        let mut current_shortcut_str = state.global_shortcut_toggle_mute.lock().unwrap();
 
-    if *current_shortcut_str == shortcut_str {
-        return Ok(shortcut_str);
+        if *current_shortcut_str == shortcut_str {
+            return Ok(shortcut_str);
+        }
+
+        let new_shortcut = shortcut_str
+            .parse::<Shortcut>()
+            .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+        if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+            let _ = app_handle.global_shortcut().unregister(old_shortcut);
+        }
+
+        app_handle
+            .global_shortcut()
+            .register(new_shortcut)
+            .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+
+        *current_shortcut_str = shortcut_str.clone();
     }
-
-    let new_shortcut = shortcut_str
-        .parse::<Shortcut>()
-        .map_err(|err| format!("Invalid shortcut format: {}", err))?;
-
-    if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
-        let _ = app_handle.global_shortcut().unregister(old_shortcut);
-    }
-
-    app_handle
-        .global_shortcut()
-        .register(new_shortcut)
-        .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
-
-    *current_shortcut_str = shortcut_str.clone();
 
     let hydrated = state.global_shortcut_toggle_mute_hydrated.lock().unwrap();
     if !*hydrated {
@@ -1072,6 +1080,7 @@ fn set_global_shortcut_toggle_mute(
             .unwrap();
         *modified_before_hydration = true;
     }
+    drop(hydrated);
 
     refresh_tray_menu(&app_handle);
 
