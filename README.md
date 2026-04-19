@@ -2,10 +2,7 @@
 
 Fast, screen-aware, voice-first, local AI assistant for [rubberducking](https://en.wikipedia.org/wiki/Rubber_duck_debugging). Built for Apple Silicon (M1 or later)
 
-<video width="689" controls autoplay loop muted>
-  <source src="Demo.mov" type="video/quicktime">
-  Your browser does not support the video tag.
-</video>
+https://github.com/user-attachments/assets/39bc1187-ddb4-42f4-8225-7f873734fa62
 
 ## Key Features
 
