@@ -126,6 +126,17 @@
     let copyState = $state<"idle" | "copied" | "failed">("idle");
     let copyResetTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let isRefreshing = $state(false);
+    let searchQuery = $state("");
+
+    function matchesSearch(text: string, detail?: string) {
+        const query = searchQuery.toLowerCase().trim();
+        if (!query) return true;
+        return (
+            text.toLowerCase().includes(query) ||
+            (detail?.toLowerCase().includes(query) ?? false)
+        );
+    }
+
     let editedShortcut = $state("");
     let editedShortcutEntireScreen = $state("");
     let editedShortcutToggleMute = $state("");
@@ -414,6 +425,222 @@
     onDestroy(() => {
         clearCopyFeedback();
     });
+
+    const settingsData = $derived([
+        {
+            id: "pop-sound",
+            type: "toggle",
+            label: "Enable Pop Sound (Screenshots / Processing Audio / Finished Response)",
+            value: pongPlaybackEnabled,
+            onUpdate: onUpdatePongPlayback,
+        },
+        {
+            id: "auto-unmute",
+            type: "toggle",
+            label: "Auto-Unmute After Attaching Screenshot",
+            value: autoUnmuteOnPastedScreenshotEnabled,
+            onUpdate: onUpdateAutoUnmuteOnPastedScreenshot,
+        },
+        {
+            id: "last-session",
+            type: "toggle",
+            label: "Select Last Session When Startup",
+            value: selectLastSessionEnabled,
+            onUpdate: onUpdateSelectLastSession,
+        },
+        {
+            id: "show-stats",
+            type: "toggle",
+            label: "Show Stats (Latency, Memory Usage) [Experimental]",
+            value: showStatEnabled,
+            onUpdate: onUpdateShowStat,
+        },
+        {
+            id: "subtitles",
+            type: "toggle",
+            label: "Show Subtitles (Live Transcript)",
+            value: showSubtitleEnabled,
+            onUpdate: onUpdateShowSubtitle,
+        },
+        {
+            id: "ai-subtitle",
+            type: "toggle",
+            label: "Show AI Subtitle",
+            value: showAiSubtitleEnabled,
+            onUpdate: onUpdateShowAiSubtitle,
+        },
+        {
+            id: "overlay",
+            type: "toggle",
+            label: "Show Hidden-Window Overlay (Toasts, Live Transcript, AI Subtitle)",
+            value: showHiddenWindowOverlayEnabled,
+            onUpdate: onUpdateShowHiddenWindowOverlay,
+        },
+        {
+            id: "stt-silence",
+            type: "slider",
+            label: "Silence Before Sending Audio to STT",
+            detail: "Longer waits capture more pause-heavy speech before transcription starts. The minimum stays conservative to avoid mid-sentence cutoffs.",
+            value: endOfUtteranceSilenceMs,
+            min: MIN_END_OF_UTTERANCE_SILENCE_MS,
+            max: MAX_END_OF_UTTERANCE_SILENCE_MS,
+            step: END_OF_UTTERANCE_SILENCE_STEP_MS,
+            displayValue: formattedEndOfUtteranceSilence,
+            progress: endOfUtteranceSilenceProgress,
+            minLabel: minimumEndOfUtteranceSilenceLabel,
+            maxLabel: maximumEndOfUtteranceSilenceLabel,
+            onUpdate: onUpdateEndOfUtteranceSilenceMs,
+        },
+        {
+            id: "auto-continue",
+            type: "slider",
+            label: "AI Auto-Continue After Silence",
+            detail: "After the assistant finishes speaking, wait this long with no user speech before it adds a short continuation to the same assistant message.",
+            value: autoContinueSilenceSliderValue,
+            min: MIN_AUTO_CONTINUE_SILENCE_MS,
+            max: AUTO_CONTINUE_NEVER_SLIDER_VALUE,
+            step: AUTO_CONTINUE_SILENCE_STEP_MS,
+            displayValue: formattedAutoContinueSilence,
+            progress: autoContinueSilenceProgress,
+            minLabel: minimumAutoContinueSilenceLabel,
+            maxLabel: maximumAutoContinueSilenceLabel,
+            onUpdate: (val: number) =>
+                onUpdateAutoContinueSilenceMs(
+                    val >= AUTO_CONTINUE_NEVER_SLIDER_VALUE
+                        ? DEFAULT_AUTO_CONTINUE_SILENCE_MS
+                        : val,
+                ),
+        },
+        {
+            id: "max-continues",
+            type: "slider",
+            label: "Max Auto-Continues Per Reply",
+            detail: "Limits how many extra follow-up bursts the assistant can add to the same reply before waiting for you to speak.",
+            value: autoContinueMaxCountSliderValue,
+            min: MIN_AUTO_CONTINUE_MAX_COUNT,
+            max: AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE,
+            step: 1,
+            displayValue: autoContinueMaxCountDisabled
+                ? "Disabled"
+                : formattedAutoContinueMaxCount,
+            progress: autoContinueMaxCountProgress,
+            minLabel: minimumAutoContinueMaxCountLabel,
+            maxLabel: maximumAutoContinueMaxCountLabel,
+            disabled: autoContinueMaxCountDisabled,
+            warning: showContinuousAutoContinueWarning
+                ? "Warning: Continuous can keep the assistant talking indefinitely until you interrupt it or speak."
+                : null,
+            onUpdate: (val: number) =>
+                onUpdateAutoContinueMaxCount(
+                    val >= AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE
+                        ? null
+                        : Math.min(
+                              MAX_AUTO_CONTINUE_MAX_COUNT,
+                              Math.max(MIN_AUTO_CONTINUE_MAX_COUNT, val),
+                          ),
+                ),
+        },
+        {
+            id: "context-turns",
+            type: "slider",
+            label: "Last Conversation Turns Visible to AI",
+            detail: "Caps how many recent back-and-forth turns the model can inspect across the active conversation context. Move it to Unlimited to keep the full conversation history.",
+            value: llmContextTurnSliderValue,
+            min: MIN_LLM_CONTEXT_TURN_LIMIT,
+            max: LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE,
+            step: 1,
+            displayValue: formattedLlmContextTurnLimit,
+            progress: llmContextTurnProgress,
+            minLabel: minimumLlmContextTurnLabel,
+            maxLabel: maximumLlmContextTurnLabel,
+            onUpdate: (val: number) =>
+                onUpdateLlmContextTurnLimit(
+                    val >= LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE
+                        ? null
+                        : Math.min(
+                              MAX_LLM_CONTEXT_TURN_LIMIT,
+                              Math.max(MIN_LLM_CONTEXT_TURN_LIMIT, val),
+                          ),
+                ),
+        },
+        {
+            id: "image-history",
+            type: "slider",
+            label: "Last Images Visible to LLM",
+            detail: "Caps how many recent screenshots the model can inspect across the active conversation context. Move it to Unlimited to keep every image that still fits in the context window.",
+            value: llmImageHistorySliderValue,
+            min: MIN_LLM_IMAGE_HISTORY_LIMIT,
+            max: LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE,
+            step: 1,
+            displayValue: formattedLlmImageHistoryLimit,
+            progress: llmImageHistoryProgress,
+            minLabel: minimumLlmImageHistoryLabel,
+            maxLabel: maximumLlmImageHistoryLabel,
+            onUpdate: (val: number) =>
+                onUpdateLlmImageHistoryLimit(
+                    val >= LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE
+                        ? DEFAULT_LLM_IMAGE_HISTORY_LIMIT
+                        : Math.min(
+                              MAX_LLM_IMAGE_HISTORY_LIMIT,
+                              Math.max(MIN_LLM_IMAGE_HISTORY_LIMIT, val),
+                          ),
+                ),
+        },
+        {
+            id: "shortcut-region",
+            type: "shortcut",
+            label: "Look at Screen Region (During Call)",
+            value: editedShortcut,
+            onUpdate: (val: string) => onUpdateGlobalShortcut(val),
+            onRemove: () => onUpdateGlobalShortcut(NO_GLOBAL_SHORTCUT),
+            onDefault: () => onUpdateGlobalShortcut(DEFAULT_GLOBAL_SHORTCUT),
+        },
+        {
+            id: "shortcut-entire",
+            type: "shortcut",
+            label: "Look at Entire Screen (During Call)",
+            value: editedShortcutEntireScreen,
+            onUpdate: (val: string) => onUpdateGlobalShortcutEntireScreen(val),
+            onRemove: () =>
+                onUpdateGlobalShortcutEntireScreen(NO_GLOBAL_SHORTCUT),
+            onDefault: () =>
+                onUpdateGlobalShortcutEntireScreen(
+                    DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
+                ),
+        },
+        {
+            id: "shortcut-mute",
+            type: "shortcut",
+            label: "Toggle Mute / Unmute (During Call)",
+            value: editedShortcutToggleMute,
+            onUpdate: (val: string) => onUpdateGlobalShortcutToggleMute(val),
+            onRemove: () =>
+                onUpdateGlobalShortcutToggleMute(NO_GLOBAL_SHORTCUT),
+            onDefault: () =>
+                onUpdateGlobalShortcutToggleMute(
+                    DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
+                ),
+        },
+        {
+            id: "shortcut-interrupt",
+            type: "shortcut",
+            label: "Interrupt Speech (During Call)",
+            value: editedShortcutInterrupt,
+            onUpdate: (val: string) => onUpdateGlobalShortcutInterrupt(val),
+            onRemove: () =>
+                onUpdateGlobalShortcutInterrupt(NO_GLOBAL_SHORTCUT),
+            onDefault: () =>
+                onUpdateGlobalShortcutInterrupt(
+                    DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
+                ),
+        },
+    ]);
+
+    const filteredSettings = $derived(
+        settingsData.filter((s) => matchesSearch(s.label, s.detail)),
+    );
+
+    const hasMatches = $derived(filteredSettings.length > 0);
 </script>
 
 <button
@@ -482,504 +709,167 @@
                 </div>
             </div>
 
+            <div class="about-search-container">
+                <div class="about-search-wrapper">
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        class="search-icon"
+                        ><circle cx="11" cy="11" r="8" /><line
+                            x1="21"
+                            y1="21"
+                            x2="16.65"
+                            y2="16.65"
+                        /></svg
+                    >
+                    <input
+                        type="text"
+                        class="about-search-input"
+                        placeholder="Search settings..."
+                        bind:value={searchQuery}
+                    />
+                    {#if searchQuery}
+                        <button
+                            type="button"
+                            class="search-clear-btn"
+                            onclick={() => (searchQuery = "")}
+                            aria-label="Clear search"
+                        >
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="3"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                ><line x1="18" y1="6" x2="6" y2="18" /><line
+                                    x1="6"
+                                    y1="6"
+                                    x2="18"
+                                    y2="18"
+                                /></svg
+                            >
+                        </button>
+                    {/if}
+                </div>
+            </div>
+
             <div class="about-metadata-card">
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label"
-                        >Enable Pop Sound (Screenshots / Processing Audio /
-                        Finished Response)</span
-                    >
-                    <button
-                        type="button"
-                        class="quantize-toggle"
-                        class:active={pongPlaybackEnabled}
-                        onclick={() =>
-                            onUpdatePongPlayback(!pongPlaybackEnabled)}
-                    >
-                        <span class="quantize-dot"></span>
-                        <span
-                            >{pongPlaybackEnabled
-                                ? "Enabled"
-                                : "Disabled"}</span
-                        >
-                    </button>
-                </div>
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label"
-                        >Auto-Unmute After Attaching Screenshot</span
-                    >
-                    <button
-                        type="button"
-                        class="quantize-toggle"
-                        class:active={autoUnmuteOnPastedScreenshotEnabled}
-                        onclick={() =>
-                            onUpdateAutoUnmuteOnPastedScreenshot(
-                                !autoUnmuteOnPastedScreenshotEnabled,
-                            )}
-                    >
-                        <span class="quantize-dot"></span>
-                        <span
-                            >{autoUnmuteOnPastedScreenshotEnabled
-                                ? "Enabled"
-                                : "Disabled"}</span
-                        >
-                    </button>
-                </div>
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label"
-                        >Select Last Session When Startup</span
-                    >
-                    <button
-                        type="button"
-                        class="quantize-toggle"
-                        class:active={selectLastSessionEnabled}
-                        onclick={() =>
-                            onUpdateSelectLastSession(
-                                !selectLastSessionEnabled,
-                            )}
-                    >
-                        <span class="quantize-dot"></span>
-                        <span
-                            >{selectLastSessionEnabled
-                                ? "Enabled"
-                                : "Disabled"}</span
-                        >
-                    </button>
-                </div>
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label"
-                        >Show Stats (Latency, Memory Usage) [Experimental]</span
-                    >
-                    <button
-                        type="button"
-                        class="quantize-toggle"
-                        class:active={showStatEnabled}
-                        onclick={() => onUpdateShowStat(!showStatEnabled)}
-                    >
-                        <span class="quantize-dot"></span>
-                        <span>{showStatEnabled ? "Enabled" : "Disabled"}</span>
-                    </button>
-                </div>
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label"
-                        >Show Subtitles (Live Transcript)</span
-                    >
-                    <button
-                        type="button"
-                        class="quantize-toggle"
-                        class:active={showSubtitleEnabled}
-                        onclick={() =>
-                            onUpdateShowSubtitle(!showSubtitleEnabled)}
-                    >
-                        <span class="quantize-dot"></span>
-                        <span
-                            >{showSubtitleEnabled
-                                ? "Enabled"
-                                : "Disabled"}</span
-                        >
-                    </button>
-                </div>
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label">Show AI Subtitle</span>
-                    <button
-                        type="button"
-                        class="quantize-toggle"
-                        class:active={showAiSubtitleEnabled}
-                        onclick={() =>
-                            onUpdateShowAiSubtitle(!showAiSubtitleEnabled)}
-                    >
-                        <span class="quantize-dot"></span>
-                        <span
-                            >{showAiSubtitleEnabled
-                                ? "Enabled"
-                                : "Disabled"}</span
-                        >
-                    </button>
-                </div>
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label"
-                        >Show Hidden-Window Overlay (Toasts, Live Transcript, AI
-                        Subtitle)</span
-                    >
-                    <button
-                        type="button"
-                        class="quantize-toggle"
-                        class:active={showHiddenWindowOverlayEnabled}
-                        onclick={() =>
-                            onUpdateShowHiddenWindowOverlay(
-                                !showHiddenWindowOverlayEnabled,
-                            )}
-                    >
-                        <span class="quantize-dot"></span>
-                        <span
-                            >{showHiddenWindowOverlayEnabled
-                                ? "Enabled"
-                                : "Disabled"}</span
-                        >
-                    </button>
-                </div>
-                <div class="about-metadata-row slider-row">
-                    <span class="about-metadata-label"
-                        >Silence Before Sending Audio to STT</span
-                    >
-                    <div class="about-slider-control">
-                        <div class="about-slider-header">
-                            <span class="about-slider-detail"
-                                >Longer waits capture more pause-heavy speech
-                                before transcription starts. The minimum stays
-                                conservative to avoid mid-sentence cutoffs.</span
+                {#each filteredSettings as setting (setting.id)}
+                    {#if setting.type === "toggle"}
+                        <div class="about-metadata-row">
+                            <span class="about-metadata-label"
+                                >{setting.label}</span
                             >
-                            <span class="about-slider-value"
-                                >{formattedEndOfUtteranceSilence}</span
+                            <button
+                                type="button"
+                                class="quantize-toggle"
+                                class:active={setting.value}
+                                onclick={() =>
+                                    setting.onUpdate(!setting.value)}
                             >
-                        </div>
-                        <div class="about-slider-surface">
-                            <input
-                                type="range"
-                                class="about-slider"
-                                min={MIN_END_OF_UTTERANCE_SILENCE_MS}
-                                max={MAX_END_OF_UTTERANCE_SILENCE_MS}
-                                step={END_OF_UTTERANCE_SILENCE_STEP_MS}
-                                value={endOfUtteranceSilenceMs}
-                                style={`--slider-progress: ${endOfUtteranceSilenceProgress}%;`}
-                                aria-label="Silence before sending audio to STT"
-                                oninput={(event) =>
-                                    onUpdateEndOfUtteranceSilenceMs(
-                                        Number(
-                                            (
-                                                event.currentTarget as HTMLInputElement
-                                            ).value,
-                                        ),
-                                    )}
-                            />
-                            <div class="about-slider-scale" aria-hidden="true">
-                                <span>{minimumEndOfUtteranceSilenceLabel}</span>
-                                <span>{maximumEndOfUtteranceSilenceLabel}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="about-metadata-row slider-row">
-                    <span class="about-metadata-label"
-                        >AI Auto-Continue After Silence</span
-                    >
-                    <div class="about-slider-control">
-                        <div class="about-slider-header">
-                            <span class="about-slider-detail"
-                                >After the assistant finishes speaking, wait
-                                this long with no user speech before it adds a
-                                short continuation to the same assistant
-                                message.</span
-                            >
-                            <span class="about-slider-value"
-                                >{formattedAutoContinueSilence}</span
-                            >
-                        </div>
-                        <div class="about-slider-surface">
-                            <input
-                                type="range"
-                                class="about-slider"
-                                min={MIN_AUTO_CONTINUE_SILENCE_MS}
-                                max={AUTO_CONTINUE_NEVER_SLIDER_VALUE}
-                                step={AUTO_CONTINUE_SILENCE_STEP_MS}
-                                value={autoContinueSilenceSliderValue}
-                                style={`--slider-progress: ${autoContinueSilenceProgress}%;`}
-                                aria-label="AI auto-continue after silence"
-                                oninput={(event) => {
-                                    const sliderValue = Number(
-                                        (
-                                            event.currentTarget as HTMLInputElement
-                                        ).value,
-                                    );
-                                    onUpdateAutoContinueSilenceMs(
-                                        sliderValue >=
-                                            AUTO_CONTINUE_NEVER_SLIDER_VALUE
-                                            ? DEFAULT_AUTO_CONTINUE_SILENCE_MS
-                                            : sliderValue,
-                                    );
-                                }}
-                            />
-                            <div class="about-slider-scale" aria-hidden="true">
-                                <span>{minimumAutoContinueSilenceLabel}</span>
-                                <span>{maximumAutoContinueSilenceLabel}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="about-metadata-row slider-row">
-                    <span class="about-metadata-label"
-                        >Max Auto-Continues Per Reply</span
-                    >
-                    <div class="about-slider-control">
-                        <div class="about-slider-header">
-                            <span class="about-slider-detail"
-                                >Limits how many extra follow-up bursts the
-                                assistant can add to the same reply before
-                                waiting for you to speak.</span
-                            >
-                            <span class="about-slider-value"
-                                >{autoContinueMaxCountDisabled
-                                    ? "Disabled"
-                                    : formattedAutoContinueMaxCount}</span
-                            >
-                        </div>
-                        {#if showContinuousAutoContinueWarning}
-                            <div class="about-slider-header">
-                                <span class="about-slider-detail"
-                                    >Warning: Continuous can keep the assistant
-                                    talking indefinitely until you interrupt it
-                                    or speak.</span
+                                <span class="quantize-dot"></span>
+                                <span
+                                    >{setting.value
+                                        ? "Enabled"
+                                        : "Disabled"}</span
                                 >
-                            </div>
-                        {/if}
-                        <div class="about-slider-surface">
-                            <input
-                                type="range"
-                                class="about-slider"
-                                min={MIN_AUTO_CONTINUE_MAX_COUNT}
-                                max={AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE}
-                                step="1"
-                                value={autoContinueMaxCountSliderValue}
-                                style={`--slider-progress: ${autoContinueMaxCountProgress}%;`}
-                                aria-label="Max auto-continues per reply"
-                                disabled={autoContinueMaxCountDisabled}
-                                oninput={(event) => {
-                                    const sliderValue = Number(
-                                        (
-                                            event.currentTarget as HTMLInputElement
-                                        ).value,
-                                    );
-                                    onUpdateAutoContinueMaxCount(
-                                        sliderValue >=
-                                            AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE
-                                            ? null
-                                            : Math.min(
-                                                  MAX_AUTO_CONTINUE_MAX_COUNT,
-                                                  Math.max(
-                                                      MIN_AUTO_CONTINUE_MAX_COUNT,
-                                                      sliderValue,
-                                                  ),
-                                              ),
-                                    );
-                                }}
-                            />
-                            <div class="about-slider-scale" aria-hidden="true">
-                                <span>{minimumAutoContinueMaxCountLabel}</span>
-                                <span>{maximumAutoContinueMaxCountLabel}</span>
+                            </button>
+                        </div>
+                    {:else if setting.type === "slider"}
+                        <div class="about-metadata-row slider-row">
+                            <span class="about-metadata-label"
+                                >{setting.label}</span
+                            >
+                            <div class="about-slider-control">
+                                <div class="about-slider-header">
+                                    {#if setting.detail}
+                                        <span class="about-slider-detail"
+                                            >{setting.detail}</span
+                                        >
+                                    {/if}
+                                    <span class="about-slider-value"
+                                        >{setting.displayValue}</span
+                                    >
+                                </div>
+                                {#if setting.warning}
+                                    <div class="about-slider-header">
+                                        <span class="about-slider-detail"
+                                            >{setting.warning}</span
+                                        >
+                                    </div>
+                                {/if}
+                                <div class="about-slider-surface">
+                                    <input
+                                        type="range"
+                                        class="about-slider"
+                                        min={setting.min}
+                                        max={setting.max}
+                                        step={setting.step}
+                                        value={setting.value}
+                                        style={`--slider-progress: ${setting.progress}%;`}
+                                        aria-label={setting.label}
+                                        disabled={setting.disabled}
+                                        oninput={(event) =>
+                                            setting.onUpdate(
+                                                Number(
+                                                    (
+                                                        event.currentTarget as HTMLInputElement
+                                                    ).value,
+                                                ),
+                                            )}
+                                    />
+                                    <div
+                                        class="about-slider-scale"
+                                        aria-hidden="true"
+                                    >
+                                        <span>{setting.minLabel}</span>
+                                        <span>{setting.maxLabel}</span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                </div>
-                <div class="about-metadata-row slider-row">
-                    <span class="about-metadata-label"
-                        >Last Conversation Turns Visible to AI</span
-                    >
-                    <div class="about-slider-control">
-                        <div class="about-slider-header">
-                            <span class="about-slider-detail"
-                                >Caps how many recent back-and-forth turns the
-                                model can inspect across the active conversation
-                                context. Move it to Unlimited to keep the full
-                                conversation history.</span
+                    {:else if setting.type === "shortcut"}
+                        <div class="about-metadata-row shortcut-row">
+                            <span class="about-metadata-label"
+                                >{setting.label}</span
                             >
-                            <span class="about-slider-value"
-                                >{formattedLlmContextTurnLimit}</span
-                            >
+                            <div class="shortcut-input-wrapper">
+                                <ShortcutCapture
+                                    value={setting.value}
+                                    onUpdate={(newValue) => {
+                                        setting.onUpdate(newValue);
+                                    }}
+                                    onRemove={() => {
+                                        setting.onRemove();
+                                    }}
+                                    onDefault={() => {
+                                        setting.onDefault();
+                                    }}
+                                />
+                            </div>
                         </div>
-                        <div class="about-slider-surface">
-                            <input
-                                type="range"
-                                class="about-slider"
-                                min={MIN_LLM_CONTEXT_TURN_LIMIT}
-                                max={LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE}
-                                step="1"
-                                value={llmContextTurnSliderValue}
-                                style={`--slider-progress: ${llmContextTurnProgress}%;`}
-                                aria-label="Last conversation turns visible to AI"
-                                oninput={(event) => {
-                                    const value = Number(
-                                        (
-                                            event.currentTarget as HTMLInputElement
-                                        ).value,
-                                    );
+                    {/if}
+                {/each}
 
-                                    onUpdateLlmContextTurnLimit(
-                                        value >=
-                                            LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE
-                                            ? null
-                                            : Math.min(
-                                                  MAX_LLM_CONTEXT_TURN_LIMIT,
-                                                  Math.max(
-                                                      MIN_LLM_CONTEXT_TURN_LIMIT,
-                                                      value,
-                                                  ),
-                                              ),
-                                    );
-                                }}
-                            />
-                            <div class="about-slider-scale" aria-hidden="true">
-                                <span>{minimumLlmContextTurnLabel}</span>
-                                <span>{maximumLlmContextTurnLabel}</span>
-                            </div>
-                        </div>
+                {#if !hasMatches}
+                    <div class="search-empty-state">
+                        <span class="about-empty-title">No settings found</span>
+                        <span class="about-empty-detail"
+                            >Try a different search term.</span
+                        >
                     </div>
-                </div>
-                <div class="about-metadata-row slider-row">
-                    <span class="about-metadata-label"
-                        >Last Images Visible to LLM</span
-                    >
-                    <div class="about-slider-control">
-                        <div class="about-slider-header">
-                            <span class="about-slider-detail"
-                                >Caps how many recent screenshots the model can
-                                inspect across the active conversation context.
-                                Move it to Unlimited to keep every image that
-                                still fits in the context window.</span
-                            >
-                            <span class="about-slider-value"
-                                >{formattedLlmImageHistoryLimit}</span
-                            >
-                        </div>
-                        <div class="about-slider-surface">
-                            <input
-                                type="range"
-                                class="about-slider"
-                                min={MIN_LLM_IMAGE_HISTORY_LIMIT}
-                                max={LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE}
-                                step="1"
-                                value={llmImageHistorySliderValue}
-                                style={`--slider-progress: ${llmImageHistoryProgress}%;`}
-                                aria-label="Last images visible to LLM"
-                                oninput={(event) => {
-                                    const value = Number(
-                                        (
-                                            event.currentTarget as HTMLInputElement
-                                        ).value,
-                                    );
-
-                                    onUpdateLlmImageHistoryLimit(
-                                        value >=
-                                            LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE
-                                            ? DEFAULT_LLM_IMAGE_HISTORY_LIMIT
-                                            : Math.min(
-                                                  MAX_LLM_IMAGE_HISTORY_LIMIT,
-                                                  Math.max(
-                                                      MIN_LLM_IMAGE_HISTORY_LIMIT,
-                                                      value,
-                                                  ),
-                                              ),
-                                    );
-                                }}
-                            />
-                            <div class="about-slider-scale" aria-hidden="true">
-                                <span>{minimumLlmImageHistoryLabel}</span>
-                                <span>{maximumLlmImageHistoryLabel}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="about-metadata-row shortcut-row">
-                    <span class="about-metadata-label"
-                        >Look at Screen Region (During Call)</span
-                    >
-                    <div class="shortcut-input-wrapper">
-                        <ShortcutCapture
-                            value={editedShortcut}
-                            onUpdate={(newValue) => {
-                                editedShortcut = newValue;
-                                onUpdateGlobalShortcut(newValue);
-                            }}
-                            onRemove={() => {
-                                editedShortcut = NO_GLOBAL_SHORTCUT;
-                                onUpdateGlobalShortcut(NO_GLOBAL_SHORTCUT);
-                            }}
-                            onDefault={() => {
-                                editedShortcut = DEFAULT_GLOBAL_SHORTCUT;
-                                onUpdateGlobalShortcut(DEFAULT_GLOBAL_SHORTCUT);
-                            }}
-                        />
-                    </div>
-                </div>
-                <div class="about-metadata-row shortcut-row">
-                    <span class="about-metadata-label"
-                        >Look at Entire Screen (During Call)</span
-                    >
-                    <div class="shortcut-input-wrapper">
-                        <ShortcutCapture
-                            value={editedShortcutEntireScreen}
-                            onUpdate={(newValue) => {
-                                editedShortcutEntireScreen = newValue;
-                                onUpdateGlobalShortcutEntireScreen(newValue);
-                            }}
-                            onRemove={() => {
-                                editedShortcutEntireScreen = NO_GLOBAL_SHORTCUT;
-                                onUpdateGlobalShortcutEntireScreen(
-                                    NO_GLOBAL_SHORTCUT,
-                                );
-                            }}
-                            onDefault={() => {
-                                editedShortcutEntireScreen =
-                                    DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN;
-                                onUpdateGlobalShortcutEntireScreen(
-                                    DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
-                                );
-                            }}
-                        />
-                    </div>
-                </div>
-                <div class="about-metadata-row shortcut-row">
-                    <span class="about-metadata-label"
-                        >Toggle Mute / Unmute (During Call)</span
-                    >
-                    <div class="shortcut-input-wrapper">
-                        <ShortcutCapture
-                            value={editedShortcutToggleMute}
-                            onUpdate={(newValue) => {
-                                editedShortcutToggleMute = newValue;
-                                onUpdateGlobalShortcutToggleMute(newValue);
-                            }}
-                            onRemove={() => {
-                                editedShortcutToggleMute = NO_GLOBAL_SHORTCUT;
-                                onUpdateGlobalShortcutToggleMute(
-                                    NO_GLOBAL_SHORTCUT,
-                                );
-                            }}
-                            onDefault={() => {
-                                editedShortcutToggleMute =
-                                    DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE;
-                                onUpdateGlobalShortcutToggleMute(
-                                    DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
-                                );
-                            }}
-                        />
-                    </div>
-                </div>
-                <div class="about-metadata-row shortcut-row">
-                    <span class="about-metadata-label"
-                        >Interrupt Speech (During Call)</span
-                    >
-                    <div class="shortcut-input-wrapper">
-                        <ShortcutCapture
-                            value={editedShortcutInterrupt}
-                            onUpdate={(newValue) => {
-                                editedShortcutInterrupt = newValue;
-                                onUpdateGlobalShortcutInterrupt(newValue);
-                            }}
-                            onRemove={() => {
-                                editedShortcutInterrupt = NO_GLOBAL_SHORTCUT;
-                                onUpdateGlobalShortcutInterrupt(
-                                    NO_GLOBAL_SHORTCUT,
-                                );
-                            }}
-                            onDefault={() => {
-                                editedShortcutInterrupt =
-                                    DEFAULT_GLOBAL_SHORTCUT_INTERRUPT;
-                                onUpdateGlobalShortcutInterrupt(
-                                    DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
-                                );
-                            }}
-                        />
-                    </div>
-                </div>
+                {/if}
             </div>
 
             {#if !calling}
@@ -1137,6 +1027,74 @@
     .about-metadata-label {
         font-size: 0.72rem;
         line-height: 1.35;
+    }
+
+    .about-search-wrapper {
+        position: relative;
+        display: flex;
+        align-items: center;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        padding: 0 12px;
+        transition: all 0.2s ease;
+    }
+
+    .about-search-wrapper:focus-within {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 205, 64, 0.3);
+        box-shadow: 0 0 0 4px rgba(255, 205, 64, 0.06);
+    }
+
+    .search-icon {
+        color: rgba(255, 255, 255, 0.3);
+        flex-shrink: 0;
+    }
+
+    .about-search-input {
+        background: none;
+        border: none;
+        color: #fff;
+        font-size: 0.82rem;
+        height: 40px;
+        width: 100%;
+        padding: 0 10px;
+        outline: none;
+    }
+
+    .about-search-input::placeholder {
+        color: rgba(255, 255, 255, 0.25);
+    }
+
+    .search-clear-btn {
+        background: rgba(255, 255, 255, 0.06);
+        border: none;
+        border-radius: 50%;
+        color: rgba(255, 255, 255, 0.4);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 20px;
+        width: 20px;
+        padding: 0;
+        flex-shrink: 0;
+        transition: all 0.15s ease;
+    }
+
+    .search-clear-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #fff;
+    }
+
+    .search-empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 40px 20px;
+        text-align: center;
+        gap: 8px;
     }
 
     .about-slider-header {
