@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/39bc1187-ddb4-42f4-8225-7f873734fa62
 
 - **Real-Time Voice Interaction**: Chat with AI hands-free. Interrupt anytime you want like in a real conversation.
 - **Screen-Aware Vision**: Capture screen regions or the full screen with shortcuts and let the AI see what you see.
-- **Live Transcribtion & Subtitle**: Real-Time showing trascribtion and subtitle so you don't miss anything important.
+- **Live Transcription & Subtitle**: Real-Time showing trascribtion and subtitle so you don't miss anything important.
 - **Conversation Management**: Search, rename, resume, fork or delete any previous chat session from your local disk.
 - **Portability**: Share your characters (Prompt, Avatar, Voice) easily with `.openduck` files.
 - **Engineered for Efficiency**: Native macOS application built with Rust and Svelte, optimizing memory for AI models.
