@@ -5,13 +5,20 @@
     import { ask } from "@tauri-apps/plugin-dialog";
 
     import {
+        AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE,
+        AUTO_CONTINUE_NEVER_SLIDER_VALUE,
+        AUTO_CONTINUE_SILENCE_STEP_MS,
+        DEFAULT_AUTO_CONTINUE_SILENCE_MS,
         DEFAULT_LLM_IMAGE_HISTORY_LIMIT,
         LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE,
         END_OF_UTTERANCE_SILENCE_STEP_MS,
         LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE,
+        MAX_AUTO_CONTINUE_MAX_COUNT,
         MAX_LLM_CONTEXT_TURN_LIMIT,
         MAX_END_OF_UTTERANCE_SILENCE_MS,
         MAX_LLM_IMAGE_HISTORY_LIMIT,
+        MIN_AUTO_CONTINUE_MAX_COUNT,
+        MIN_AUTO_CONTINUE_SILENCE_MS,
         MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
         MIN_LLM_IMAGE_HISTORY_LIMIT,
@@ -42,6 +49,8 @@
         showStatEnabled,
         showSubtitleEnabled,
         endOfUtteranceSilenceMs,
+        autoContinueSilenceMs,
+        autoContinueMaxCount,
         llmContextTurnLimit,
         llmImageHistoryLimit,
         onUpdateGlobalShortcut,
@@ -53,6 +62,8 @@
         onUpdateShowStat,
         onUpdateShowSubtitle,
         onUpdateEndOfUtteranceSilenceMs,
+        onUpdateAutoContinueSilenceMs,
+        onUpdateAutoContinueMaxCount,
         onUpdateLlmContextTurnLimit,
         onUpdateLlmImageHistoryLimit,
     } = $props<{
@@ -74,6 +85,8 @@
         showStatEnabled: boolean;
         showSubtitleEnabled: boolean;
         endOfUtteranceSilenceMs: number;
+        autoContinueSilenceMs: number | null;
+        autoContinueMaxCount: number | null;
         llmContextTurnLimit: number | null;
         llmImageHistoryLimit: number | null;
         onUpdateGlobalShortcut: (shortcut: string) => void;
@@ -85,6 +98,8 @@
         onUpdateShowStat: (enabled: boolean) => void;
         onUpdateShowSubtitle: (enabled: boolean) => void;
         onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
+        onUpdateAutoContinueSilenceMs: (milliseconds: number | null) => void;
+        onUpdateAutoContinueMaxCount: (count: number | null) => void;
         onUpdateLlmContextTurnLimit: (limit: number | null) => void;
         onUpdateLlmImageHistoryLimit: (limit: number | null) => void;
     }>();
@@ -241,6 +256,76 @@
             100
         );
     });
+    const autoContinueSilenceSliderValue = $derived.by(() => {
+        if (autoContinueSilenceMs === DEFAULT_AUTO_CONTINUE_SILENCE_MS) {
+            return AUTO_CONTINUE_NEVER_SLIDER_VALUE;
+        }
+
+        return autoContinueSilenceMs;
+    });
+    const formattedAutoContinueSilence = $derived.by(() => {
+        if (autoContinueSilenceMs === DEFAULT_AUTO_CONTINUE_SILENCE_MS) {
+            return "Never auto continue";
+        }
+
+        return `${autoContinueSilenceMs / 1000}s`;
+    });
+    const autoContinueSilenceProgress = $derived.by(() => {
+        const range =
+            AUTO_CONTINUE_NEVER_SLIDER_VALUE - MIN_AUTO_CONTINUE_SILENCE_MS;
+        if (range <= 0) {
+            return 0;
+        }
+
+        return (
+            ((autoContinueSilenceSliderValue - MIN_AUTO_CONTINUE_SILENCE_MS) /
+                range) *
+            100
+        );
+    });
+    const minimumAutoContinueSilenceLabel = `${
+        MIN_AUTO_CONTINUE_SILENCE_MS / 1000
+    }s`;
+    const maximumAutoContinueSilenceLabel = "Never";
+    const autoContinueMaxCountDisabled = $derived(
+        autoContinueSilenceMs === DEFAULT_AUTO_CONTINUE_SILENCE_MS,
+    );
+    const autoContinueMaxCountSliderValue = $derived.by(() => {
+        if (autoContinueMaxCount === null) {
+            return AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE;
+        }
+
+        return autoContinueMaxCount;
+    });
+    const formattedAutoContinueMaxCount = $derived.by(() => {
+        if (autoContinueMaxCount === null) {
+            return "Continuous";
+        }
+
+        return autoContinueMaxCount === 1
+            ? "1 time"
+            : `${autoContinueMaxCount} times`;
+    });
+    const autoContinueMaxCountProgress = $derived.by(() => {
+        const range =
+            AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE -
+            MIN_AUTO_CONTINUE_MAX_COUNT;
+        if (range <= 0) {
+            return 0;
+        }
+
+        return (
+            ((autoContinueMaxCountSliderValue - MIN_AUTO_CONTINUE_MAX_COUNT) /
+                range) *
+            100
+        );
+    });
+    const minimumAutoContinueMaxCountLabel = `${MIN_AUTO_CONTINUE_MAX_COUNT}`;
+    const maximumAutoContinueMaxCountLabel = "Continuous";
+    const showContinuousAutoContinueWarning = $derived(
+        !autoContinueMaxCountDisabled &&
+            autoContinueMaxCount === null,
+    );
     const llmContextTurnSliderValue = $derived.by(() => {
         if (llmContextTurnLimit === null) {
             return LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE;
@@ -501,6 +586,116 @@
                         <div class="about-slider-scale" aria-hidden="true">
                             <span>{minimumEndOfUtteranceSilenceLabel}</span>
                             <span>{maximumEndOfUtteranceSilenceLabel}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="about-metadata-row slider-row">
+                <span class="about-metadata-label"
+                    >AI Auto-Continue After Silence</span
+                >
+                <div class="about-slider-control">
+                    <div class="about-slider-header">
+                        <span class="about-slider-detail"
+                            >After the assistant finishes speaking, wait this
+                            long with no user speech before it adds a short
+                            continuation to the same assistant message.</span
+                        >
+                        <span class="about-slider-value"
+                            >{formattedAutoContinueSilence}</span
+                        >
+                    </div>
+                    <div class="about-slider-surface">
+                        <input
+                            type="range"
+                            class="about-slider"
+                            min={MIN_AUTO_CONTINUE_SILENCE_MS}
+                            max={AUTO_CONTINUE_NEVER_SLIDER_VALUE}
+                            step={AUTO_CONTINUE_SILENCE_STEP_MS}
+                            value={autoContinueSilenceSliderValue}
+                            style={`--slider-progress: ${autoContinueSilenceProgress}%;`}
+                            aria-label="AI auto-continue after silence"
+                            oninput={(event) => {
+                                const sliderValue = Number(
+                                    (
+                                        event.currentTarget as HTMLInputElement
+                                    ).value,
+                                );
+                                onUpdateAutoContinueSilenceMs(
+                                    sliderValue >=
+                                        AUTO_CONTINUE_NEVER_SLIDER_VALUE
+                                        ? DEFAULT_AUTO_CONTINUE_SILENCE_MS
+                                        : sliderValue,
+                                );
+                            }}
+                        />
+                        <div class="about-slider-scale" aria-hidden="true">
+                            <span>{minimumAutoContinueSilenceLabel}</span>
+                            <span>{maximumAutoContinueSilenceLabel}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="about-metadata-row slider-row">
+                <span class="about-metadata-label"
+                    >Max Auto-Continues Per Reply</span
+                >
+                <div class="about-slider-control">
+                    <div class="about-slider-header">
+                        <span class="about-slider-detail"
+                            >Limits how many extra follow-up bursts the
+                            assistant can add to the same reply before waiting
+                            for you to speak.</span
+                        >
+                        <span class="about-slider-value"
+                            >{autoContinueMaxCountDisabled
+                                ? "Disabled"
+                                : formattedAutoContinueMaxCount}</span
+                        >
+                    </div>
+                    {#if showContinuousAutoContinueWarning}
+                        <div class="about-slider-header">
+                            <span class="about-slider-detail"
+                                >Warning: Continuous can keep the assistant
+                                talking indefinitely until you interrupt it or
+                                speak.</span
+                            >
+                        </div>
+                    {/if}
+                    <div class="about-slider-surface">
+                        <input
+                            type="range"
+                            class="about-slider"
+                            min={MIN_AUTO_CONTINUE_MAX_COUNT}
+                            max={AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE}
+                            step="1"
+                            value={autoContinueMaxCountSliderValue}
+                            style={`--slider-progress: ${autoContinueMaxCountProgress}%;`}
+                            aria-label="Max auto-continues per reply"
+                            disabled={autoContinueMaxCountDisabled}
+                            oninput={(event) => {
+                                const sliderValue = Number(
+                                    (
+                                        event.currentTarget as HTMLInputElement
+                                    ).value,
+                                );
+                                onUpdateAutoContinueMaxCount(
+                                    sliderValue >=
+                                        AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE
+                                        ? null
+                                        : Math.min(
+                                              MAX_AUTO_CONTINUE_MAX_COUNT,
+                                              Math.max(
+                                                  MIN_AUTO_CONTINUE_MAX_COUNT,
+                                                  sliderValue,
+                                              ),
+                                          ),
+                                );
+                            }}
+                        />
+                        <div class="about-slider-scale" aria-hidden="true">
+                            <span>{minimumAutoContinueMaxCountLabel}</span>
+                            <span>{maximumAutoContinueMaxCountLabel}</span>
                         </div>
                     </div>
                 </div>

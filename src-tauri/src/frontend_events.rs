@@ -8,6 +8,7 @@ use crate::{constants::*, pending_screen_capture_file_name, AppState};
 #[derive(Clone, Serialize)]
 pub(crate) struct CsmAudioStartEvent {
     pub(crate) request_id: u64,
+    pub(crate) append_to_assistant_entry_id: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]
@@ -86,6 +87,7 @@ pub(crate) struct AssistantResponseEvent {
     pub(crate) text: String,
     pub(crate) reasoning_text: String,
     pub(crate) is_final: bool,
+    pub(crate) append_to_assistant_entry_id: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]

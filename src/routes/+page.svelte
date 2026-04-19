@@ -29,7 +29,12 @@
         slugifyContactName,
     } from "$lib/openduck/contacts";
     import {
+        AUTO_CONTINUE_MAX_COUNT_STORAGE_KEY,
+        AUTO_CONTINUE_SILENCE_STEP_MS,
+        AUTO_CONTINUE_SILENCE_STORAGE_KEY,
         CONTACTS_STORAGE_KEY,
+        DEFAULT_AUTO_CONTINUE_MAX_COUNT,
+        DEFAULT_AUTO_CONTINUE_SILENCE_MS,
         DEFAULT_CONTACT_ID,
         DEFAULT_CSM_MODEL,
         DEFAULT_END_OF_UTTERANCE_SILENCE_MS,
@@ -49,9 +54,13 @@
         MAX_END_OF_UTTERANCE_SILENCE_MS,
         MAX_LLM_CONTEXT_TURN_LIMIT,
         MAX_LLM_IMAGE_HISTORY_LIMIT,
+        MAX_AUTO_CONTINUE_MAX_COUNT,
+        MAX_AUTO_CONTINUE_SILENCE_MS,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
         MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_LLM_IMAGE_HISTORY_LIMIT,
+        MIN_AUTO_CONTINUE_MAX_COUNT,
+        MIN_AUTO_CONTINUE_SILENCE_MS,
         MODEL_PRESETS,
         PONG_PLAYBACK_STORAGE_KEY,
         SELECT_LAST_SESSION_STORAGE_KEY,
@@ -147,6 +156,16 @@
     type StoredEndOfUtteranceSilencePreference = {
         version: 1;
         milliseconds: number;
+    };
+
+    type StoredAutoContinueSilencePreference = {
+        version: 1;
+        milliseconds: number | null;
+    };
+
+    type StoredAutoContinueMaxCountPreference = {
+        version: 1;
+        count: number | null;
     };
 
     type StoredLlmContextTurnLimitPreference = {
@@ -258,6 +277,12 @@
     let showStatEnabled = $state(false);
     let showSubtitleEnabled = $state(true);
     let endOfUtteranceSilenceMs = $state(DEFAULT_END_OF_UTTERANCE_SILENCE_MS);
+    let autoContinueSilenceMs = $state<number | null>(
+        DEFAULT_AUTO_CONTINUE_SILENCE_MS,
+    );
+    let autoContinueMaxCount = $state<number | null>(
+        DEFAULT_AUTO_CONTINUE_MAX_COUNT,
+    );
     let llmContextTurnLimit = $state<number | null>(
         DEFAULT_LLM_CONTEXT_TURN_LIMIT,
     );
@@ -914,10 +939,28 @@
     function upsertAssistantConversationLogEntry(
         requestId: number,
         text: string,
+        appendToAssistantEntryId: number | null = null,
     ) {
         const normalizedText = text.trim();
         if (!normalizedText) {
             return;
+        }
+
+        if (appendToAssistantEntryId != null) {
+            const existingEntry = conversationLogEntries.find(
+                (entry) => entry.id === appendToAssistantEntryId,
+            );
+            if (existingEntry) {
+                activeAssistantResponseId = requestId;
+                activeAssistantConversationEntryId = appendToAssistantEntryId;
+                conversationLogEntries = conversationLogEntries.map((entry) =>
+                    entry.id === appendToAssistantEntryId
+                        ? { ...entry, text: normalizedText }
+                        : entry,
+                );
+                scrollConversationLogToBottom();
+                return;
+            }
         }
 
         if (
@@ -1233,6 +1276,76 @@
         );
     }
 
+    function clampAutoContinueSilenceMs(
+        milliseconds: number | null,
+    ): number | null {
+        if (milliseconds === null) {
+            return DEFAULT_AUTO_CONTINUE_SILENCE_MS;
+        }
+
+        if (!Number.isFinite(milliseconds)) {
+            return DEFAULT_AUTO_CONTINUE_SILENCE_MS;
+        }
+
+        const roundedMilliseconds = Math.round(milliseconds);
+        const steppedMilliseconds =
+            Math.round(roundedMilliseconds / AUTO_CONTINUE_SILENCE_STEP_MS) *
+            AUTO_CONTINUE_SILENCE_STEP_MS;
+
+        return Math.min(
+            MAX_AUTO_CONTINUE_SILENCE_MS,
+            Math.max(MIN_AUTO_CONTINUE_SILENCE_MS, steppedMilliseconds),
+        );
+    }
+
+    function persistAutoContinueSilencePreference(
+        milliseconds: number | null,
+    ) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredAutoContinueSilencePreference = {
+            version: 1,
+            milliseconds,
+        };
+        window.localStorage.setItem(
+            AUTO_CONTINUE_SILENCE_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function clampAutoContinueMaxCount(count: number | null): number | null {
+        if (count === null) {
+            return null;
+        }
+
+        if (!Number.isFinite(count)) {
+            return DEFAULT_AUTO_CONTINUE_MAX_COUNT;
+        }
+
+        const roundedCount = Math.round(count);
+        return Math.min(
+            MAX_AUTO_CONTINUE_MAX_COUNT,
+            Math.max(MIN_AUTO_CONTINUE_MAX_COUNT, roundedCount),
+        );
+    }
+
+    function persistAutoContinueMaxCountPreference(count: number | null) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredAutoContinueMaxCountPreference = {
+            version: 1,
+            count,
+        };
+        window.localStorage.setItem(
+            AUTO_CONTINUE_MAX_COUNT_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function clampLlmContextTurnLimit(limit: number | null): number | null {
         if (limit === null) {
             return null;
@@ -1473,6 +1586,75 @@
         }
     }
 
+    function loadAutoContinueSilencePreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_AUTO_CONTINUE_SILENCE_MS;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            AUTO_CONTINUE_SILENCE_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_AUTO_CONTINUE_SILENCE_MS;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                milliseconds?: unknown;
+            };
+            if (
+                parsed.version !== 1 ||
+                (parsed.milliseconds !== null &&
+                    typeof parsed.milliseconds !== "number")
+            ) {
+                return DEFAULT_AUTO_CONTINUE_SILENCE_MS;
+            }
+
+            return clampAutoContinueSilenceMs(parsed.milliseconds ?? null);
+        } catch (err) {
+            console.error(
+                "Failed to restore auto-continue silence preference:",
+                err,
+            );
+            return DEFAULT_AUTO_CONTINUE_SILENCE_MS;
+        }
+    }
+
+    function loadAutoContinueMaxCountPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_AUTO_CONTINUE_MAX_COUNT;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            AUTO_CONTINUE_MAX_COUNT_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_AUTO_CONTINUE_MAX_COUNT;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                count?: unknown;
+            };
+            if (
+                parsed.version !== 1 ||
+                (parsed.count !== null && typeof parsed.count !== "number")
+            ) {
+                return DEFAULT_AUTO_CONTINUE_MAX_COUNT;
+            }
+
+            return clampAutoContinueMaxCount(parsed.count ?? null);
+        } catch (err) {
+            console.error(
+                "Failed to restore auto-continue max count preference:",
+                err,
+            );
+            return DEFAULT_AUTO_CONTINUE_MAX_COUNT;
+        }
+    }
+
     function loadLlmContextTurnLimitPreferenceFromStorage() {
         if (typeof window === "undefined") {
             return DEFAULT_LLM_CONTEXT_TURN_LIMIT;
@@ -1608,6 +1790,39 @@
         });
     }
 
+    function applyAutoContinueSilencePreference(
+        milliseconds: number | null,
+    ) {
+        const normalizedMilliseconds =
+            clampAutoContinueSilenceMs(milliseconds);
+        autoContinueSilenceMs = normalizedMilliseconds;
+        persistAutoContinueSilencePreference(normalizedMilliseconds);
+
+        void invoke("set_auto_continue_silence_ms", {
+            milliseconds: normalizedMilliseconds,
+        }).catch((err) => {
+            console.error(
+                "Failed to update auto-continue silence preference:",
+                err,
+            );
+        });
+    }
+
+    function applyAutoContinueMaxCountPreference(count: number | null) {
+        const normalizedCount = clampAutoContinueMaxCount(count);
+        autoContinueMaxCount = normalizedCount;
+        persistAutoContinueMaxCountPreference(normalizedCount);
+
+        void invoke("set_auto_continue_max_count", {
+            count: normalizedCount,
+        }).catch((err) => {
+            console.error(
+                "Failed to update auto-continue max count preference:",
+                err,
+            );
+        });
+    }
+
     function applyLlmContextTurnLimitPreference(limit: number | null) {
         const normalizedLimit = clampLlmContextTurnLimit(limit);
         llmContextTurnLimit = normalizedLimit;
@@ -1676,6 +1891,17 @@
         const storedMilliseconds =
             loadEndOfUtteranceSilencePreferenceFromStorage();
         applyEndOfUtteranceSilencePreference(storedMilliseconds);
+    }
+
+    async function initializeAutoContinueSilencePreference() {
+        const storedMilliseconds =
+            loadAutoContinueSilencePreferenceFromStorage();
+        applyAutoContinueSilencePreference(storedMilliseconds);
+    }
+
+    async function initializeAutoContinueMaxCountPreference() {
+        const storedCount = loadAutoContinueMaxCountPreferenceFromStorage();
+        applyAutoContinueMaxCountPreference(storedCount);
     }
 
     async function initializeLlmContextTurnLimitPreference() {
@@ -4901,10 +5127,16 @@
                                 return;
                             }
 
+                            const shouldPreserveSpokenResponse =
+                                payload.append_to_assistant_entry_id != null &&
+                                payload.append_to_assistant_entry_id ===
+                                    activeAssistantConversationEntryId;
                             if (payload.request_id !== activeTtsRequestId) {
                                 stopPlayback();
                                 activeTtsRequestId = payload.request_id;
-                                currentSpokenResponse = "";
+                                if (!shouldPreserveSpokenResponse) {
+                                    currentSpokenResponse = "";
+                                }
                             }
                             pendingCompletionPongRequestId = payload.request_id;
                         },
@@ -5020,6 +5252,7 @@
                             upsertAssistantConversationLogEntry(
                                 payload.request_id,
                                 payload.text,
+                                payload.append_to_assistant_entry_id ?? null,
                             );
                         },
                     ),
@@ -5270,6 +5503,8 @@
             await initializeShowStatPreference();
             await initializeShowSubtitlePreference();
             await initializeEndOfUtteranceSilencePreference();
+            await initializeAutoContinueSilencePreference();
+            await initializeAutoContinueMaxCountPreference();
             await initializeLlmContextTurnLimitPreference();
             await initializeLlmImageHistoryLimitPreference();
             await initializeGlobalShortcutPreference();
@@ -5854,6 +6089,8 @@
                     {showStatEnabled}
                     {showSubtitleEnabled}
                     {endOfUtteranceSilenceMs}
+                    {autoContinueSilenceMs}
+                    {autoContinueMaxCount}
                     {llmContextTurnLimit}
                     {llmImageHistoryLimit}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
@@ -5865,6 +6102,8 @@
                     onUpdateShowStat={applyShowStatPreference}
                     onUpdateShowSubtitle={applyShowSubtitlePreference}
                     onUpdateEndOfUtteranceSilenceMs={applyEndOfUtteranceSilencePreference}
+                    onUpdateAutoContinueSilenceMs={applyAutoContinueSilencePreference}
+                    onUpdateAutoContinueMaxCount={applyAutoContinueMaxCountPreference}
                     onUpdateLlmContextTurnLimit={applyLlmContextTurnLimitPreference}
                     onUpdateLlmImageHistoryLimit={applyLlmImageHistoryLimitPreference}
                 />

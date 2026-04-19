@@ -1,6 +1,7 @@
 // Shared frontend types for the OpenDuck home page, including Tauri events, contacts, and model selections.
 export type CsmAudioStartEvent = {
     request_id: number;
+    append_to_assistant_entry_id?: number | null;
 };
 
 export type CsmAudioQueuedEvent = {
@@ -66,6 +67,7 @@ export type AssistantResponseEvent = {
     text: string;
     reasoning_text: string;
     is_final: boolean;
+    append_to_assistant_entry_id?: number | null;
 };
 
 export type ScreenCapturePhase =

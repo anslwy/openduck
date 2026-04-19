@@ -212,6 +212,25 @@ struct ActiveGeneration {
     cancellation_token: Arc<AtomicBool>,
 }
 
+#[derive(Clone, Copy)]
+struct AutoContinueTracker {
+    assistant_entry_id: u64,
+    continuation_count: u32,
+    blocked: bool,
+}
+
+enum ResponseGenerationMode {
+    LatestUserTurn {
+        user_text: String,
+        latest_audio_wav_base64: Option<String>,
+        latest_image_paths: Vec<PathBuf>,
+    },
+    AssistantAutoContinue {
+        assistant_entry_id: u64,
+        assistant_text_prefix: String,
+    },
+}
+
 #[derive(Deserialize)]
 struct ChatCompletionResponse {
     choices: Vec<ChatCompletionChoice>,
@@ -386,6 +405,10 @@ struct AppState {
     tray_pong_playback_hydrated: Mutex<bool>,
     tray_pong_playback_modified_before_hydration: Mutex<bool>,
     end_of_utterance_silence_ms: Mutex<u32>,
+    auto_continue_silence_ms: Mutex<Option<u32>>,
+    auto_continue_max_count: Mutex<Option<u32>>,
+    auto_continue_timer_generation: AtomicU64,
+    auto_continue_tracker: Mutex<Option<AutoContinueTracker>>,
     llm_context_turn_limit: Mutex<Option<usize>>,
     llm_image_history_limit: Mutex<Option<usize>>,
     conversation_log_has_visible_images: Mutex<bool>,
@@ -1253,6 +1276,8 @@ async fn reset_call_session(
 
 #[tauri::command]
 async fn interrupt_tts(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let state = app_handle.state::<AppState>();
+    mark_latest_assistant_turn_auto_continue_consumed(state.inner());
     set_tts_playback_active_state(&app_handle, false);
     interrupt_active_generation(&app_handle).await;
     Ok(())
@@ -1328,6 +1353,14 @@ fn clamp_end_of_utterance_silence_ms(milliseconds: u32) -> u32 {
     )
 }
 
+fn clamp_auto_continue_silence_ms(milliseconds: u32) -> u32 {
+    milliseconds.clamp(MIN_AUTO_CONTINUE_SILENCE_MS, MAX_AUTO_CONTINUE_SILENCE_MS)
+}
+
+fn clamp_auto_continue_max_count(count: u32) -> u32 {
+    count.clamp(MIN_AUTO_CONTINUE_MAX_COUNT, MAX_AUTO_CONTINUE_MAX_COUNT)
+}
+
 fn clamp_llm_context_turn_limit(limit: u32) -> usize {
     limit.clamp(
         MIN_LLM_CONTEXT_TURN_LIMIT as u32,
@@ -1347,6 +1380,36 @@ fn set_end_of_utterance_silence_ms(state: State<'_, AppState>, milliseconds: u32
     let effective_milliseconds = clamp_end_of_utterance_silence_ms(milliseconds);
     *state.end_of_utterance_silence_ms.lock().unwrap() = effective_milliseconds;
     effective_milliseconds
+}
+
+#[tauri::command]
+fn set_auto_continue_silence_ms(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    milliseconds: Option<u32>,
+) -> Option<u32> {
+    let effective_milliseconds = milliseconds.map(clamp_auto_continue_silence_ms);
+    *state.auto_continue_silence_ms.lock().unwrap() = effective_milliseconds;
+    cancel_auto_continue_timer(state.inner());
+    if effective_milliseconds.is_some() {
+        maybe_schedule_auto_continue_after_tts_idle(&app_handle);
+    }
+    effective_milliseconds
+}
+
+#[tauri::command]
+fn set_auto_continue_max_count(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    count: Option<u32>,
+) -> Option<u32> {
+    let effective_count = count.map(clamp_auto_continue_max_count);
+    *state.auto_continue_max_count.lock().unwrap() = effective_count;
+    cancel_auto_continue_timer(state.inner());
+    if *state.auto_continue_silence_ms.lock().unwrap() != DEFAULT_AUTO_CONTINUE_SILENCE_MS {
+        maybe_schedule_auto_continue_after_tts_idle(&app_handle);
+    }
+    effective_count
 }
 
 #[tauri::command]
@@ -3020,6 +3083,7 @@ fn stop_call_timer(app_handle: AppHandle, state: State<'_, AppState>) {
         let mut call_muted_guard = state.call_muted.lock().unwrap();
         *call_muted_guard = false;
     }
+    cancel_auto_continue_timer(state.inner());
     refresh_tray_presentation(&app_handle);
     stop_call_timer_inner(&app_handle, state.inner());
 }
@@ -3461,6 +3525,8 @@ async fn receive_audio_chunk(
     }
 
     if detected_speech {
+        cancel_auto_continue_timer(state.inner());
+        mark_latest_assistant_turn_auto_continue_consumed(state.inner());
         interrupt_active_generation(&app_handle).await;
         let mut buffer = state.audio_buffer.lock().unwrap();
         let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
@@ -3841,6 +3907,8 @@ fn start_response_generation(
     latest_audio_wav_base64: Option<String>,
     latest_image_paths: Vec<PathBuf>,
 ) {
+    cancel_auto_continue_timer(app_handle.state::<AppState>().inner());
+
     let app_handle_for_task = app_handle.clone();
     let cancellation_token = Arc::new(AtomicBool::new(false));
     let cancellation_token_for_task = cancellation_token.clone();
@@ -3853,13 +3921,14 @@ fn start_response_generation(
             &app_handle_for_task,
             server_port,
             &gemma_model,
-            &user_text,
-            latest_audio_wav_base64.as_deref(),
-            latest_image_files
-                .iter()
-                .map(TempImageFile::path)
-                .collect::<Vec<_>>()
-                .as_slice(),
+            ResponseGenerationMode::LatestUserTurn {
+                user_text: user_text.clone(),
+                latest_audio_wav_base64: latest_audio_wav_base64.clone(),
+                latest_image_paths: latest_image_files
+                    .iter()
+                    .map(|file| file.path().to_path_buf())
+                    .collect(),
+            },
             cancellation_token_for_task,
         )
         .await
@@ -3930,6 +3999,140 @@ fn start_response_generation(
     ) {
         warn!(
             "Skipping response generation {} because a newer generation is already active",
+            generation_id
+        );
+    }
+}
+
+fn start_assistant_auto_continue_generation(
+    app_handle: &tauri::AppHandle,
+    assistant_entry_id: u64,
+) {
+    let generation_id;
+    let conversation_session_id;
+    let gemma_model;
+    let server_port;
+    let assistant_text_prefix;
+    {
+        let state = app_handle.state::<AppState>();
+        let configured_max_count = *state.auto_continue_max_count.lock().unwrap();
+        if !*state.call_in_progress.lock().unwrap() {
+            return;
+        }
+
+        if *state.tts_playback_active.lock().unwrap() || *state.is_speaking.lock().unwrap() {
+            return;
+        }
+
+        if state.active_generation.lock().unwrap().is_some() {
+            return;
+        }
+
+        let Some(last_turn) = state.conversation_turns.lock().unwrap().back().cloned() else {
+            return;
+        };
+
+        if last_turn.assistant_entry_id != assistant_entry_id
+            || last_turn.assistant_text.trim().is_empty()
+        {
+            return;
+        }
+
+        if let Some(tracker) = *state.auto_continue_tracker.lock().unwrap() {
+            if tracker.assistant_entry_id == assistant_entry_id {
+                if tracker.blocked {
+                    return;
+                }
+
+                if let Some(max_count) = configured_max_count {
+                    if tracker.continuation_count >= max_count {
+                        return;
+                    }
+                }
+            }
+        }
+
+        generation_id = state.next_generation_id.fetch_add(1, Ordering::Relaxed);
+        conversation_session_id = current_conversation_session_id(state.inner());
+        let variant = loaded_gemma_variant(state.inner())
+            .unwrap_or_else(|| selected_gemma_variant(state.inner()));
+        gemma_model = if variant.is_external() {
+            selected_external_llm_model(state.inner(), variant).unwrap_or_default()
+        } else {
+            variant.repo_id().unwrap_or_default().to_string()
+        };
+        server_port = *state.server_port.lock().unwrap();
+        assistant_text_prefix = last_turn.assistant_text;
+    }
+
+    let Some(server_port) = server_port else {
+        warn!("Gemma server is not running, skipping assistant auto-continue");
+        return;
+    };
+
+    emit_call_stage(app_handle, "thinking", "Thinking");
+
+    let app_handle_for_task = app_handle.clone();
+    let cancellation_token = Arc::new(AtomicBool::new(false));
+    let cancellation_token_for_task = cancellation_token.clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        match stream_gemma_response_to_csm(
+            &app_handle_for_task,
+            server_port,
+            &gemma_model,
+            ResponseGenerationMode::AssistantAutoContinue {
+                assistant_entry_id,
+                assistant_text_prefix: assistant_text_prefix.clone(),
+            },
+            cancellation_token_for_task,
+        )
+        .await
+        {
+            Ok((_, response_text)) => {
+                if response_text.is_empty() {
+                    emit_call_stage(&app_handle_for_task, "listening", "Listening");
+                    return;
+                }
+
+                if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
+                    != conversation_session_id
+                {
+                    return;
+                }
+
+                if let Err(err) = append_to_existing_assistant_turn_with_save(
+                    &app_handle_for_task,
+                    app_handle_for_task.state::<AppState>().inner(),
+                    assistant_entry_id,
+                    response_text,
+                ) {
+                    warn!("Failed to append assistant auto-continue text: {}", err);
+                }
+            }
+            Err(err) => {
+                emit_csm_error(
+                    &app_handle_for_task,
+                    CsmErrorEvent {
+                        request_id: None,
+                        message: err.clone(),
+                    },
+                );
+                error!("Failed to auto-continue Gemma response via CSM: {}", err);
+                emit_call_stage(&app_handle_for_task, "listening", "Listening");
+            }
+        }
+
+        clear_active_generation_if_matches(&app_handle_for_task, generation_id);
+    });
+
+    if !register_active_generation_if_newer(
+        app_handle.state::<AppState>().inner(),
+        generation_id,
+        handle,
+        cancellation_token,
+    ) {
+        warn!(
+            "Skipping assistant auto-continue {} because a newer generation is already active",
             generation_id
         );
     }
@@ -4177,9 +4380,7 @@ async fn stream_gemma_response_to_csm(
     app_handle: &tauri::AppHandle,
     server_port: u16,
     gemma_model: &str,
-    user_text: &str,
-    latest_audio_wav_base64: Option<&str>,
-    latest_image_paths: &[&Path],
+    mode: ResponseGenerationMode,
     cancellation_token: Arc<AtomicBool>,
 ) -> Result<(u64, String), String> {
     start_csm_server_inner(app_handle, app_handle.state::<AppState>().inner()).await?;
@@ -4217,12 +4418,23 @@ async fn stream_gemma_response_to_csm(
             image_history_limit,
         )
     };
-    let has_latest_audio = latest_audio_wav_base64.is_some();
+    let has_latest_audio = matches!(
+        &mode,
+        ResponseGenerationMode::LatestUserTurn {
+            latest_audio_wav_base64: Some(_),
+            ..
+        }
+    );
     let mut conversation_turn_image_urls = conversation_turns
         .iter()
         .map(resolve_user_turn_image_urls)
         .collect::<Vec<_>>();
-    let mut latest_image_urls = load_image_data_urls_from_paths(latest_image_paths.iter().copied());
+    let mut latest_image_urls = match &mode {
+        ResponseGenerationMode::LatestUserTurn {
+            latest_image_paths, ..
+        } => load_image_data_urls_from_paths(latest_image_paths.iter().map(PathBuf::as_path)),
+        ResponseGenerationMode::AssistantAutoContinue { .. } => Vec::new(),
+    };
     let total_image_count = conversation_turn_image_urls
         .iter()
         .map(Vec::len)
@@ -4295,11 +4507,35 @@ async fn stream_gemma_response_to_csm(
         });
     }
 
-    messages.push(build_latest_user_turn_message_with_image_urls(
-        user_text,
-        latest_audio_wav_base64,
-        &latest_image_urls,
-    ));
+    let (assistant_text_prefix, append_to_assistant_entry_id) = match &mode {
+        ResponseGenerationMode::LatestUserTurn {
+            user_text,
+            latest_audio_wav_base64,
+            ..
+        } => {
+            messages.push(build_latest_user_turn_message_with_image_urls(
+                user_text,
+                latest_audio_wav_base64.as_deref(),
+                &latest_image_urls,
+            ));
+            (None, None)
+        }
+        ResponseGenerationMode::AssistantAutoContinue {
+            assistant_entry_id,
+            assistant_text_prefix,
+        } => {
+            messages.push(ChatMessage {
+                role: "user".to_string(),
+                content: vec![ChatContent::Text {
+                    text: AUTO_CONTINUE_PROMPT.to_string(),
+                }],
+            });
+            (
+                Some(assistant_text_prefix.as_str()),
+                Some(*assistant_entry_id),
+            )
+        }
+    };
 
     let mut request = ChatRequest {
         model: gemma_model.to_string(),
@@ -4423,6 +4659,8 @@ async fn stream_gemma_response_to_csm(
                         response_id,
                         &raw_response_text,
                         &raw_reasoning_text,
+                        assistant_text_prefix,
+                        append_to_assistant_entry_id,
                         &mut latest_response_text,
                         &mut latest_reasoning_text,
                         &mut queued_response_bytes,
@@ -4457,6 +4695,8 @@ async fn stream_gemma_response_to_csm(
                         response_id,
                         &raw_response_text,
                         &raw_reasoning_text,
+                        assistant_text_prefix,
+                        append_to_assistant_entry_id,
                         &mut latest_response_text,
                         &mut latest_reasoning_text,
                         &mut queued_response_bytes,
@@ -4482,7 +4722,10 @@ async fn stream_gemma_response_to_csm(
             .as_ref()
             .and_then(|choice| choice.message.reasoning_content.clone())
             .unwrap_or_default();
-        latest_response_text = sanitize_for_voice_output(&raw_response_text);
+        latest_response_text = combine_assistant_message_text(
+            assistant_text_prefix,
+            &sanitize_for_voice_output(&raw_response_text),
+        );
         latest_reasoning_text = raw_reasoning_text.clone();
     }
 
@@ -4497,14 +4740,19 @@ async fn stream_gemma_response_to_csm(
     if response_text.is_empty() && raw_reasoning_text.is_empty() {
         warn!("Gemma returned an empty response, skipping CSM synthesis");
     } else {
-        if response_text != latest_response_text || raw_reasoning_text != latest_reasoning_text {
+        let display_response_text =
+            combine_assistant_message_text(assistant_text_prefix, &response_text);
+        if display_response_text != latest_response_text
+            || raw_reasoning_text != latest_reasoning_text
+        {
             emit_assistant_response(
                 app_handle,
                 AssistantResponseEvent {
                     request_id: response_id,
-                    text: response_text.clone(),
+                    text: display_response_text.clone(),
                     reasoning_text: raw_reasoning_text.clone(),
                     is_final: false,
+                    append_to_assistant_entry_id,
                 },
             );
         }
@@ -4512,15 +4760,17 @@ async fn stream_gemma_response_to_csm(
             app_handle,
             AssistantResponseEvent {
                 request_id: response_id,
-                text: response_text.clone(),
+                text: display_response_text,
                 reasoning_text: raw_reasoning_text.clone(),
                 is_final: true,
+                append_to_assistant_entry_id,
             },
         );
         let flushed_segments = queue_spoken_response_segments_for_csm(
             app_handle,
             response_id,
             &response_text,
+            append_to_assistant_entry_id,
             &mut queued_response_bytes,
             &mut started_audio_response,
             true,
@@ -4549,6 +4799,8 @@ async fn emit_streamed_response_update(
     response_id: u64,
     raw_response_text: &str,
     raw_reasoning_text: &str,
+    assistant_text_prefix: Option<&str>,
+    append_to_assistant_entry_id: Option<u64>,
     latest_response_text: &mut String,
     latest_reasoning_text: &mut String,
     queued_response_bytes: &mut usize,
@@ -4556,18 +4808,23 @@ async fn emit_streamed_response_update(
     incomplete_stream_segment_started_at: &mut Option<Instant>,
 ) -> Result<(), String> {
     let response_text = sanitize_for_voice_output(raw_response_text);
+    let display_response_text =
+        combine_assistant_message_text(assistant_text_prefix, &response_text);
 
-    if response_text != *latest_response_text || raw_reasoning_text != *latest_reasoning_text {
+    if display_response_text != *latest_response_text
+        || raw_reasoning_text != *latest_reasoning_text
+    {
         emit_assistant_response(
             app_handle,
             AssistantResponseEvent {
                 request_id: response_id,
-                text: response_text.clone(),
+                text: display_response_text.clone(),
                 reasoning_text: raw_reasoning_text.to_string(),
                 is_final: false,
+                append_to_assistant_entry_id,
             },
         );
-        *latest_response_text = response_text.clone();
+        *latest_response_text = display_response_text;
         *latest_reasoning_text = raw_reasoning_text.to_string();
     }
 
@@ -4580,6 +4837,7 @@ async fn emit_streamed_response_update(
         app_handle,
         response_id,
         &response_text,
+        append_to_assistant_entry_id,
         queued_response_bytes,
         started_audio_response,
         false,
@@ -4615,6 +4873,7 @@ async fn emit_streamed_response_update(
             app_handle,
             response_id,
             &response_text,
+            append_to_assistant_entry_id,
             queued_response_bytes,
             started_audio_response,
             true,
@@ -4782,6 +5041,7 @@ async fn queue_spoken_response_segments_for_csm(
     app_handle: &tauri::AppHandle,
     request_id: u64,
     response_text: &str,
+    append_to_assistant_entry_id: Option<u64>,
     queued_response_bytes: &mut usize,
     started_audio_response: &mut bool,
     flush_incomplete_segment: bool,
@@ -4805,7 +5065,13 @@ async fn queue_spoken_response_segments_for_csm(
         log_processing_audio_latency_for_first_message_chunk(app_handle, request_id);
         track_processing_audio_latency_request(app_handle, request_id);
         emit_call_stage(app_handle, "generating_audio", "Generating Audio");
-        emit_csm_audio_start(app_handle, CsmAudioStartEvent { request_id });
+        emit_csm_audio_start(
+            app_handle,
+            CsmAudioStartEvent {
+                request_id,
+                append_to_assistant_entry_id,
+            },
+        );
         *started_audio_response = true;
     }
 
@@ -5100,6 +5366,40 @@ fn build_user_turn_message_with_image_urls(user_text: &str, image_urls: &[String
         role: "user".to_string(),
         content,
     }
+}
+
+fn append_assistant_message_text(existing_text: &str, continuation_text: &str) -> String {
+    let trimmed_existing = existing_text.trim_end();
+    let trimmed_continuation = continuation_text.trim_start();
+
+    if trimmed_existing.is_empty() {
+        return trimmed_continuation.to_string();
+    }
+
+    if trimmed_continuation.is_empty() {
+        return trimmed_existing.to_string();
+    }
+
+    let starts_with_inline_punctuation = trimmed_continuation
+        .chars()
+        .next()
+        .map(|ch| matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}'))
+        .unwrap_or(false);
+
+    if starts_with_inline_punctuation {
+        format!("{trimmed_existing}{trimmed_continuation}")
+    } else {
+        format!("{trimmed_existing} {trimmed_continuation}")
+    }
+}
+
+fn combine_assistant_message_text(
+    assistant_text_prefix: Option<&str>,
+    response_text: &str,
+) -> String {
+    assistant_text_prefix
+        .map(|prefix| append_assistant_message_text(prefix, response_text))
+        .unwrap_or_else(|| response_text.to_string())
 }
 
 fn build_llm_system_prompt(
@@ -6241,6 +6541,30 @@ mod tests {
     }
 
     #[test]
+    fn clamp_auto_continue_silence_ms_stays_in_supported_range() {
+        assert_eq!(
+            clamp_auto_continue_silence_ms(MIN_AUTO_CONTINUE_SILENCE_MS - 1),
+            MIN_AUTO_CONTINUE_SILENCE_MS
+        );
+        assert_eq!(
+            clamp_auto_continue_silence_ms(MAX_AUTO_CONTINUE_SILENCE_MS + 1),
+            MAX_AUTO_CONTINUE_SILENCE_MS
+        );
+    }
+
+    #[test]
+    fn assistant_message_continuations_append_cleanly() {
+        assert_eq!(
+            append_assistant_message_text("That covers the basics.", "Here is one more detail."),
+            "That covers the basics. Here is one more detail."
+        );
+        assert_eq!(
+            append_assistant_message_text("Wait", ", there is more."),
+            "Wait, there is more."
+        );
+    }
+
+    #[test]
     fn clamp_llm_context_turn_limit_stays_in_supported_range() {
         assert_eq!(
             clamp_llm_context_turn_limit((MIN_LLM_CONTEXT_TURN_LIMIT - 1) as u32),
@@ -6700,6 +7024,7 @@ fn cleanup_before_app_exit(app_handle: &AppHandle) {
     let state = app_handle.state::<AppState>();
     *state.call_in_progress.lock().unwrap() = false;
     *state.call_muted.lock().unwrap() = false;
+    cancel_auto_continue_timer(state.inner());
     clear_call_timer_state(state.inner());
     clear_pending_screen_capture_inner(app_handle, false);
     stop_server_inner(state.inner()).unwrap_or_else(|err| {
@@ -7644,10 +7969,145 @@ fn clear_active_generation_if_matches(app_handle: &tauri::AppHandle, generation_
 
 fn set_tts_playback_active_state(app_handle: &AppHandle, active: bool) {
     let state = app_handle.state::<AppState>();
-    let mut tts_playback_active_guard = state.tts_playback_active.lock().unwrap();
-    if *tts_playback_active_guard != active {
-        *tts_playback_active_guard = active;
+    let changed = {
+        let mut tts_playback_active_guard = state.tts_playback_active.lock().unwrap();
+        if *tts_playback_active_guard == active {
+            false
+        } else {
+            *tts_playback_active_guard = active;
+            true
+        }
+    };
+
+    if !changed {
+        return;
     }
+
+    cancel_auto_continue_timer(state.inner());
+    if !active {
+        maybe_schedule_auto_continue_after_tts_idle(app_handle);
+    }
+}
+
+fn cancel_auto_continue_timer(state: &AppState) {
+    state
+        .auto_continue_timer_generation
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+fn reset_auto_continue_tracker(state: &AppState) {
+    *state.auto_continue_tracker.lock().unwrap() = None;
+}
+
+fn mark_latest_assistant_turn_auto_continue_consumed(state: &AppState) {
+    let latest_assistant_entry_id = state
+        .conversation_turns
+        .lock()
+        .unwrap()
+        .back()
+        .map(|turn| turn.assistant_entry_id);
+    let mut tracker = state.auto_continue_tracker.lock().unwrap();
+    *tracker = latest_assistant_entry_id.map(|assistant_entry_id| match *tracker {
+        Some(existing) if existing.assistant_entry_id == assistant_entry_id => {
+            AutoContinueTracker {
+                assistant_entry_id,
+                continuation_count: existing.continuation_count,
+                blocked: true,
+            }
+        }
+        _ => AutoContinueTracker {
+            assistant_entry_id,
+            continuation_count: 0,
+            blocked: true,
+        },
+    });
+}
+
+fn maybe_schedule_auto_continue_after_tts_idle(app_handle: &AppHandle) {
+    let state = app_handle.state::<AppState>();
+    let Some(delay_ms) = *state.auto_continue_silence_ms.lock().unwrap() else {
+        return;
+    };
+
+    if !*state.call_in_progress.lock().unwrap() {
+        return;
+    }
+
+    if *state.tts_playback_active.lock().unwrap() || *state.is_speaking.lock().unwrap() {
+        return;
+    }
+
+    if state.active_generation.lock().unwrap().is_some() {
+        return;
+    }
+
+    let Some(last_turn) = state.conversation_turns.lock().unwrap().back().cloned() else {
+        return;
+    };
+
+    if last_turn.assistant_text.trim().is_empty() {
+        return;
+    }
+
+    let configured_max_count = *state.auto_continue_max_count.lock().unwrap();
+    if let Some(tracker) = *state.auto_continue_tracker.lock().unwrap() {
+        if tracker.assistant_entry_id == last_turn.assistant_entry_id {
+            if tracker.blocked {
+                return;
+            }
+
+            if let Some(max_count) = configured_max_count {
+                if tracker.continuation_count >= max_count {
+                    return;
+                }
+            }
+        }
+    }
+
+    let generation = state
+        .auto_continue_timer_generation
+        .fetch_add(1, Ordering::Relaxed)
+        + 1;
+    let conversation_session_id = current_conversation_session_id(state.inner());
+    let assistant_entry_id = last_turn.assistant_entry_id;
+    let app_handle = app_handle.clone();
+
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(u64::from(delay_ms))).await;
+
+        let state = app_handle.state::<AppState>();
+        if state.auto_continue_timer_generation.load(Ordering::Relaxed) != generation {
+            return;
+        }
+
+        if !*state.call_in_progress.lock().unwrap() {
+            return;
+        }
+
+        if *state.tts_playback_active.lock().unwrap() || *state.is_speaking.lock().unwrap() {
+            return;
+        }
+
+        if state.active_generation.lock().unwrap().is_some() {
+            return;
+        }
+
+        if current_conversation_session_id(state.inner()) != conversation_session_id {
+            return;
+        }
+
+        let current_last_assistant_entry_id = state
+            .conversation_turns
+            .lock()
+            .unwrap()
+            .back()
+            .map(|turn| turn.assistant_entry_id);
+        if current_last_assistant_entry_id != Some(assistant_entry_id) {
+            return;
+        }
+
+        start_assistant_auto_continue_generation(&app_handle, assistant_entry_id);
+    });
 }
 
 fn active_generation_is_newer(state: &AppState, generation_id: u64) -> bool {
@@ -7709,6 +8169,8 @@ fn append_conversation_turn(
     image_paths: Vec<PathBuf>,
     user_image_data_urls: Vec<String>,
 ) -> (u64, u64) {
+    reset_auto_continue_tracker(state);
+
     {
         let mut conversation_image_paths = state.conversation_image_paths.lock().unwrap();
         for image_path in &image_paths {
@@ -7814,6 +8276,65 @@ fn append_conversation_turn_with_save(
     res
 }
 
+fn append_to_existing_assistant_turn_with_save(
+    app_handle: &AppHandle,
+    state: &AppState,
+    assistant_entry_id: u64,
+    continuation_text: String,
+) -> Result<(u64, u64, String, String), String> {
+    let trimmed_continuation = continuation_text.trim();
+    if trimmed_continuation.is_empty() {
+        return Err("Assistant continuation cannot be empty.".to_string());
+    }
+
+    let updated_turn = {
+        let mut turns = state.conversation_turns.lock().unwrap();
+        let Some(last_turn) = turns.back_mut() else {
+            return Err("No conversation turn is available to continue.".to_string());
+        };
+
+        if last_turn.assistant_entry_id != assistant_entry_id {
+            return Err(
+                "The latest assistant turn changed before auto-continue completed.".to_string(),
+            );
+        }
+
+        last_turn.assistant_text =
+            append_assistant_message_text(&last_turn.assistant_text, trimmed_continuation);
+        (
+            last_turn.user_entry_id,
+            last_turn.assistant_entry_id,
+            last_turn.user_text.clone(),
+            last_turn.assistant_text.clone(),
+        )
+    };
+
+    let mut tracker = state.auto_continue_tracker.lock().unwrap();
+    *tracker = Some(match *tracker {
+        Some(existing) if existing.assistant_entry_id == assistant_entry_id => {
+            AutoContinueTracker {
+                assistant_entry_id,
+                continuation_count: existing.continuation_count.saturating_add(1),
+                blocked: false,
+            }
+        }
+        _ => AutoContinueTracker {
+            assistant_entry_id,
+            continuation_count: 1,
+            blocked: false,
+        },
+    });
+
+    if let Err(err) = save_current_session(app_handle, state) {
+        error!(
+            "Failed to save session after assistant continuation: {}",
+            err
+        );
+    }
+
+    Ok(updated_turn)
+}
+
 fn has_pending_screen_capture(state: &AppState) -> bool {
     !state.pending_screen_captures.lock().unwrap().is_empty()
 }
@@ -7878,6 +8399,8 @@ fn current_conversation_session_id(state: &AppState) -> u64 {
 }
 
 fn reset_call_session_state(state: &AppState) {
+    cancel_auto_continue_timer(state);
+
     {
         let mut audio_buffer = state.audio_buffer.lock().unwrap();
         audio_buffer.clear();
@@ -7914,6 +8437,7 @@ fn reset_call_session_state(state: &AppState) {
         }
     }
     state.next_conversation_entry_id.store(1, Ordering::Relaxed);
+    reset_auto_continue_tracker(state);
 
     {
         let mut id_guard = state.current_session_id.lock().unwrap();
@@ -9216,6 +9740,8 @@ async fn load_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<Vec<ConversationTurn>, String> {
+    cancel_auto_continue_timer(state.inner());
+
     let session_file = resolve_session_file(&app_handle, &session_id)?;
     if !session_file.exists() {
         return Err("Session not found".to_string());
@@ -9265,6 +9791,7 @@ async fn load_session(
     state
         .next_conversation_entry_id
         .store(max_id + 1, Ordering::Relaxed);
+    reset_auto_continue_tracker(state.inner());
 
     Ok(data.turns)
 }
@@ -10338,6 +10865,10 @@ pub fn run() {
             tray_pong_playback_hydrated: Mutex::new(false),
             tray_pong_playback_modified_before_hydration: Mutex::new(false),
             end_of_utterance_silence_ms: Mutex::new(END_OF_UTTERANCE_SILENCE_MS),
+            auto_continue_silence_ms: Mutex::new(DEFAULT_AUTO_CONTINUE_SILENCE_MS),
+            auto_continue_max_count: Mutex::new(DEFAULT_AUTO_CONTINUE_MAX_COUNT),
+            auto_continue_timer_generation: AtomicU64::new(0),
+            auto_continue_tracker: Mutex::new(None),
             llm_context_turn_limit: Mutex::new(DEFAULT_LLM_CONTEXT_TURN_LIMIT),
             llm_image_history_limit: Mutex::new(DEFAULT_LLM_IMAGE_HISTORY_LIMIT),
             conversation_log_has_visible_images: Mutex::new(false),
@@ -10429,6 +10960,8 @@ pub fn run() {
             set_pong_playback_enabled,
             initialize_pong_playback_preference,
             set_end_of_utterance_silence_ms,
+            set_auto_continue_silence_ms,
+            set_auto_continue_max_count,
             set_llm_context_turn_limit,
             set_llm_image_history_limit,
             get_global_shortcut_look_at_entire_screen,

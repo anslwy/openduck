@@ -22,6 +22,10 @@ export const AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY =
   "openduck.auto-unmute-on-pasted-screenshot.v1";
 export const END_OF_UTTERANCE_SILENCE_STORAGE_KEY =
   "openduck.end-of-utterance-silence-ms.v1";
+export const AUTO_CONTINUE_SILENCE_STORAGE_KEY =
+  "openduck.auto-continue-silence-ms.v1";
+export const AUTO_CONTINUE_MAX_COUNT_STORAGE_KEY =
+  "openduck.auto-continue-max-count.v1";
 export const LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY =
   "openduck.llm-context-turn-limit.v1";
 export const LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY =
@@ -41,6 +45,17 @@ export const DEFAULT_END_OF_UTTERANCE_SILENCE_MS = 2000;
 export const MIN_END_OF_UTTERANCE_SILENCE_MS = 500;
 export const MAX_END_OF_UTTERANCE_SILENCE_MS = 5000;
 export const END_OF_UTTERANCE_SILENCE_STEP_MS = 100;
+export const DEFAULT_AUTO_CONTINUE_SILENCE_MS: number | null = null;
+export const MIN_AUTO_CONTINUE_SILENCE_MS = 3000;
+export const MAX_AUTO_CONTINUE_SILENCE_MS = 7000;
+export const AUTO_CONTINUE_SILENCE_STEP_MS = 1000;
+export const AUTO_CONTINUE_NEVER_SLIDER_VALUE =
+  MAX_AUTO_CONTINUE_SILENCE_MS + AUTO_CONTINUE_SILENCE_STEP_MS;
+export const DEFAULT_AUTO_CONTINUE_MAX_COUNT: number | null = 3;
+export const MIN_AUTO_CONTINUE_MAX_COUNT = 1;
+export const MAX_AUTO_CONTINUE_MAX_COUNT = 10;
+export const AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE =
+  MAX_AUTO_CONTINUE_MAX_COUNT + 1;
 export const DEFAULT_LLM_CONTEXT_TURN_LIMIT: number | null = 7;
 export const MIN_LLM_CONTEXT_TURN_LIMIT = 2;
 export const MAX_LLM_CONTEXT_TURN_LIMIT = 50;
