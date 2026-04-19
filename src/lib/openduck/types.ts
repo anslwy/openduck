@@ -74,6 +74,10 @@ export type OverlayNotificationEvent = {
     message: string;
 };
 
+export type AiSubtitleEvent = {
+    text: string;
+};
+
 export type ScreenCapturePhase =
     | "capturing"
     | "ready"

@@ -5,7 +5,7 @@
     import { onDestroy, onMount } from "svelte";
     import { fade } from "svelte/transition";
     import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-    import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+    import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
     import { getCurrentWindow } from "@tauri-apps/api/window";
     import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
     import { save } from "@tauri-apps/plugin-dialog";
@@ -67,12 +67,14 @@
         SELECT_LAST_SESSION_STORAGE_KEY,
         SHOW_STAT_STORAGE_KEY,
         SHOW_SUBTITLE_STORAGE_KEY,
+        SHOW_AI_SUBTITLE_STORAGE_KEY,
         SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
         AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
         GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
         GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY,
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
+        DEFAULT_SHOW_AI_SUBTITLE,
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
@@ -92,6 +94,7 @@
     import type {
         AppUpdateInfo,
         AppUpdateStatus,
+        AiSubtitleEvent,
         AssistantResponseEvent,
         BuildInfo,
         CallStageEvent,
@@ -151,6 +154,11 @@
         enabled: boolean;
     };
 
+    type StoredShowAiSubtitlePreference = {
+        version: 1;
+        enabled: boolean;
+    };
+
     type StoredShowHiddenWindowOverlayPreference = {
         version: 1;
         enabled: boolean;
@@ -188,6 +196,7 @@
 
     const OVERLAY_WINDOW_LABEL = "overlay";
     const OVERLAY_WINDOW_ROUTE = "/overlay";
+    const AI_SUBTITLE_EVENT = "ai-subtitle";
     const LIVE_TRANSCRIPT_SUBTITLE_DURATION_MS = 5_000;
 
     let calling = $state(false);
@@ -288,6 +297,7 @@
     let selectLastSessionEnabled = $state(false);
     let showStatEnabled = $state(false);
     let showSubtitleEnabled = $state(true);
+    let showAiSubtitleEnabled = $state(DEFAULT_SHOW_AI_SUBTITLE);
     let showHiddenWindowOverlayEnabled = $state(
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
     );
@@ -355,6 +365,7 @@
     let processingAudioToLlmLatencyMs = $state<number | null>(null);
     let processingAudioLatencyMs = $state<number | null>(null);
     let liveTranscriptSubtitle = $state("");
+    let currentAiSubtitle = $state("");
     let liveTranscriptSubtitleTimeout: ReturnType<
         typeof window.setTimeout
     > | null = null;
@@ -813,6 +824,15 @@
     );
     let userVolume = $state(0);
     const userSpeaking = $derived(calling && !micMuted && userVolume > 0.005);
+    const activeAvatarSubtitle = $derived(
+        showAiSubtitleEnabled && currentAiSubtitle.trim()
+            ? currentAiSubtitle.trim()
+            : showSubtitleEnabled &&
+                liveTranscriptSubtitle.trim() &&
+                (!assistantSpeaking || userSpeaking)
+              ? liveTranscriptSubtitle.trim()
+              : "",
+    );
     let themeRgb = $state("127, 227, 124");
 
     $effect(() => {
@@ -849,6 +869,27 @@
         liveTranscriptSubtitle = "";
     }
 
+    function syncAiSubtitle(text: string) {
+        void emit<AiSubtitleEvent>(AI_SUBTITLE_EVENT, {
+            text,
+        }).catch((err) => {
+            console.error("Failed to sync AI subtitle:", err);
+        });
+    }
+
+    function setCurrentAiSubtitle(text: string) {
+        const nextText = text.trim();
+        if (nextText && showAiSubtitleEnabled) {
+            clearLiveTranscriptSubtitle();
+        }
+        if (currentAiSubtitle === nextText) {
+            return;
+        }
+
+        currentAiSubtitle = nextText;
+        syncAiSubtitle(nextText);
+    }
+
     function updateLiveTranscriptSubtitle(text: string) {
         const nextText = text.trim();
         if (!nextText) {
@@ -875,6 +916,8 @@
 
         if (phase === "speaking") {
             clearLiveTranscriptSubtitle();
+        } else {
+            setCurrentAiSubtitle("");
         }
 
         callStagePhase = phase;
@@ -1136,6 +1179,7 @@
         activeAssistantResponseId = null;
         activeAssistantConversationEntryId = null;
         currentSpokenResponse = "";
+        setCurrentAiSubtitle("");
     }
 
     function resetScreenCaptureStatus() {
@@ -1285,6 +1329,21 @@
         };
         window.localStorage.setItem(
             SHOW_SUBTITLE_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function persistShowAiSubtitlePreference(enabled: boolean) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredShowAiSubtitlePreference = {
+            version: 1,
+            enabled,
+        };
+        window.localStorage.setItem(
+            SHOW_AI_SUBTITLE_STORAGE_KEY,
             JSON.stringify(payload),
         );
     }
@@ -1611,6 +1670,34 @@
         }
     }
 
+    function loadShowAiSubtitlePreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_SHOW_AI_SUBTITLE;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            SHOW_AI_SUBTITLE_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_SHOW_AI_SUBTITLE;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return DEFAULT_SHOW_AI_SUBTITLE;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error("Failed to restore show AI subtitle preference:", err);
+            return DEFAULT_SHOW_AI_SUBTITLE;
+        }
+    }
+
     function loadShowHiddenWindowOverlayPreferenceFromStorage() {
         if (typeof window === "undefined") {
             return DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY;
@@ -1863,6 +1950,11 @@
         persistShowSubtitlePreference(enabled);
     }
 
+    function applyShowAiSubtitlePreference(enabled: boolean) {
+        showAiSubtitleEnabled = enabled;
+        persistShowAiSubtitlePreference(enabled);
+    }
+
     function applyShowHiddenWindowOverlayPreference(enabled: boolean) {
         showHiddenWindowOverlayEnabled = enabled;
         persistShowHiddenWindowOverlayPreference(enabled);
@@ -1983,6 +2075,11 @@
     async function initializeShowSubtitlePreference() {
         const storedEnabled = loadShowSubtitlePreferenceFromStorage();
         applyShowSubtitlePreference(storedEnabled);
+    }
+
+    async function initializeShowAiSubtitlePreference() {
+        const storedEnabled = loadShowAiSubtitlePreferenceFromStorage();
+        applyShowAiSubtitlePreference(storedEnabled);
     }
 
     async function initializeShowHiddenWindowOverlayPreference() {
@@ -4218,6 +4315,7 @@
                                 currentSpokenResponse = (
                                     currentSpokenResponse + startedText
                                 ).trim();
+                                setCurrentAiSubtitle(startedText);
                             }
                         }
                     }
@@ -4311,6 +4409,7 @@
         pendingCompletionPongRequestId = null;
         pendingTtsSegments = 0;
         isQueueingCompletionPong = false;
+        setCurrentAiSubtitle("");
         stopActivePongPlayback();
         syncTtsPlaybackState(false);
     }
@@ -5640,6 +5739,7 @@
             await initializeSelectLastSessionPreference();
             await initializeShowStatPreference();
             await initializeShowSubtitlePreference();
+            await initializeShowAiSubtitlePreference();
             await initializeShowHiddenWindowOverlayPreference();
             await initializeEndOfUtteranceSilencePreference();
             await initializeAutoContinueSilencePreference();
@@ -6050,14 +6150,12 @@
             {#if calling}
                 <div
                     class="avatar-subtitle"
-                    class:display={showSubtitleEnabled &&
-                        liveTranscriptSubtitle.trim() &&
-                        (!assistantSpeaking || userSpeaking)}
+                    class:display={activeAvatarSubtitle.length > 0}
                     aria-live="polite"
                     aria-atomic="true"
                 >
                     <span class="avatar-subtitle-text"
-                        >{liveTranscriptSubtitle}</span
+                        >{activeAvatarSubtitle}</span
                     >
                 </div>
             {/if}
@@ -6230,6 +6328,7 @@
                     {selectLastSessionEnabled}
                     {showStatEnabled}
                     {showSubtitleEnabled}
+                    {showAiSubtitleEnabled}
                     {showHiddenWindowOverlayEnabled}
                     {endOfUtteranceSilenceMs}
                     {autoContinueSilenceMs}
@@ -6244,6 +6343,7 @@
                     onUpdateSelectLastSession={applySelectLastSessionPreference}
                     onUpdateShowStat={applyShowStatPreference}
                     onUpdateShowSubtitle={applyShowSubtitlePreference}
+                    onUpdateShowAiSubtitle={applyShowAiSubtitlePreference}
                     onUpdateShowHiddenWindowOverlay={applyShowHiddenWindowOverlayPreference}
                     onUpdateEndOfUtteranceSilenceMs={applyEndOfUtteranceSilencePreference}
                     onUpdateAutoContinueSilenceMs={applyAutoContinueSilencePreference}

@@ -11,11 +11,14 @@
         PhysicalSize,
     } from "@tauri-apps/api/window";
     import {
+        DEFAULT_SHOW_AI_SUBTITLE,
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
+        SHOW_AI_SUBTITLE_STORAGE_KEY,
         SHOW_SUBTITLE_STORAGE_KEY,
         SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
     } from "$lib/openduck/config";
     import type {
+        AiSubtitleEvent,
         CallStageEvent,
         OverlayNotificationEvent,
         TranscriptEvent,
@@ -41,6 +44,7 @@
     const OVERLAY_TOAST_DURATION_MS = 2200;
     const OVERLAY_SUBTITLE_DURATION_MS = 5_000;
     const OVERLAY_TOAST_LIMIT = 3;
+    const AI_SUBTITLE_EVENT = "ai-subtitle";
 
     const overlayWindow = getCurrentWindow();
     let eventUnlisteners: UnlistenFn[] = [];
@@ -51,18 +55,27 @@
     let nextToastId = 1;
     let mainWindowVisible = $state(true);
     let showSubtitleEnabled = $state(true);
+    let showAiSubtitleEnabled = $state(DEFAULT_SHOW_AI_SUBTITLE);
     let showHiddenWindowOverlayEnabled = $state(
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
     );
     let callStagePhase = $state<CallStageEvent["phase"]>("idle");
     let liveTranscriptSubtitle = $state("");
+    let currentAiSubtitle = $state("");
     let overlayToasts = $state<OverlayToast[]>([]);
 
+    const overlaySubtitleText = $derived(
+        showAiSubtitleEnabled && currentAiSubtitle.trim().length > 0
+            ? currentAiSubtitle.trim()
+            : showSubtitleEnabled &&
+                liveTranscriptSubtitle.trim().length > 0
+              ? liveTranscriptSubtitle.trim()
+              : "",
+    );
     const showOverlaySubtitle = $derived(
         showHiddenWindowOverlayEnabled &&
             !mainWindowVisible &&
-            showSubtitleEnabled &&
-            liveTranscriptSubtitle.trim().length > 0,
+            overlaySubtitleText.length > 0,
     );
     const showOverlay = $derived(
         showHiddenWindowOverlayEnabled &&
@@ -116,6 +129,30 @@
         }
     }
 
+    function loadShowAiSubtitlePreferenceFromStorage() {
+        const rawPayload = window.localStorage.getItem(
+            SHOW_AI_SUBTITLE_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_SHOW_AI_SUBTITLE;
+        }
+
+        try {
+            const parsed = JSON.parse(
+                rawPayload,
+            ) as Partial<StoredShowSubtitlePreference>;
+            return parsed.version === 1 && typeof parsed.enabled === "boolean"
+                ? parsed.enabled
+                : DEFAULT_SHOW_AI_SUBTITLE;
+        } catch (err) {
+            console.error(
+                "Failed to restore overlay show AI subtitle preference:",
+                err,
+            );
+            return DEFAULT_SHOW_AI_SUBTITLE;
+        }
+    }
+
     function clearToastTimeout(toast: OverlayToast) {
         window.clearTimeout(toast.timeoutId);
     }
@@ -144,9 +181,13 @@
         }
     }
 
-    function clearOverlaySubtitle() {
+    function clearOverlayTranscriptSubtitle() {
         clearOverlaySubtitleTimeout();
         liveTranscriptSubtitle = "";
+    }
+
+    function clearOverlayAiSubtitle() {
+        currentAiSubtitle = "";
     }
 
     async function syncOverlayWindowBounds() {
@@ -248,9 +289,26 @@
         liveTranscriptSubtitle = nextText;
         clearOverlaySubtitleTimeout();
         overlaySubtitleTimeout = window.setTimeout(() => {
-            clearOverlaySubtitle();
+            clearOverlayTranscriptSubtitle();
         }, OVERLAY_SUBTITLE_DURATION_MS);
         if (!mainWindowVisible) {
+            await syncOverlayWindowBounds();
+        }
+    }
+
+    async function applyAiSubtitle(text: string) {
+        const nextText = text.trim();
+        if (nextText && showAiSubtitleEnabled) {
+            clearOverlayTranscriptSubtitle();
+        }
+
+        currentAiSubtitle = nextText;
+        if (
+            !mainWindowVisible &&
+            showHiddenWindowOverlayEnabled &&
+            showAiSubtitleEnabled &&
+            currentAiSubtitle.length > 0
+        ) {
             await syncOverlayWindowBounds();
         }
     }
@@ -259,7 +317,11 @@
         callStagePhase = payload.phase;
 
         if (payload.phase === "speaking" || payload.phase === "idle") {
-            clearOverlaySubtitle();
+            clearOverlayTranscriptSubtitle();
+        }
+
+        if (payload.phase !== "speaking") {
+            clearOverlayAiSubtitle();
         }
     }
 
@@ -270,17 +332,24 @@
                 return;
             }
 
+            if (event.key === SHOW_AI_SUBTITLE_STORAGE_KEY) {
+                showAiSubtitleEnabled = loadShowAiSubtitlePreferenceFromStorage();
+                return;
+            }
+
             if (event.key === SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY) {
                 showHiddenWindowOverlayEnabled =
                     loadShowHiddenWindowOverlayPreferenceFromStorage();
                 if (!showHiddenWindowOverlayEnabled) {
                     clearOverlayToasts();
-                    clearOverlaySubtitle();
+                    clearOverlayTranscriptSubtitle();
+                    clearOverlayAiSubtitle();
                 }
             }
         };
 
         showSubtitleEnabled = loadShowSubtitlePreferenceFromStorage();
+        showAiSubtitleEnabled = loadShowAiSubtitlePreferenceFromStorage();
         showHiddenWindowOverlayEnabled =
             loadShowHiddenWindowOverlayPreferenceFromStorage();
         window.addEventListener("storage", handleStorage);
@@ -315,6 +384,9 @@
                     listen<CallStageEvent>("call-stage", ({ payload }) => {
                         applyCallStage(payload);
                     }),
+                    listen<AiSubtitleEvent>(AI_SUBTITLE_EVENT, ({ payload }) => {
+                        void applyAiSubtitle(payload.text);
+                    }),
                     listen<TranscriptPartialEvent>(
                         "transcript-partial",
                         ({ payload }) => {
@@ -346,6 +418,7 @@
 
         clearOverlayToasts();
         clearOverlaySubtitleTimeout();
+        clearOverlayAiSubtitle();
 
         for (const unlisten of eventUnlisteners) {
             unlisten();
@@ -372,7 +445,7 @@
             {#if showOverlaySubtitle}
                 <div class="overlay-subtitle">
                     <span class="overlay-subtitle-text"
-                        >{liveTranscriptSubtitle}</span
+                        >{overlaySubtitleText}</span
                     >
                 </div>
             {/if}

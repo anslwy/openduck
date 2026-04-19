@@ -48,6 +48,7 @@
         selectLastSessionEnabled,
         showStatEnabled,
         showSubtitleEnabled,
+        showAiSubtitleEnabled,
         showHiddenWindowOverlayEnabled,
         endOfUtteranceSilenceMs,
         autoContinueSilenceMs,
@@ -62,6 +63,7 @@
         onUpdateSelectLastSession,
         onUpdateShowStat,
         onUpdateShowSubtitle,
+        onUpdateShowAiSubtitle,
         onUpdateShowHiddenWindowOverlay,
         onUpdateEndOfUtteranceSilenceMs,
         onUpdateAutoContinueSilenceMs,
@@ -86,6 +88,7 @@
         selectLastSessionEnabled: boolean;
         showStatEnabled: boolean;
         showSubtitleEnabled: boolean;
+        showAiSubtitleEnabled: boolean;
         showHiddenWindowOverlayEnabled: boolean;
         endOfUtteranceSilenceMs: number;
         autoContinueSilenceMs: number | null;
@@ -100,6 +103,7 @@
         onUpdateSelectLastSession: (enabled: boolean) => void;
         onUpdateShowStat: (enabled: boolean) => void;
         onUpdateShowSubtitle: (enabled: boolean) => void;
+        onUpdateShowAiSubtitle: (enabled: boolean) => void;
         onUpdateShowHiddenWindowOverlay: (enabled: boolean) => void;
         onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
         onUpdateAutoContinueSilenceMs: (milliseconds: number | null) => void;
@@ -548,7 +552,22 @@
             </div>
             <div class="about-metadata-row">
                 <span class="about-metadata-label"
-                    >Show Hidden-Window Overlay (Toasts, Live Transcript)</span
+                    >Show AI Subtitle</span
+                >
+                <button
+                    type="button"
+                    class="quantize-toggle"
+                    class:active={showAiSubtitleEnabled}
+                    onclick={() => onUpdateShowAiSubtitle(!showAiSubtitleEnabled)}
+                >
+                    <span class="quantize-dot"></span>
+                    <span>{showAiSubtitleEnabled ? "Enabled" : "Disabled"}</span>
+                </button>
+            </div>
+            <div class="about-metadata-row">
+                <span class="about-metadata-label"
+                    >Show Hidden-Window Overlay (Toasts, Live Transcript, AI
+                    Subtitle)</span
                 >
                 <button
                     type="button"
