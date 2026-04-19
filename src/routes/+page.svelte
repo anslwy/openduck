@@ -7,6 +7,7 @@
     import { invoke, convertFileSrc } from "@tauri-apps/api/core";
     import { listen, type UnlistenFn } from "@tauri-apps/api/event";
     import { getCurrentWindow } from "@tauri-apps/api/window";
+    import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
     import { save } from "@tauri-apps/plugin-dialog";
     import AboutModal from "$lib/components/home/AboutModal.svelte";
     import ContactsModal from "$lib/components/home/ContactsModal.svelte";
@@ -66,11 +67,13 @@
         SELECT_LAST_SESSION_STORAGE_KEY,
         SHOW_STAT_STORAGE_KEY,
         SHOW_SUBTITLE_STORAGE_KEY,
+        SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
         AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
         GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
         GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY,
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
+        DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
         DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
@@ -148,6 +151,11 @@
         enabled: boolean;
     };
 
+    type StoredShowHiddenWindowOverlayPreference = {
+        version: 1;
+        enabled: boolean;
+    };
+
     type StoredAutoUnmuteOnPastedScreenshotPreference = {
         version: 1;
         enabled: boolean;
@@ -177,6 +185,10 @@
         version: 1;
         limit: number | null;
     };
+
+    const OVERLAY_WINDOW_LABEL = "overlay";
+    const OVERLAY_WINDOW_ROUTE = "/overlay";
+    const LIVE_TRANSCRIPT_SUBTITLE_DURATION_MS = 5_000;
 
     let calling = $state(false);
     let micMuted = $state(false);
@@ -276,6 +288,9 @@
     let selectLastSessionEnabled = $state(false);
     let showStatEnabled = $state(false);
     let showSubtitleEnabled = $state(true);
+    let showHiddenWindowOverlayEnabled = $state(
+        DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
+    );
     let endOfUtteranceSilenceMs = $state(DEFAULT_END_OF_UTTERANCE_SILENCE_MS);
     let autoContinueSilenceMs = $state<number | null>(
         DEFAULT_AUTO_CONTINUE_SILENCE_MS,
@@ -340,6 +355,9 @@
     let processingAudioToLlmLatencyMs = $state<number | null>(null);
     let processingAudioLatencyMs = $state<number | null>(null);
     let liveTranscriptSubtitle = $state("");
+    let liveTranscriptSubtitleTimeout: ReturnType<
+        typeof window.setTimeout
+    > | null = null;
     let screenCapturePhase = $state<ScreenCaptureEvent["phase"] | null>(null);
     let screenCaptureMessage = $state("");
     let screenCaptureHasPendingAttachment = $state(false);
@@ -819,6 +837,32 @@
         void window.setTitle(currentSessionTitle || "");
     });
 
+    function clearLiveTranscriptSubtitleTimeout() {
+        if (liveTranscriptSubtitleTimeout) {
+            clearTimeout(liveTranscriptSubtitleTimeout);
+            liveTranscriptSubtitleTimeout = null;
+        }
+    }
+
+    function clearLiveTranscriptSubtitle() {
+        clearLiveTranscriptSubtitleTimeout();
+        liveTranscriptSubtitle = "";
+    }
+
+    function updateLiveTranscriptSubtitle(text: string) {
+        const nextText = text.trim();
+        if (!nextText) {
+            return;
+        }
+
+        liveTranscriptSubtitle = nextText;
+        clearLiveTranscriptSubtitleTimeout();
+        liveTranscriptSubtitleTimeout = window.setTimeout(() => {
+            liveTranscriptSubtitle = "";
+            liveTranscriptSubtitleTimeout = null;
+        }, LIVE_TRANSCRIPT_SUBTITLE_DURATION_MS);
+    }
+
     function setCallStage(phase: CallStagePhase, message: string) {
         if (callStagePhase === phase && callStageMessage === message) {
             return;
@@ -829,8 +873,8 @@
             showReasoningPopup = false;
         }
 
-        if (phase !== "listening") {
-            liveTranscriptSubtitle = "";
+        if (phase === "speaking") {
+            clearLiveTranscriptSubtitle();
         }
 
         callStagePhase = phase;
@@ -1245,6 +1289,21 @@
         );
     }
 
+    function persistShowHiddenWindowOverlayPreference(enabled: boolean) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredShowHiddenWindowOverlayPreference = {
+            version: 1,
+            enabled,
+        };
+        window.localStorage.setItem(
+            SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function clampEndOfUtteranceSilenceMs(milliseconds: number) {
         if (!Number.isFinite(milliseconds)) {
             return DEFAULT_END_OF_UTTERANCE_SILENCE_MS;
@@ -1552,6 +1611,37 @@
         }
     }
 
+    function loadShowHiddenWindowOverlayPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error(
+                "Failed to restore hidden-window overlay preference:",
+                err,
+            );
+            return DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY;
+        }
+    }
+
     function loadEndOfUtteranceSilencePreferenceFromStorage() {
         if (typeof window === "undefined") {
             return DEFAULT_END_OF_UTTERANCE_SILENCE_MS;
@@ -1773,6 +1863,14 @@
         persistShowSubtitlePreference(enabled);
     }
 
+    function applyShowHiddenWindowOverlayPreference(enabled: boolean) {
+        showHiddenWindowOverlayEnabled = enabled;
+        persistShowHiddenWindowOverlayPreference(enabled);
+        if (enabled) {
+            void ensureOverlayWindow();
+        }
+    }
+
     function applyEndOfUtteranceSilencePreference(milliseconds: number) {
         const normalizedMilliseconds =
             clampEndOfUtteranceSilenceMs(milliseconds);
@@ -1885,6 +1983,11 @@
     async function initializeShowSubtitlePreference() {
         const storedEnabled = loadShowSubtitlePreferenceFromStorage();
         applyShowSubtitlePreference(storedEnabled);
+    }
+
+    async function initializeShowHiddenWindowOverlayPreference() {
+        const storedEnabled = loadShowHiddenWindowOverlayPreferenceFromStorage();
+        applyShowHiddenWindowOverlayPreference(storedEnabled);
     }
 
     async function initializeEndOfUtteranceSilencePreference() {
@@ -4572,7 +4675,7 @@
         calling = true;
         callStartedAtMs = Date.now();
         resetProcessingAudioLatencies();
-        liveTranscriptSubtitle = "";
+        clearLiveTranscriptSubtitle();
         syncCallElapsedTime();
         activeTtsRequestId = null;
         syncTtsPlaybackState(false);
@@ -4620,7 +4723,7 @@
         calling = true;
         callStartedAtMs = Date.now();
         resetProcessingAudioLatencies();
-        liveTranscriptSubtitle = "";
+        clearLiveTranscriptSubtitle();
         syncCallElapsedTime();
         activeTtsRequestId = null;
         syncTtsPlaybackState(false);
@@ -4662,7 +4765,7 @@
         resetConversationLog();
         resetScreenCaptureStatus();
         resetProcessingAudioLatencies();
-        liveTranscriptSubtitle = "";
+        clearLiveTranscriptSubtitle();
         setCallStage("idle", "");
         stopCallTimerTracking();
 
@@ -4700,6 +4803,39 @@
 
     function toggleMic() {
         setMicMuted(!micMuted);
+    }
+
+    async function ensureOverlayWindow() {
+        const existingWindow =
+            await WebviewWindow.getByLabel(OVERLAY_WINDOW_LABEL);
+        if (existingWindow) {
+            return;
+        }
+
+        try {
+            const overlayWindow = new WebviewWindow(OVERLAY_WINDOW_LABEL, {
+                url: OVERLAY_WINDOW_ROUTE,
+                title: "",
+                width: 960,
+                height: 260,
+                visible: true,
+                resizable: false,
+                decorations: false,
+                transparent: true,
+                focus: false,
+                focusable: false,
+                alwaysOnTop: true,
+                skipTaskbar: true,
+                shadow: false,
+                visibleOnAllWorkspaces: true,
+            });
+
+            void overlayWindow.once("tauri://error", (event) => {
+                console.error("Failed to create overlay window:", event);
+            });
+        } catch (err) {
+            console.error("Failed to create overlay window:", err);
+        }
     }
 
     async function handleDownloadGemma() {
@@ -5112,6 +5248,8 @@
 
     onMount(() => {
         void (async () => {
+            await ensureOverlayWindow();
+
             try {
                 eventUnlisteners = await Promise.all([
                     listen<RuntimeSetupStatusEvent>(
@@ -5322,7 +5460,7 @@
                                 return;
                             }
 
-                            liveTranscriptSubtitle = nextText;
+                            updateLiveTranscriptSubtitle(nextText);
                             if (pendingConversationUserLogEntryId == null) {
                                 pendingConversationUserLogEntryId =
                                     appendConversationLogEntry(
@@ -5382,7 +5520,7 @@
                             }
 
                             if (nextText) {
-                                liveTranscriptSubtitle = nextText;
+                                updateLiveTranscriptSubtitle(nextText);
                             }
                             if (pendingConversationUserLogEntryId == null) {
                                 pendingConversationUserLogEntryId =
@@ -5502,6 +5640,7 @@
             await initializeSelectLastSessionPreference();
             await initializeShowStatPreference();
             await initializeShowSubtitlePreference();
+            await initializeShowHiddenWindowOverlayPreference();
             await initializeEndOfUtteranceSilencePreference();
             await initializeAutoContinueSilencePreference();
             await initializeAutoContinueMaxCountPreference();
@@ -5605,6 +5744,7 @@
         if (healthCheckInterval) {
             clearInterval(healthCheckInterval);
         }
+        clearLiveTranscriptSubtitleTimeout();
         stopDownloadStatusPolling();
         stopModelMemoryPolling();
         if (selectedContactPromptSyncTimeout) {
@@ -5906,6 +6046,8 @@
                         >{formatLatencySummary()}</span
                     >
                 </div>
+            {/if}
+            {#if calling}
                 <div
                     class="avatar-subtitle"
                     class:display={showSubtitleEnabled &&
@@ -6088,6 +6230,7 @@
                     {selectLastSessionEnabled}
                     {showStatEnabled}
                     {showSubtitleEnabled}
+                    {showHiddenWindowOverlayEnabled}
                     {endOfUtteranceSilenceMs}
                     {autoContinueSilenceMs}
                     {autoContinueMaxCount}
@@ -6101,6 +6244,7 @@
                     onUpdateSelectLastSession={applySelectLastSessionPreference}
                     onUpdateShowStat={applyShowStatPreference}
                     onUpdateShowSubtitle={applyShowSubtitlePreference}
+                    onUpdateShowHiddenWindowOverlay={applyShowHiddenWindowOverlayPreference}
                     onUpdateEndOfUtteranceSilenceMs={applyEndOfUtteranceSilencePreference}
                     onUpdateAutoContinueSilenceMs={applyAutoContinueSilencePreference}
                     onUpdateAutoContinueMaxCount={applyAutoContinueMaxCountPreference}

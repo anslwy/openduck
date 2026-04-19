@@ -78,6 +78,7 @@ pub(crate) const PROCESSING_AUDIO_LATENCY_EVENT: &str = "processing-audio-latenc
 pub(crate) const TRANSCRIPT_EVENT: &str = "transcript-ready";
 pub(crate) const TRANSCRIPT_PARTIAL_EVENT: &str = "transcript-partial";
 pub(crate) const ASSISTANT_RESPONSE_EVENT: &str = "assistant-response";
+pub(crate) const OVERLAY_NOTIFICATION_EVENT: &str = "overlay-notification";
 pub(crate) const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";
 pub(crate) const RUNTIME_SETUP_EVENT: &str = "runtime-setup-status";
 pub(crate) const SCREEN_CAPTURE_EVENT: &str = "screen-capture";

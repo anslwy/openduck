@@ -91,6 +91,11 @@ pub(crate) struct AssistantResponseEvent {
 }
 
 #[derive(Clone, Serialize)]
+pub(crate) struct OverlayNotificationEvent {
+    pub(crate) message: String,
+}
+
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ScreenCaptureEvent {
     pub(crate) phase: String,
@@ -237,6 +242,15 @@ pub(crate) fn emit_processing_audio_latency(
 pub(crate) fn emit_assistant_response(app_handle: &AppHandle, payload: AssistantResponseEvent) {
     if let Err(err) = app_handle.emit(ASSISTANT_RESPONSE_EVENT, payload) {
         error!("Failed to emit assistant response event: {}", err);
+    }
+}
+
+pub(crate) fn emit_overlay_notification(
+    app_handle: &AppHandle,
+    payload: OverlayNotificationEvent,
+) {
+    if let Err(err) = app_handle.emit(OVERLAY_NOTIFICATION_EVENT, payload) {
+        error!("Failed to emit overlay-notification event: {}", err);
     }
 }
 

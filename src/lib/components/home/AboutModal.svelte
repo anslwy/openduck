@@ -48,6 +48,7 @@
         selectLastSessionEnabled,
         showStatEnabled,
         showSubtitleEnabled,
+        showHiddenWindowOverlayEnabled,
         endOfUtteranceSilenceMs,
         autoContinueSilenceMs,
         autoContinueMaxCount,
@@ -61,6 +62,7 @@
         onUpdateSelectLastSession,
         onUpdateShowStat,
         onUpdateShowSubtitle,
+        onUpdateShowHiddenWindowOverlay,
         onUpdateEndOfUtteranceSilenceMs,
         onUpdateAutoContinueSilenceMs,
         onUpdateAutoContinueMaxCount,
@@ -84,6 +86,7 @@
         selectLastSessionEnabled: boolean;
         showStatEnabled: boolean;
         showSubtitleEnabled: boolean;
+        showHiddenWindowOverlayEnabled: boolean;
         endOfUtteranceSilenceMs: number;
         autoContinueSilenceMs: number | null;
         autoContinueMaxCount: number | null;
@@ -97,6 +100,7 @@
         onUpdateSelectLastSession: (enabled: boolean) => void;
         onUpdateShowStat: (enabled: boolean) => void;
         onUpdateShowSubtitle: (enabled: boolean) => void;
+        onUpdateShowHiddenWindowOverlay: (enabled: boolean) => void;
         onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
         onUpdateAutoContinueSilenceMs: (milliseconds: number | null) => void;
         onUpdateAutoContinueMaxCount: (count: number | null) => void;
@@ -528,27 +532,41 @@
                     <span>{showStatEnabled ? "Enabled" : "Disabled"}</span>
                 </button>
             </div>
-            {#if showStatEnabled}
-                <div class="about-metadata-row">
-                    <span class="about-metadata-label"
-                        >Show Subtitles (Live Transcript)</span
+            <div class="about-metadata-row">
+                <span class="about-metadata-label"
+                    >Show Subtitles (Live Transcript)</span
+                >
+                <button
+                    type="button"
+                    class="quantize-toggle"
+                    class:active={showSubtitleEnabled}
+                    onclick={() => onUpdateShowSubtitle(!showSubtitleEnabled)}
+                >
+                    <span class="quantize-dot"></span>
+                    <span>{showSubtitleEnabled ? "Enabled" : "Disabled"}</span>
+                </button>
+            </div>
+            <div class="about-metadata-row">
+                <span class="about-metadata-label"
+                    >Show Hidden-Window Overlay (Toasts, Live Transcript)</span
+                >
+                <button
+                    type="button"
+                    class="quantize-toggle"
+                    class:active={showHiddenWindowOverlayEnabled}
+                    onclick={() =>
+                        onUpdateShowHiddenWindowOverlay(
+                            !showHiddenWindowOverlayEnabled,
+                        )}
+                >
+                    <span class="quantize-dot"></span>
+                    <span
+                        >{showHiddenWindowOverlayEnabled
+                            ? "Enabled"
+                            : "Disabled"}</span
                     >
-                    <button
-                        type="button"
-                        class="quantize-toggle"
-                        class:active={showSubtitleEnabled}
-                        onclick={() =>
-                            onUpdateShowSubtitle(!showSubtitleEnabled)}
-                    >
-                        <span class="quantize-dot"></span>
-                        <span
-                            >{showSubtitleEnabled
-                                ? "Enabled"
-                                : "Disabled"}</span
-                        >
-                    </button>
-                </div>
-            {/if}
+                </button>
+            </div>
             <div class="about-metadata-row slider-row">
                 <span class="about-metadata-label"
                     >Silence Before Sending Audio to STT</span

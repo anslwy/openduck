@@ -70,6 +70,10 @@ export type AssistantResponseEvent = {
     append_to_assistant_entry_id?: number | null;
 };
 
+export type OverlayNotificationEvent = {
+    message: string;
+};
+
 export type ScreenCapturePhase =
     | "capturing"
     | "ready"

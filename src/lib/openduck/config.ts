@@ -18,6 +18,8 @@ export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
 export const SELECT_LAST_SESSION_STORAGE_KEY = "openduck.select-last-session.v1";
 export const SHOW_STAT_STORAGE_KEY = "openduck.show-stat.v1";
 export const SHOW_SUBTITLE_STORAGE_KEY = "openduck.show-subtitle.v1";
+export const SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY =
+  "openduck.show-hidden-window-overlay.v1";
 export const AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY =
   "openduck.auto-unmute-on-pasted-screenshot.v1";
 export const END_OF_UTTERANCE_SILENCE_STORAGE_KEY =
@@ -71,6 +73,7 @@ export const DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN = "Command+Shift+Option+L";
 export const DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE =
   "Command+Shift+Option+U";
 export const DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT = true;
+export const DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY = true;
 
 export const MODEL_PRESETS: Record<
   Exclude<ModelPreset, "custom">,

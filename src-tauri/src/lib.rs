@@ -1270,6 +1270,7 @@ async fn reset_call_session(
     set_tts_playback_active_state(&app_handle, false);
     reset_call_session_state(state.inner());
     clear_pending_screen_capture_inner(&app_handle, true);
+    emit_call_stage(&app_handle, "idle", "");
     reset_csm_reference_context(&app_handle).await?;
     Ok(())
 }
@@ -1561,8 +1562,21 @@ fn update_conversation_context_entry(
 }
 
 #[tauri::command]
-fn clear_conversation_context_images(state: State<'_, AppState>) -> usize {
-    clear_conversation_context_images_inner(state.inner())
+fn clear_conversation_context_images(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> usize {
+    let removed_count = clear_conversation_context_images_inner(state.inner());
+    if removed_count > 0 {
+        emit_conversation_image_history_cleared(&app_handle);
+        emit_overlay_notification(
+            &app_handle,
+            OverlayNotificationEvent {
+                message: "OpenDuck: Cleared Image History".to_string(),
+            },
+        );
+    }
+    removed_count
 }
 
 #[tauri::command]
@@ -3070,6 +3084,7 @@ fn start_call_timer(app_handle: AppHandle, state: State<'_, AppState>, muted: bo
         *call_muted_guard = muted;
     }
     refresh_tray_presentation(&app_handle);
+    emit_call_stage(&app_handle, "listening", "Listening");
     start_call_timer_inner(&app_handle, state.inner());
 }
 
@@ -3086,15 +3101,28 @@ fn stop_call_timer(app_handle: AppHandle, state: State<'_, AppState>) {
     cancel_auto_continue_timer(state.inner());
     refresh_tray_presentation(&app_handle);
     stop_call_timer_inner(&app_handle, state.inner());
+    emit_call_stage(&app_handle, "idle", "");
 }
 
 #[tauri::command]
 fn set_call_muted(app_handle: AppHandle, state: State<'_, AppState>, muted: bool) {
+    let call_in_progress = *state.call_in_progress.lock().unwrap();
     {
         let mut call_muted_guard = state.call_muted.lock().unwrap();
         *call_muted_guard = muted;
     }
     refresh_tray_presentation(&app_handle);
+    if call_in_progress {
+        emit_overlay_notification(
+            &app_handle,
+            OverlayNotificationEvent {
+                message: format!(
+                    "OpenDuck: {}",
+                    if muted { "Muted" } else { "Unmuted" }
+                ),
+            },
+        );
+    }
 }
 
 struct PreparedAudioChunk {
@@ -5711,6 +5739,12 @@ fn attach_pending_screen_capture(app_handle: &AppHandle, path: PathBuf, message:
         emit_play_tray_pong(app_handle);
     }
     emit_screen_capture_event(app_handle, "ready", message);
+    emit_overlay_notification(
+        app_handle,
+        OverlayNotificationEvent {
+            message: "OpenDuck: Attached Screenshot".to_string(),
+        },
+    );
     show_temporary_tray_icon(app_handle, Duration::from_secs(3));
     refresh_tray_presentation(app_handle);
 }
@@ -7368,9 +7402,17 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
             }
             TRAY_CLEAR_IMAGE_HISTORY_MENU_ID => {
                 let state = app_handle.state::<AppState>();
-                clear_conversation_context_images_inner(state.inner());
+                let removed_count = clear_conversation_context_images_inner(state.inner());
                 set_conversation_log_has_visible_images_state(app_handle, state.inner(), false);
                 emit_conversation_image_history_cleared(app_handle);
+                if removed_count > 0 {
+                    emit_overlay_notification(
+                        app_handle,
+                        OverlayNotificationEvent {
+                            message: "OpenDuck: Cleared Image History".to_string(),
+                        },
+                    );
+                }
                 refresh_tray_presentation(app_handle);
             }
             TRAY_INTERRUPT_TTS_MENU_ID => {
@@ -8714,6 +8756,44 @@ fn show_main_window(app_handle: &AppHandle) -> Result<(), String> {
     window.show().map_err(|err| err.to_string())?;
     window.set_focus().map_err(|err| err.to_string())?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn webview_window_is_visible_to_user(window: &tauri::WebviewWindow) -> Result<bool, String> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+
+    window
+        .with_webview(move |webview| unsafe {
+            use objc2_app_kit::{NSWindow, NSWindowOcclusionState};
+
+            let ns_window: &NSWindow = &*webview.ns_window().cast();
+            let is_visible_to_user = ns_window.isVisible()
+                && !ns_window.isMiniaturized()
+                && ns_window
+                    .occlusionState()
+                    .contains(NSWindowOcclusionState::Visible);
+            let _ = tx.send(is_visible_to_user);
+        })
+        .map_err(|err| err.to_string())?;
+
+    rx.recv()
+        .map_err(|err| format!("Failed to query main window visibility: {err}"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn webview_window_is_visible_to_user(window: &tauri::WebviewWindow) -> Result<bool, String> {
+    let is_visible = window.is_visible().map_err(|err| err.to_string())?;
+    let is_minimized = window.is_minimized().map_err(|err| err.to_string())?;
+    Ok(is_visible && !is_minimized)
+}
+
+#[tauri::command]
+fn is_main_window_visible_to_user(app_handle: AppHandle) -> Result<bool, String> {
+    let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return Err("Failed to find the main OpenDuck window".to_string());
+    };
+
+    webview_window_is_visible_to_user(&window)
 }
 
 fn clear_pending_screen_capture_inner(app_handle: &AppHandle, emit_event: bool) {
@@ -10940,6 +11020,7 @@ pub fn run() {
             capture_screen_selection,
             clear_pending_screen_capture,
             attach_pasted_screen_capture,
+            is_main_window_visible_to_user,
             receive_audio_chunk,
             ping,
             get_build_info,
