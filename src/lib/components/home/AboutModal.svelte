@@ -22,6 +22,11 @@
         MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
         MIN_LLM_IMAGE_HISTORY_LIMIT,
+        DEFAULT_GLOBAL_SHORTCUT,
+        DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
+        DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
+        DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
+        NO_GLOBAL_SHORTCUT,
     } from "$lib/openduck/config";
     import type {
         AppUpdateInfo,
@@ -863,6 +868,14 @@
                             editedShortcut = newValue;
                             onUpdateGlobalShortcut(newValue);
                         }}
+                        onRemove={() => {
+                            editedShortcut = NO_GLOBAL_SHORTCUT;
+                            onUpdateGlobalShortcut(NO_GLOBAL_SHORTCUT);
+                        }}
+                        onDefault={() => {
+                            editedShortcut = DEFAULT_GLOBAL_SHORTCUT;
+                            onUpdateGlobalShortcut(DEFAULT_GLOBAL_SHORTCUT);
+                        }}
                     />
                 </div>
             </div>
@@ -876,6 +889,16 @@
                         onUpdate={(newValue) => {
                             editedShortcutEntireScreen = newValue;
                             onUpdateGlobalShortcutEntireScreen(newValue);
+                        }}
+                        onRemove={() => {
+                            editedShortcutEntireScreen = NO_GLOBAL_SHORTCUT;
+                            onUpdateGlobalShortcutEntireScreen(NO_GLOBAL_SHORTCUT);
+                        }}
+                        onDefault={() => {
+                            editedShortcutEntireScreen = DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN;
+                            onUpdateGlobalShortcutEntireScreen(
+                                DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
+                            );
                         }}
                     />
                 </div>
@@ -891,6 +914,16 @@
                             editedShortcutToggleMute = newValue;
                             onUpdateGlobalShortcutToggleMute(newValue);
                         }}
+                        onRemove={() => {
+                            editedShortcutToggleMute = NO_GLOBAL_SHORTCUT;
+                            onUpdateGlobalShortcutToggleMute(NO_GLOBAL_SHORTCUT);
+                        }}
+                        onDefault={() => {
+                            editedShortcutToggleMute = DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE;
+                            onUpdateGlobalShortcutToggleMute(
+                                DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
+                            );
+                        }}
                     />
                 </div>
             </div>
@@ -904,6 +937,16 @@
                         onUpdate={(newValue) => {
                             editedShortcutInterrupt = newValue;
                             onUpdateGlobalShortcutInterrupt(newValue);
+                        }}
+                        onRemove={() => {
+                            editedShortcutInterrupt = NO_GLOBAL_SHORTCUT;
+                            onUpdateGlobalShortcutInterrupt(NO_GLOBAL_SHORTCUT);
+                        }}
+                        onDefault={() => {
+                            editedShortcutInterrupt = DEFAULT_GLOBAL_SHORTCUT_INTERRUPT;
+                            onUpdateGlobalShortcutInterrupt(
+                                DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
+                            );
                         }}
                     />
                 </div>

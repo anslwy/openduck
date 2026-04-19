@@ -74,6 +74,7 @@ export const DEFAULT_GLOBAL_SHORTCUT = "Command+Shift+L";
 export const DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN = "Command+Shift+Option+L";
 export const DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE = "Command+Shift+Option+U";
 export const DEFAULT_GLOBAL_SHORTCUT_INTERRUPT = "Command+Shift+Option+I";
+export const NO_GLOBAL_SHORTCUT = "None";
 export const DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT = true;
 
 export const DEFAULT_SHOW_AI_SUBTITLE = true;

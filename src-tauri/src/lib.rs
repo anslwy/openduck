@@ -857,8 +857,9 @@ fn initialize_global_shortcut_look_at_entire_screen(
                 let _ = app_handle.global_shortcut().unregister(old_shortcut);
             }
 
-            // Register new
-            if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
+            if shortcut_str.is_empty() || shortcut_str == "None" {
+                *current_shortcut_str = shortcut_str;
+            } else if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
                 if let Err(err) = app_handle.global_shortcut().register(new_shortcut) {
                     error!("Failed to register new global shortcut: {}", err);
                 } else {
@@ -892,21 +893,23 @@ fn set_global_shortcut_look_at_entire_screen(
             return Ok(shortcut_str);
         }
 
-        // Try to parse the new shortcut first to validate it
-        let new_shortcut = shortcut_str
-            .parse::<Shortcut>()
-            .map_err(|err| format!("Invalid shortcut format: {}", err))?;
-
         // Unregister old
         if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
             let _ = app_handle.global_shortcut().unregister(old_shortcut);
         }
 
-        // Register new
-        app_handle
-            .global_shortcut()
-            .register(new_shortcut)
-            .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+        if !shortcut_str.is_empty() && shortcut_str != "None" {
+            // Try to parse the new shortcut first to validate it
+            let new_shortcut = shortcut_str
+                .parse::<Shortcut>()
+                .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+            // Register new
+            app_handle
+                .global_shortcut()
+                .register(new_shortcut)
+                .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+        }
 
         *current_shortcut_str = shortcut_str.clone();
     }
@@ -961,8 +964,9 @@ fn initialize_global_shortcut_look_at_screen_region(
                 let _ = app_handle.global_shortcut().unregister(old_shortcut);
             }
 
-            // Register new
-            if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
+            if shortcut_str.is_empty() || shortcut_str == "None" {
+                *current_shortcut_str = shortcut_str;
+            } else if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
                 if let Err(err) = app_handle.global_shortcut().register(new_shortcut) {
                     error!("Failed to register new global shortcut: {}", err);
                 } else {
@@ -996,21 +1000,23 @@ fn set_global_shortcut_look_at_screen_region(
             return Ok(shortcut_str);
         }
 
-        // Try to parse the new shortcut first to validate it
-        let new_shortcut = shortcut_str
-            .parse::<Shortcut>()
-            .map_err(|err| format!("Invalid shortcut format: {}", err))?;
-
         // Unregister old
         if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
             let _ = app_handle.global_shortcut().unregister(old_shortcut);
         }
 
-        // Register new
-        app_handle
-            .global_shortcut()
-            .register(new_shortcut)
-            .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+        if !shortcut_str.is_empty() && shortcut_str != "None" {
+            // Try to parse the new shortcut first to validate it
+            let new_shortcut = shortcut_str
+                .parse::<Shortcut>()
+                .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+            // Register new
+            app_handle
+                .global_shortcut()
+                .register(new_shortcut)
+                .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+        }
 
         *current_shortcut_str = shortcut_str.clone();
     }
@@ -1057,7 +1063,9 @@ fn initialize_global_shortcut_toggle_mute(
                 let _ = app_handle.global_shortcut().unregister(old_shortcut);
             }
 
-            if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
+            if shortcut_str.is_empty() || shortcut_str == "None" {
+                *current_shortcut_str = shortcut_str;
+            } else if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
                 if let Err(err) = app_handle.global_shortcut().register(new_shortcut) {
                     error!("Failed to register new global shortcut: {}", err);
                 } else {
@@ -1102,7 +1110,9 @@ fn initialize_global_shortcut_interrupt(
                 let _ = app_handle.global_shortcut().unregister(old_shortcut);
             }
 
-            if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
+            if shortcut_str.is_empty() || shortcut_str == "None" {
+                *current_shortcut_str = shortcut_str;
+            } else if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
                 if let Err(err) = app_handle.global_shortcut().register(new_shortcut) {
                     error!("Failed to register new global shortcut: {}", err);
                 } else {
@@ -1136,18 +1146,23 @@ fn set_global_shortcut_interrupt(
             return Ok(shortcut_str);
         }
 
-        let new_shortcut = shortcut_str
-            .parse::<Shortcut>()
-            .map_err(|err| format!("Invalid shortcut format: {}", err))?;
-
+        // Unregister old
         if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
             let _ = app_handle.global_shortcut().unregister(old_shortcut);
         }
 
-        app_handle
-            .global_shortcut()
-            .register(new_shortcut)
-            .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+        if !shortcut_str.is_empty() && shortcut_str != "None" {
+            // Try to parse the new shortcut first to validate it
+            let new_shortcut = shortcut_str
+                .parse::<Shortcut>()
+                .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+            // Register new
+            app_handle
+                .global_shortcut()
+                .register(new_shortcut)
+                .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+        }
 
         *current_shortcut_str = shortcut_str.clone();
     }
@@ -1180,18 +1195,23 @@ fn set_global_shortcut_toggle_mute(
             return Ok(shortcut_str);
         }
 
-        let new_shortcut = shortcut_str
-            .parse::<Shortcut>()
-            .map_err(|err| format!("Invalid shortcut format: {}", err))?;
-
+        // Unregister old
         if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
             let _ = app_handle.global_shortcut().unregister(old_shortcut);
         }
 
-        app_handle
-            .global_shortcut()
-            .register(new_shortcut)
-            .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+        if !shortcut_str.is_empty() && shortcut_str != "None" {
+            // Try to parse the new shortcut first to validate it
+            let new_shortcut = shortcut_str
+                .parse::<Shortcut>()
+                .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+            // Register new
+            app_handle
+                .global_shortcut()
+                .register(new_shortcut)
+                .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+        }
 
         *current_shortcut_str = shortcut_str.clone();
     }
@@ -7257,6 +7277,8 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     if call_in_progress {
         let look_at_screen_label = if screen_capture_in_progress {
             "Selecting Screen...".to_string()
+        } else if region_shortcut_str.is_empty() || region_shortcut_str == "None" {
+            "Look at Screen Region".to_string()
         } else {
             format!("Look at Screen Region ({})", region_shortcut_str)
         };
@@ -7273,9 +7295,15 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
             };
         builder = builder.item(&look_at_screen_item);
 
+        let look_at_entire_screen_label =
+            if entire_shortcut_str.is_empty() || entire_shortcut_str == "None" {
+                "Look at Entire Screen".to_string()
+            } else {
+                format!("Look at Entire Screen ({})", entire_shortcut_str)
+            };
         let look_at_entire_screen_item = match MenuItemBuilder::with_id(
             TRAY_LOOK_AT_ENTIRE_SCREEN_MENU_ID,
-            format!("Look at Entire Screen ({})", entire_shortcut_str),
+            look_at_entire_screen_label,
         )
         .enabled(!screen_capture_in_progress)
         .build(app_handle)
@@ -7376,10 +7404,21 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     }
 
     if call_in_progress {
-        let mute_label = if call_muted {
+        let mute_label = if toggle_mute_shortcut_str.is_empty() || toggle_mute_shortcut_str == "None" {
+            if call_muted {
+                "Unmute".to_string()
+            } else {
+                "Mute".to_string()
+            }
+        } else if call_muted {
             format!("Unmute ({})", toggle_mute_shortcut_str)
         } else {
             format!("Mute ({})", toggle_mute_shortcut_str)
+        };
+        let interrupt_label = if interrupt_shortcut_str.is_empty() || interrupt_shortcut_str == "None" {
+            "Interrupt".to_string()
+        } else {
+            format!("Interrupt ({})", interrupt_shortcut_str)
         };
         let clear_image_history_item =
             match MenuItemBuilder::with_id(TRAY_CLEAR_IMAGE_HISTORY_MENU_ID, "Clear Image History")
@@ -7394,7 +7433,7 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
             };
         builder = builder.separator();
         builder = builder
-            .text(TRAY_INTERRUPT_TTS_MENU_ID, format!("Interrupt ({})", interrupt_shortcut_str))
+            .text(TRAY_INTERRUPT_TTS_MENU_ID, interrupt_label)
             .item(&clear_image_history_item)
             .text(TRAY_END_CALL_MENU_ID, "End Call")
             .text(TRAY_TOGGLE_MUTE_MENU_ID, mute_label);
