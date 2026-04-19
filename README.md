@@ -11,9 +11,15 @@ Screen-aware, voice-first, local AI tool that stays lean and out of your away un
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 [![License](https://img.shields.io/github/license/anslwy/openduck)](https://img.shields.io/github/license/anslwy/openduck)
 
-## Demo
+## Demo (In App)
 
 https://github.com/user-attachments/assets/39bc1187-ddb4-42f4-8225-7f873734fa62
+
+## Demo (Screen-aware assistance)
+
+
+https://github.com/user-attachments/assets/4603ce80-9b74-4b0e-8f8c-ff242f7bdc37
+
 
 ## Features
 
