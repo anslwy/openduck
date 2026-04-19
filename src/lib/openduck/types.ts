@@ -249,6 +249,13 @@ export type SessionMetadata = {
     updated_at: number;
 };
 
+export type SearchResult = {
+    session_id: string;
+    session_title: string;
+    matched_text: string;
+    updated_at: number;
+};
+
 export type ConversationTurn = {
     user_entry_id: number;
     assistant_entry_id: number;

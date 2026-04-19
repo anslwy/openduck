@@ -10,6 +10,7 @@
         onDelete,
         onRename,
         onNewChat,
+        onOpenSearch,
         onClose,
     } = $props<{
         sessions: SessionMetadata[];
@@ -18,10 +19,10 @@
         onDelete: (session: SessionMetadata) => void;
         onRename: (session: SessionMetadata, newTitle: string) => void;
         onNewChat: () => void;
+        onOpenSearch: () => void;
         onClose: () => void;
     }>();
 
-    let searchTerm = $state("");
     let selectedIndex = $state(0);
     let sessionToDelete = $state<SessionMetadata | null>(null);
     let editingSessionId = $state<string | null>(null);
@@ -29,23 +30,15 @@
 
     onMount(() => {
         if (activeSessionId) {
-            const index = filteredSessions.findIndex(
-                (s) => s.id === activeSessionId,
-            );
+            const index = sessions.findIndex((s) => s.id === activeSessionId);
             if (index !== -1) {
                 selectedIndex = index;
             }
         }
     });
 
-    const filteredSessions = $derived(
-        sessions.filter((s) =>
-            s.title.toLowerCase().includes(searchTerm.toLowerCase()),
-        ),
-    );
-
     const sessionsByDate = $derived(
-        filteredSessions.reduce(
+        sessions.reduce(
             (acc, session) => {
                 const date = new Date(session.updated_at * 1000);
                 const dateStr = date.toLocaleDateString(undefined, {
@@ -71,25 +64,24 @@
         if (event.key === "Escape") {
             onClose();
         } else if (event.key === "ArrowDown") {
-            selectedIndex = (selectedIndex + 1) % filteredSessions.length;
+            selectedIndex = (selectedIndex + 1) % sessions.length;
             event.preventDefault();
         } else if (event.key === "ArrowUp") {
             selectedIndex =
-                (selectedIndex - 1 + filteredSessions.length) %
-                filteredSessions.length;
+                (selectedIndex - 1 + sessions.length) % sessions.length;
             event.preventDefault();
         } else if (event.key === "Enter") {
-            if (filteredSessions[selectedIndex]) {
-                onSelect(filteredSessions[selectedIndex]);
+            if (sessions[selectedIndex]) {
+                onSelect(sessions[selectedIndex]);
             }
         } else if (event.ctrlKey && event.key === "d") {
-            if (filteredSessions[selectedIndex]) {
-                onDelete(filteredSessions[selectedIndex]);
+            if (sessions[selectedIndex]) {
+                onDelete(sessions[selectedIndex]);
             }
             event.preventDefault();
         } else if (event.ctrlKey && event.key === "r") {
-            if (filteredSessions[selectedIndex]) {
-                startEditing(filteredSessions[selectedIndex]);
+            if (sessions[selectedIndex]) {
+                startEditing(sessions[selectedIndex]);
             }
             event.preventDefault();
         }
@@ -131,17 +123,39 @@
     onkeydown={handleKeydown}
     tabindex="-1"
 >
-    <div class="sessions-search">
-        <input
-            type="text"
-            class="sessions-search-input"
-            placeholder="Search sessions..."
-            bind:value={searchTerm}
-        />
-    </div>
-
     <div class="sessions-list">
-        <button type="button" class="session-item-wrapper new-session-item" onclick={onNewChat}>
+        <div class="sessions-search">
+            <button
+                type="button"
+                class="session-item-wrapper sessions-search-trigger"
+                onclick={onOpenSearch}
+            >
+                <div class="session-item">
+                    <div class="new-session-content">
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            ><circle cx="11" cy="11" r="8" /><path
+                                d="m21 21-4.3-4.3"
+                            /></svg
+                        >
+                        <span class="session-item-title">Search</span>
+                    </div>
+                </div>
+            </button>
+        </div>
+        <button
+            type="button"
+            class="session-item-wrapper new-session-item"
+            onclick={onNewChat}
+        >
             <div class="session-item">
                 <div class="new-session-content">
                     <svg
@@ -164,7 +178,7 @@
         {#each dateHeaders as date}
             <div class="sessions-date-header">{date}</div>
             {#each sessionsByDate[date] as session}
-                {@const globalIndex = filteredSessions.indexOf(session)}
+                {@const globalIndex = sessions.indexOf(session)}
                 <div
                     class="session-item-wrapper"
                     class:selected={globalIndex === selectedIndex}
@@ -235,7 +249,9 @@
                             class="session-item"
                             onclick={() => onSelect(session)}
                         >
-                            <span class="session-item-title">{session.title}</span>
+                            <span class="session-item-title"
+                                >{session.title}</span
+                            >
                             <span class="session-item-time"
                                 >{formatTime(session.updated_at)}</span
                             >
@@ -287,12 +303,9 @@
                                 stroke-linejoin="round"
                                 ><path d="M3 6h18" /><path
                                     d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"
-                                /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /><line
-                                    x1="10"
-                                    y1="11"
-                                    x2="10"
-                                    y2="17"
-                                /><line
+                                /><path
+                                    d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"
+                                /><line x1="10" y1="11" x2="10" y2="17" /><line
                                     x1="14"
                                     y1="11"
                                     x2="14"
@@ -304,7 +317,7 @@
                 </div>
             {/each}
         {/each}
-        {#if filteredSessions.length === 0}
+        {#if sessions.length === 0}
             <div class="conversation-empty">No sessions found</div>
         {/if}
     </div>
@@ -323,6 +336,25 @@
 </div>
 
 <style>
+    .sessions-search-trigger {
+        background: rgba(255, 205, 64, 0.05);
+        border: 1px dashed rgba(255, 205, 64, 0.3);
+        margin-bottom: 8px;
+    }
+
+    .sessions-search-trigger:hover {
+        background: rgba(255, 205, 64, 0.1);
+        border-color: rgba(255, 205, 64, 0.5);
+    }
+
+    .sessions-search-trigger .session-item-title {
+        color: #ffdf63;
+    }
+
+    .sessions-search-trigger svg {
+        color: #ffdf63;
+    }
+
     .new-session-item {
         border: 1px dashed rgba(255, 205, 64, 0.3);
         background: rgba(255, 205, 64, 0.05);

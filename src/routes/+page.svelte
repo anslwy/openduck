@@ -14,6 +14,7 @@
     import ConversationPopup from "$lib/components/home/ConversationPopup.svelte";
     import SessionsPopup from "$lib/components/home/SessionsPopup.svelte";
     import AppHeader from "$lib/components/home/AppHeader.svelte";
+    import SearchModal from "$lib/components/home/SearchModal.svelte";
     import ExternalLlmConfigModal from "$lib/components/home/ExternalLlmConfigModal.svelte";
     import GemmaBanner from "$lib/components/home/GemmaBanner.svelte";
     import SpeechBanner from "$lib/components/home/SpeechBanner.svelte";
@@ -339,6 +340,7 @@
     let currentSessionTitle = $state<string | null>(null);
     let currentSessionId = $state<string | null>(null);
     let showAboutPopup = $state(false);
+    let showSearchModal = $state(false);
     let conversationLogEntries = $state<ConversationLogEntry[]>([]);
     let buildInfo = $state<BuildInfo | null>(null);
     let buildInfoError = $state<string | null>(null);
@@ -3014,12 +3016,54 @@
 
     function toggleSessionsPopup() {
         showSessionsPopup = !showSessionsPopup;
-        if (showSessionsPopup) {
-            void loadSessions();
-            closeConversationPopup();
-            closeContactsPopup();
-            closeAboutPopup();
+    }
+
+    function openSearchModal() {
+        showSearchModal = true;
+        showSessionsPopup = false;
+    }
+
+    function closeSearchModal() {
+        showSearchModal = false;
+    }
+
+    async function handleSearchSelect(sessionId: string) {
+        showSearchModal = false;
+        const session = sessions.find((s) => s.id === sessionId);
+        if (session) {
+            await handleSelectSession(session);
+        } else {
+            // If session not in memory list, we might need to load it by ID
+            // but sessions list is usually updated.
+            console.warn("Session not found in memory list:", sessionId);
+            // Fallback: we could invoke a load_session directly
+            try {
+                const turns = await invoke<ConversationTurn[]>("load_session", {
+                    sessionId,
+                });
+                applyLoadedSession(sessionId, turns);
+            } catch (err) {
+                console.error("Failed to load session from search:", err);
+            }
         }
+    }
+
+    function applyLoadedSession(
+        sessionId: string,
+        turns: ConversationTurn[],
+    ) {
+        currentSessionId = sessionId;
+        const session = sessions.find((s) => s.id === sessionId);
+        currentSessionTitle = session?.title || null;
+
+        resetConversationLog();
+        for (const turn of turns) {
+            appendConversationLogEntry("user", turn.user_text as string, [
+                ...turn.image_paths,
+            ]);
+            upsertAssistantConversationLogEntry(0, turn.assistant_text as string);
+        }
+        scrollConversationLogToBottom();
     }
 
     function toggleAboutPopup() {
@@ -6630,10 +6674,23 @@
                 onDelete={handleDeleteSession}
                 onRename={handleRenameSession}
                 onNewChat={handleNewChat}
-                onClose={toggleSessionsPopup}
+                onOpenSearch={openSearchModal}
+                onClose={() => (showSessionsPopup = false)}
             />
         </div>
     {/if}
+
+    {#if showSearchModal}
+        <SearchModal
+            onClose={closeSearchModal}
+            onSelect={handleSearchSelect}
+            onNewChat={() => {
+                showSearchModal = false;
+                handleNewChat();
+            }}
+        />
+    {/if}
+
 
     <input
         class="hidden-file-input"

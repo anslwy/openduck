@@ -170,6 +170,14 @@ struct SessionMetadata {
     updated_at: u64,
 }
 
+#[derive(Serialize, Clone)]
+struct SearchResult {
+    session_id: String,
+    session_title: String,
+    matched_text: String,
+    updated_at: u64,
+}
+
 #[derive(Serialize, Deserialize)]
 struct SessionData {
     metadata: SessionMetadata,
@@ -9909,6 +9917,97 @@ fn rename_session(
     Ok(())
 }
 
+fn extract_snippet(text: &str, query: &str) -> String {
+    let text_chars: Vec<char> = text.chars().collect();
+    let query_lower = query.to_lowercase();
+    let query_char_count = query.chars().count();
+
+    if query_char_count == 0 {
+        return text_chars.iter().take(100).collect();
+    }
+
+    if text_chars.len() >= query_char_count {
+        for i in 0..=text_chars.len() - query_char_count {
+            let chunk: String = text_chars[i..i + query_char_count].iter().collect();
+            if chunk.to_lowercase() == query_lower {
+                let start = i.saturating_sub(40);
+                let end = std::cmp::min(text_chars.len(), i + query_char_count + 60);
+
+                let mut snippet = if start > 0 { "..." } else { "" }.to_string();
+                let content: String = text_chars[start..end].iter().collect();
+                snippet.push_str(&content);
+                if end < text_chars.len() {
+                    snippet.push_str("...");
+                }
+                return snippet;
+            }
+        }
+    }
+
+    text_chars.iter().take(100).collect()
+}
+
+#[tauri::command]
+fn search_sessions(app_handle: AppHandle, query: String) -> Result<Vec<SearchResult>, String> {
+    let sessions_dir = resolve_sessions_dir(&app_handle)?;
+    let mut results = Vec::new();
+    let query_trimmed = query.trim();
+    if query_trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let query_lower = query_trimmed.to_lowercase();
+
+    if let Ok(entries) = std::fs::read_dir(sessions_dir) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    let session_file = entry.path().join(SESSION_FILE_NAME);
+                    if let Ok(content) = std::fs::read_to_string(&session_file) {
+                        if let Ok(data) = serde_json::from_str::<SessionData>(&content) {
+                            let mut session_matches = Vec::new();
+
+                            // Check title
+                            if data.metadata.title.to_lowercase().contains(&query_lower) {
+                                session_matches.push(SearchResult {
+                                    session_id: data.metadata.id.clone(),
+                                    session_title: data.metadata.title.clone(),
+                                    matched_text: String::new(),
+                                    updated_at: data.metadata.updated_at,
+                                });
+                            }
+
+                            // Check turns
+                            for turn in &data.turns {
+                                if turn.user_text.to_lowercase().contains(&query_lower) {
+                                    session_matches.push(SearchResult {
+                                        session_id: data.metadata.id.clone(),
+                                        session_title: data.metadata.title.clone(),
+                                        matched_text: extract_snippet(&turn.user_text, query_trimmed),
+                                        updated_at: data.metadata.updated_at,
+                                    });
+                                }
+                                if turn.assistant_text.to_lowercase().contains(&query_lower) {
+                                    session_matches.push(SearchResult {
+                                        session_id: data.metadata.id.clone(),
+                                        session_title: data.metadata.title.clone(),
+                                        matched_text: extract_snippet(&turn.assistant_text, query_trimmed),
+                                        updated_at: data.metadata.updated_at,
+                                    });
+                                }
+                            }
+
+                            results.extend(session_matches);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    results.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Ok(results)
+}
+
 #[tauri::command]
 async fn fork_session(
     app_handle: AppHandle,
@@ -11106,12 +11205,10 @@ pub fn run() {
             delete_session,
             rename_session,
             fork_session,
+            search_sessions,
             start_new_session,
             get_current_session_id,
             update_current_session_title,
-            stop_server,
-            stop_csm_server,
-            stop_stt_server
         ])
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]
