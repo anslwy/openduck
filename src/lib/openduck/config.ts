@@ -36,9 +36,10 @@ export const LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY =
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
 export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY =
   "openduck.global-shortcut-entire.v1";
-export const GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY =
-  "openduck.global-shortcut-toggle-mute.v1";
+export const GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY = "openduck.global-shortcut-toggle-mute.v1";
+export const GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY = "openduck.global-shortcut-interrupt.v1";
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
+
 export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
 export const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
 export const DEFAULT_OLLAMA_MODEL = "gemma2:2b";
@@ -71,9 +72,10 @@ export const LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE =
   MAX_LLM_IMAGE_HISTORY_LIMIT + 1;
 export const DEFAULT_GLOBAL_SHORTCUT = "Command+Shift+L";
 export const DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN = "Command+Shift+Option+L";
-export const DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE =
-  "Command+Shift+Option+U";
+export const DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE = "Command+Shift+Option+U";
+export const DEFAULT_GLOBAL_SHORTCUT_INTERRUPT = "Command+Shift+Option+I";
 export const DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT = true;
+
 export const DEFAULT_SHOW_AI_SUBTITLE = true;
 export const DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY = true;
 

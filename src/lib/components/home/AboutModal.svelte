@@ -43,6 +43,7 @@
         globalShortcut,
         globalShortcutEntireScreen,
         globalShortcutToggleMute,
+        globalShortcutInterrupt,
         pongPlaybackEnabled,
         autoUnmuteOnPastedScreenshotEnabled,
         selectLastSessionEnabled,
@@ -58,6 +59,7 @@
         onUpdateGlobalShortcut,
         onUpdateGlobalShortcutEntireScreen,
         onUpdateGlobalShortcutToggleMute,
+        onUpdateGlobalShortcutInterrupt,
         onUpdatePongPlayback,
         onUpdateAutoUnmuteOnPastedScreenshot,
         onUpdateSelectLastSession,
@@ -83,6 +85,7 @@
         globalShortcut: string;
         globalShortcutEntireScreen: string;
         globalShortcutToggleMute: string;
+        globalShortcutInterrupt: string;
         pongPlaybackEnabled: boolean;
         autoUnmuteOnPastedScreenshotEnabled: boolean;
         selectLastSessionEnabled: boolean;
@@ -98,6 +101,7 @@
         onUpdateGlobalShortcut: (shortcut: string) => void;
         onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
         onUpdateGlobalShortcutToggleMute: (shortcut: string) => void;
+        onUpdateGlobalShortcutInterrupt: (shortcut: string) => void;
         onUpdatePongPlayback: (enabled: boolean) => void;
         onUpdateAutoUnmuteOnPastedScreenshot: (enabled: boolean) => void;
         onUpdateSelectLastSession: (enabled: boolean) => void;
@@ -118,6 +122,7 @@
     let editedShortcut = $state("");
     let editedShortcutEntireScreen = $state("");
     let editedShortcutToggleMute = $state("");
+    let editedShortcutInterrupt = $state("");
 
     $effect(() => {
         editedShortcut = globalShortcut;
@@ -129,6 +134,10 @@
 
     $effect(() => {
         editedShortcutToggleMute = globalShortcutToggleMute;
+    });
+
+    $effect(() => {
+        editedShortcutInterrupt = globalShortcutInterrupt;
     });
 
     function clearCopyFeedback() {
@@ -881,6 +890,20 @@
                         onUpdate={(newValue) => {
                             editedShortcutToggleMute = newValue;
                             onUpdateGlobalShortcutToggleMute(newValue);
+                        }}
+                    />
+                </div>
+            </div>
+            <div class="about-metadata-row shortcut-row">
+                <span class="about-metadata-label"
+                    >Interrupt Speech (During Call)</span
+                >
+                <div class="shortcut-input-wrapper">
+                    <ShortcutCapture
+                        value={editedShortcutInterrupt}
+                        onUpdate={(newValue) => {
+                            editedShortcutInterrupt = newValue;
+                            onUpdateGlobalShortcutInterrupt(newValue);
                         }}
                     />
                 </div>

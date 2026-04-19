@@ -74,12 +74,14 @@
         GLOBAL_SHORTCUT_STORAGE_KEY,
         GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
         GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY,
+        GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY,
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
         DEFAULT_SHOW_AI_SUBTITLE,
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
         DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
+        DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
     } from "$lib/openduck/config";
     import {
         formatDownloadPercent,
@@ -322,6 +324,7 @@
     let globalShortcutToggleMute = $state(
         DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
     );
+    let globalShortcutInterrupt = $state(DEFAULT_GLOBAL_SHORTCUT_INTERRUPT);
     let contacts = $state<ContactProfile[]>([createDefaultContact()]);
     let selectedContactId = $state(DEFAULT_CONTACT_ID);
     let showContactsPopup = $state(false);
@@ -2344,6 +2347,85 @@
         } catch (err) {
             console.error(
                 "Failed to initialize global shortcut (toggle mute) preference:",
+                err,
+            );
+        }
+    }
+
+    function persistGlobalShortcutInterruptPreference(shortcut: string) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload = {
+            version: 1,
+            shortcut,
+        };
+        window.localStorage.setItem(
+            GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function loadGlobalShortcutInterruptPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_GLOBAL_SHORTCUT_INTERRUPT;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_GLOBAL_SHORTCUT_INTERRUPT;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                shortcut?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.shortcut !== "string") {
+                return DEFAULT_GLOBAL_SHORTCUT_INTERRUPT;
+            }
+
+            return parsed.shortcut;
+        } catch (err) {
+            console.error(
+                "Failed to restore global shortcut (interrupt) preference:",
+                err,
+            );
+            return DEFAULT_GLOBAL_SHORTCUT_INTERRUPT;
+        }
+    }
+
+    async function applyGlobalShortcutInterruptPreference(shortcut: string) {
+        try {
+            const effectiveShortcut = await invoke<string>(
+                "set_global_shortcut_interrupt",
+                { shortcutStr: shortcut },
+            );
+            globalShortcutInterrupt = effectiveShortcut;
+            persistGlobalShortcutInterruptPreference(effectiveShortcut);
+        } catch (err) {
+            console.error(
+                "Failed to apply global shortcut (interrupt) preference:",
+                err,
+            );
+            alert(`Failed to set shortcut: ${err}`);
+        }
+    }
+
+    async function initializeGlobalShortcutInterruptPreference() {
+        const storedShortcut = loadGlobalShortcutInterruptPreferenceFromStorage();
+        try {
+            const effectiveShortcut = await invoke<string>(
+                "initialize_global_shortcut_interrupt",
+                { shortcutStr: storedShortcut },
+            );
+            globalShortcutInterrupt = effectiveShortcut;
+        } catch (err) {
+            console.error(
+                "Failed to initialize global shortcut (interrupt) preference:",
                 err,
             );
         }
@@ -5793,6 +5875,7 @@
             await initializeGlobalShortcutPreference();
             await initializeGlobalShortcutEntireScreenPreference();
             await initializeGlobalShortcutToggleMutePreference();
+            await initializeGlobalShortcutInterruptPreference();
             await loadSessions();
             if (
                 !currentSessionId &&
@@ -6367,6 +6450,7 @@
                     {globalShortcut}
                     {globalShortcutEntireScreen}
                     {globalShortcutToggleMute}
+                    {globalShortcutInterrupt}
                     {pongPlaybackEnabled}
                     {autoUnmuteOnPastedScreenshotEnabled}
                     {selectLastSessionEnabled}
@@ -6382,6 +6466,7 @@
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
                     onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
                     onUpdateGlobalShortcutToggleMute={applyGlobalShortcutToggleMutePreference}
+                    onUpdateGlobalShortcutInterrupt={applyGlobalShortcutInterruptPreference}
                     onUpdatePongPlayback={applyPongPlaybackPreference}
                     onUpdateAutoUnmuteOnPastedScreenshot={applyAutoUnmuteOnPastedScreenshotPreference}
                     onUpdateSelectLastSession={applySelectLastSessionPreference}

@@ -438,6 +438,9 @@ struct AppState {
     global_shortcut_toggle_mute: Mutex<String>,
     global_shortcut_toggle_mute_hydrated: Mutex<bool>,
     global_shortcut_toggle_mute_modified_before_hydration: Mutex<bool>,
+    global_shortcut_interrupt: Mutex<String>,
+    global_shortcut_interrupt_hydrated: Mutex<bool>,
+    global_shortcut_interrupt_modified_before_hydration: Mutex<bool>,
     next_conversation_entry_id: AtomicU64,
     last_tray_icon_variant: Mutex<Option<TrayIconVariant>>,
     last_tray_menu_state: Mutex<Option<TrayMenuState>>,
@@ -462,6 +465,7 @@ struct TrayMenuState {
     region_shortcut: String,
     entire_screen_shortcut: String,
     toggle_mute_shortcut: String,
+    interrupt_shortcut: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -1072,6 +1076,95 @@ fn initialize_global_shortcut_toggle_mute(
     drop(hydrated);
 
     effective_shortcut
+}
+
+#[tauri::command]
+fn get_global_shortcut_interrupt(state: State<'_, AppState>) -> String {
+    state.global_shortcut_interrupt.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn initialize_global_shortcut_interrupt(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    shortcut_str: String,
+) -> String {
+    let mut hydrated = state.global_shortcut_interrupt_hydrated.lock().unwrap();
+    let mut modified_before_hydration = state
+        .global_shortcut_interrupt_modified_before_hydration
+        .lock()
+        .unwrap();
+    let mut current_shortcut_str = state.global_shortcut_interrupt.lock().unwrap();
+
+    if !*hydrated {
+        if !*modified_before_hydration && *current_shortcut_str != shortcut_str {
+            if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+                let _ = app_handle.global_shortcut().unregister(old_shortcut);
+            }
+
+            if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
+                if let Err(err) = app_handle.global_shortcut().register(new_shortcut) {
+                    error!("Failed to register new global shortcut: {}", err);
+                } else {
+                    *current_shortcut_str = shortcut_str;
+                }
+            }
+        }
+
+        *hydrated = true;
+        *modified_before_hydration = false;
+    }
+
+    let effective_shortcut = current_shortcut_str.clone();
+    drop(current_shortcut_str);
+    drop(modified_before_hydration);
+    drop(hydrated);
+
+    effective_shortcut
+}
+
+#[tauri::command]
+fn set_global_shortcut_interrupt(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    shortcut_str: String,
+) -> Result<String, String> {
+    {
+        let mut current_shortcut_str = state.global_shortcut_interrupt.lock().unwrap();
+
+        if *current_shortcut_str == shortcut_str {
+            return Ok(shortcut_str);
+        }
+
+        let new_shortcut = shortcut_str
+            .parse::<Shortcut>()
+            .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+        if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+            let _ = app_handle.global_shortcut().unregister(old_shortcut);
+        }
+
+        app_handle
+            .global_shortcut()
+            .register(new_shortcut)
+            .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+
+        *current_shortcut_str = shortcut_str.clone();
+    }
+
+    let hydrated = state.global_shortcut_interrupt_hydrated.lock().unwrap();
+    if !*hydrated {
+        let mut modified_before_hydration = state
+            .global_shortcut_interrupt_modified_before_hydration
+            .lock()
+            .unwrap();
+        *modified_before_hydration = true;
+    }
+    drop(hydrated);
+
+    refresh_tray_menu(&app_handle);
+
+    Ok(shortcut_str)
 }
 
 #[tauri::command]
@@ -7133,6 +7226,7 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
         .unwrap()
         .clone();
     let toggle_mute_shortcut_str = state.global_shortcut_toggle_mute.lock().unwrap().clone();
+    let interrupt_shortcut_str = state.global_shortcut_interrupt.lock().unwrap().clone();
 
     let menu_state = TrayMenuState {
         call_in_progress,
@@ -7148,6 +7242,7 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
         region_shortcut: region_shortcut_str.clone(),
         entire_screen_shortcut: entire_shortcut_str.clone(),
         toggle_mute_shortcut: toggle_mute_shortcut_str.clone(),
+        interrupt_shortcut: interrupt_shortcut_str.clone(),
     };
 
     {
@@ -7299,7 +7394,7 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
             };
         builder = builder.separator();
         builder = builder
-            .text(TRAY_INTERRUPT_TTS_MENU_ID, "Interrupt")
+            .text(TRAY_INTERRUPT_TTS_MENU_ID, format!("Interrupt ({})", interrupt_shortcut_str))
             .item(&clear_image_history_item)
             .text(TRAY_END_CALL_MENU_ID, "End Call")
             .text(TRAY_TOGGLE_MUTE_MENU_ID, mute_label);
@@ -7429,6 +7524,12 @@ fn create_tray(app_handle: &AppHandle) -> tauri::Result<()> {
                     if let Err(err) = interrupt_tts(app_handle.clone()).await {
                         error!("Failed to interrupt speech from tray: {}", err);
                     }
+                    emit_overlay_notification(
+                        &app_handle,
+                        OverlayNotificationEvent {
+                            message: "OpenDuck: Interrupted".to_string(),
+                        },
+                    );
                 });
             }
             TRAY_END_CALL_MENU_ID => {
@@ -10915,6 +11016,8 @@ pub fn run() {
                             .clone();
                         let toggle_mute_shortcut_str =
                             state.global_shortcut_toggle_mute.lock().unwrap().clone();
+                        let interrupt_shortcut_str =
+                            state.global_shortcut_interrupt.lock().unwrap().clone();
 
                         if let Ok(region_shortcut) = region_shortcut_str.parse::<Shortcut>() {
                             if shortcut == &region_shortcut {
@@ -10945,6 +11048,23 @@ pub fn run() {
                                 }
                             }
                         }
+
+                        if let Ok(interrupt_shortcut) = interrupt_shortcut_str.parse::<Shortcut>() {
+                            if shortcut == &interrupt_shortcut {
+                                let app_handle = app.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(err) = interrupt_tts(app_handle.clone()).await {
+                                        error!("Failed to interrupt from global shortcut: {}", err);
+                                    }
+                                    emit_overlay_notification(
+                                        &app_handle,
+                                        OverlayNotificationEvent {
+                                            message: "OpenDuck: Interrupted".to_string(),
+                                        },
+                                    );
+                                });
+                            }
+                        }
                     }
                 })
                 .build(),
@@ -10970,6 +11090,10 @@ pub fn run() {
             let toggle_mute_shortcut_str =
                 state.global_shortcut_toggle_mute.lock().unwrap().clone();
             if let Ok(shortcut) = toggle_mute_shortcut_str.parse::<Shortcut>() {
+                let _ = app.global_shortcut().register(shortcut);
+            }
+            let interrupt_shortcut_str = state.global_shortcut_interrupt.lock().unwrap().clone();
+            if let Ok(shortcut) = interrupt_shortcut_str.parse::<Shortcut>() {
                 let _ = app.global_shortcut().register(shortcut);
             }
 
@@ -11105,6 +11229,9 @@ pub fn run() {
             global_shortcut_toggle_mute: Mutex::new("Command+Shift+Option+U".to_string()),
             global_shortcut_toggle_mute_hydrated: Mutex::new(false),
             global_shortcut_toggle_mute_modified_before_hydration: Mutex::new(false),
+            global_shortcut_interrupt: Mutex::new("Command+Shift+Option+I".to_string()),
+            global_shortcut_interrupt_hydrated: Mutex::new(false),
+            global_shortcut_interrupt_modified_before_hydration: Mutex::new(false),
             next_conversation_entry_id: AtomicU64::new(1),
             last_tray_icon_variant: Mutex::new(None),
             last_tray_menu_state: Mutex::new(None),
@@ -11153,6 +11280,9 @@ pub fn run() {
             get_global_shortcut_toggle_mute,
             initialize_global_shortcut_toggle_mute,
             set_global_shortcut_toggle_mute,
+            get_global_shortcut_interrupt,
+            initialize_global_shortcut_interrupt,
+            set_global_shortcut_interrupt,
             clear_conversation_context_images,
             sync_conversation_log_has_visible_images,
             get_gemma_variant,
