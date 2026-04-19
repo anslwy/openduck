@@ -347,8 +347,7 @@
     const minimumAutoContinueMaxCountLabel = `${MIN_AUTO_CONTINUE_MAX_COUNT}`;
     const maximumAutoContinueMaxCountLabel = "Continuous";
     const showContinuousAutoContinueWarning = $derived(
-        !autoContinueMaxCountDisabled &&
-            autoContinueMaxCount === null,
+        !autoContinueMaxCountDisabled && autoContinueMaxCount === null,
     );
     const llmContextTurnSliderValue = $derived.by(() => {
         if (llmContextTurnLimit === null) {
@@ -468,7 +467,6 @@
     <div class="about-modal-content">
         {#if buildInfo}
             <div class="about-hero">
-                <img class="about-app-icon" src="/icon.png" alt="" />
                 <div class="about-hero-copy">
                     <div class="about-app-name-row">
                         <span class="about-app-name">{buildInfo.app_name}</span>
@@ -478,24 +476,31 @@
                             >
                         {/if}
                     </div>
-                    <span class="about-version-number">{buildInfo.version}</span>
+                    <span class="about-version-number"
+                        >v{buildInfo.version}</span
+                    >
                 </div>
             </div>
 
             <div class="about-metadata-card">
                 <div class="about-metadata-row">
                     <span class="about-metadata-label"
-                        >Enable Pop Sound (Screenshots / Processing Audio / Finished
-                        Response)</span
+                        >Enable Pop Sound (Screenshots / Processing Audio /
+                        Finished Response)</span
                     >
                     <button
                         type="button"
                         class="quantize-toggle"
                         class:active={pongPlaybackEnabled}
-                        onclick={() => onUpdatePongPlayback(!pongPlaybackEnabled)}
+                        onclick={() =>
+                            onUpdatePongPlayback(!pongPlaybackEnabled)}
                     >
                         <span class="quantize-dot"></span>
-                        <span>{pongPlaybackEnabled ? "Enabled" : "Disabled"}</span>
+                        <span
+                            >{pongPlaybackEnabled
+                                ? "Enabled"
+                                : "Disabled"}</span
+                        >
                     </button>
                 </div>
                 <div class="about-metadata-row">
@@ -528,7 +533,9 @@
                         class="quantize-toggle"
                         class:active={selectLastSessionEnabled}
                         onclick={() =>
-                            onUpdateSelectLastSession(!selectLastSessionEnabled)}
+                            onUpdateSelectLastSession(
+                                !selectLastSessionEnabled,
+                            )}
                     >
                         <span class="quantize-dot"></span>
                         <span
@@ -560,24 +567,32 @@
                         type="button"
                         class="quantize-toggle"
                         class:active={showSubtitleEnabled}
-                        onclick={() => onUpdateShowSubtitle(!showSubtitleEnabled)}
+                        onclick={() =>
+                            onUpdateShowSubtitle(!showSubtitleEnabled)}
                     >
                         <span class="quantize-dot"></span>
-                        <span>{showSubtitleEnabled ? "Enabled" : "Disabled"}</span>
+                        <span
+                            >{showSubtitleEnabled
+                                ? "Enabled"
+                                : "Disabled"}</span
+                        >
                     </button>
                 </div>
                 <div class="about-metadata-row">
-                    <span class="about-metadata-label"
-                        >Show AI Subtitle</span
-                    >
+                    <span class="about-metadata-label">Show AI Subtitle</span>
                     <button
                         type="button"
                         class="quantize-toggle"
                         class:active={showAiSubtitleEnabled}
-                        onclick={() => onUpdateShowAiSubtitle(!showAiSubtitleEnabled)}
+                        onclick={() =>
+                            onUpdateShowAiSubtitle(!showAiSubtitleEnabled)}
                     >
                         <span class="quantize-dot"></span>
-                        <span>{showAiSubtitleEnabled ? "Enabled" : "Disabled"}</span>
+                        <span
+                            >{showAiSubtitleEnabled
+                                ? "Enabled"
+                                : "Disabled"}</span
+                        >
                     </button>
                 </div>
                 <div class="about-metadata-row">
@@ -609,9 +624,9 @@
                     <div class="about-slider-control">
                         <div class="about-slider-header">
                             <span class="about-slider-detail"
-                                >Longer waits capture more pause-heavy speech before
-                                transcription starts. The minimum stays conservative
-                                to avoid mid-sentence cutoffs.</span
+                                >Longer waits capture more pause-heavy speech
+                                before transcription starts. The minimum stays
+                                conservative to avoid mid-sentence cutoffs.</span
                             >
                             <span class="about-slider-value"
                                 >{formattedEndOfUtteranceSilence}</span
@@ -650,9 +665,10 @@
                     <div class="about-slider-control">
                         <div class="about-slider-header">
                             <span class="about-slider-detail"
-                                >After the assistant finishes speaking, wait this
-                                long with no user speech before it adds a short
-                                continuation to the same assistant message.</span
+                                >After the assistant finishes speaking, wait
+                                this long with no user speech before it adds a
+                                short continuation to the same assistant
+                                message.</span
                             >
                             <span class="about-slider-value"
                                 >{formattedAutoContinueSilence}</span
@@ -697,8 +713,8 @@
                         <div class="about-slider-header">
                             <span class="about-slider-detail"
                                 >Limits how many extra follow-up bursts the
-                                assistant can add to the same reply before waiting
-                                for you to speak.</span
+                                assistant can add to the same reply before
+                                waiting for you to speak.</span
                             >
                             <span class="about-slider-value"
                                 >{autoContinueMaxCountDisabled
@@ -710,8 +726,8 @@
                             <div class="about-slider-header">
                                 <span class="about-slider-detail"
                                     >Warning: Continuous can keep the assistant
-                                    talking indefinitely until you interrupt it or
-                                    speak.</span
+                                    talking indefinitely until you interrupt it
+                                    or speak.</span
                                 >
                             </div>
                         {/if}
@@ -781,8 +797,9 @@
                                 aria-label="Last conversation turns visible to AI"
                                 oninput={(event) => {
                                     const value = Number(
-                                        (event.currentTarget as HTMLInputElement)
-                                            .value,
+                                        (
+                                            event.currentTarget as HTMLInputElement
+                                        ).value,
                                     );
 
                                     onUpdateLlmContextTurnLimit(
@@ -814,9 +831,9 @@
                         <div class="about-slider-header">
                             <span class="about-slider-detail"
                                 >Caps how many recent screenshots the model can
-                                inspect across the active conversation context. Move
-                                it to Unlimited to keep every image that still fits
-                                in the context window.</span
+                                inspect across the active conversation context.
+                                Move it to Unlimited to keep every image that
+                                still fits in the context window.</span
                             >
                             <span class="about-slider-value"
                                 >{formattedLlmImageHistoryLimit}</span
@@ -834,8 +851,9 @@
                                 aria-label="Last images visible to LLM"
                                 oninput={(event) => {
                                     const value = Number(
-                                        (event.currentTarget as HTMLInputElement)
-                                            .value,
+                                        (
+                                            event.currentTarget as HTMLInputElement
+                                        ).value,
                                     );
 
                                     onUpdateLlmImageHistoryLimit(
@@ -894,10 +912,13 @@
                             }}
                             onRemove={() => {
                                 editedShortcutEntireScreen = NO_GLOBAL_SHORTCUT;
-                                onUpdateGlobalShortcutEntireScreen(NO_GLOBAL_SHORTCUT);
+                                onUpdateGlobalShortcutEntireScreen(
+                                    NO_GLOBAL_SHORTCUT,
+                                );
                             }}
                             onDefault={() => {
-                                editedShortcutEntireScreen = DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN;
+                                editedShortcutEntireScreen =
+                                    DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN;
                                 onUpdateGlobalShortcutEntireScreen(
                                     DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
                                 );
@@ -918,10 +939,13 @@
                             }}
                             onRemove={() => {
                                 editedShortcutToggleMute = NO_GLOBAL_SHORTCUT;
-                                onUpdateGlobalShortcutToggleMute(NO_GLOBAL_SHORTCUT);
+                                onUpdateGlobalShortcutToggleMute(
+                                    NO_GLOBAL_SHORTCUT,
+                                );
                             }}
                             onDefault={() => {
-                                editedShortcutToggleMute = DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE;
+                                editedShortcutToggleMute =
+                                    DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE;
                                 onUpdateGlobalShortcutToggleMute(
                                     DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
                                 );
@@ -942,10 +966,13 @@
                             }}
                             onRemove={() => {
                                 editedShortcutInterrupt = NO_GLOBAL_SHORTCUT;
-                                onUpdateGlobalShortcutInterrupt(NO_GLOBAL_SHORTCUT);
+                                onUpdateGlobalShortcutInterrupt(
+                                    NO_GLOBAL_SHORTCUT,
+                                );
                             }}
                             onDefault={() => {
-                                editedShortcutInterrupt = DEFAULT_GLOBAL_SHORTCUT_INTERRUPT;
+                                editedShortcutInterrupt =
+                                    DEFAULT_GLOBAL_SHORTCUT_INTERRUPT;
                                 onUpdateGlobalShortcutInterrupt(
                                     DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
                                 );
@@ -959,9 +986,11 @@
                 <div class="about-update-card">
                     <div class="about-update-header">
                         <div class="about-update-copy">
-                            <span class="about-update-title">Runtime Cache</span>
+                            <span class="about-update-title">Runtime Cache</span
+                            >
                             <span class="about-update-detail"
-                                >Clear local Python environment and bootstrap caches.</span
+                                >Clear local Python environment and bootstrap
+                                caches.</span
                             >
                         </div>
                         <button
@@ -995,7 +1024,8 @@
                     <div class="about-update-header">
                         <div class="about-update-copy">
                             <span class="about-update-title">Updates</span>
-                            <span class="about-update-detail">{updateStatusDetail}</span
+                            <span class="about-update-detail"
+                                >{updateStatusDetail}</span
                             >
                         </div>
                         <button
@@ -1011,20 +1041,30 @@
                     {#if availableAppUpdate}
                         <div class="about-update-metadata">
                             <div class="about-update-row">
-                                <span class="about-update-label">Latest Version</span>
-                                <span class="about-update-value about-metadata-mono">
+                                <span class="about-update-label"
+                                    >Latest Version</span
+                                >
+                                <span
+                                    class="about-update-value about-metadata-mono"
+                                >
                                     {availableAppUpdate.version}
                                 </span>
                             </div>
                             <div class="about-update-row">
-                                <span class="about-update-label">Current Version</span>
-                                <span class="about-update-value about-metadata-mono">
+                                <span class="about-update-label"
+                                    >Current Version</span
+                                >
+                                <span
+                                    class="about-update-value about-metadata-mono"
+                                >
                                     {availableAppUpdate.currentVersion}
                                 </span>
                             </div>
                             {#if formattedPublishedAt}
                                 <div class="about-update-row">
-                                    <span class="about-update-label">Published</span>
+                                    <span class="about-update-label"
+                                        >Published</span
+                                    >
                                     <span class="about-update-value"
                                         >{formattedPublishedAt}</span
                                     >
@@ -1032,7 +1072,9 @@
                             {/if}
                             <div class="about-update-row">
                                 <span class="about-update-label">Target</span>
-                                <span class="about-update-value about-metadata-mono">
+                                <span
+                                    class="about-update-value about-metadata-mono"
+                                >
                                     {availableAppUpdate.target}
                                 </span>
                             </div>
@@ -1065,8 +1107,12 @@
                         </div>
                     {:else if appUpdateError}
                         <div class="about-empty-state error">
-                            <span class="about-empty-title">Update Check Failed</span>
-                            <span class="about-empty-detail">{appUpdateError}</span>
+                            <span class="about-empty-title"
+                                >Update Check Failed</span
+                            >
+                            <span class="about-empty-detail"
+                                >{appUpdateError}</span
+                            >
                         </div>
                     {/if}
                 </div>
