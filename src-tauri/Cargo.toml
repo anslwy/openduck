@@ -3,6 +3,7 @@ name = "openduck"
 version = "1.0.0"
 description = "AI Voice Assistant Desktop App"
 authors = ["OpenDuck"]
+license = "MIT"
 edition = "2021"
 
 [lib]

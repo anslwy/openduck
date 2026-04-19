@@ -1,6 +1,7 @@
 {
   "name": "openduck",
   "version": "1.0.0",
+  "license": "MIT",
   "description": "AI Voice Assistant Desktop App",
   "type": "module",
   "scripts": {
