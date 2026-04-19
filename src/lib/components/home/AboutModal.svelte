@@ -35,7 +35,9 @@
         closeAboutPopup,
         globalShortcut,
         globalShortcutEntireScreen,
+        globalShortcutToggleMute,
         pongPlaybackEnabled,
+        autoUnmuteOnPastedScreenshotEnabled,
         selectLastSessionEnabled,
         showStatEnabled,
         showSubtitleEnabled,
@@ -44,7 +46,9 @@
         llmImageHistoryLimit,
         onUpdateGlobalShortcut,
         onUpdateGlobalShortcutEntireScreen,
+        onUpdateGlobalShortcutToggleMute,
         onUpdatePongPlayback,
+        onUpdateAutoUnmuteOnPastedScreenshot,
         onUpdateSelectLastSession,
         onUpdateShowStat,
         onUpdateShowSubtitle,
@@ -63,7 +67,9 @@
         closeAboutPopup: () => void;
         globalShortcut: string;
         globalShortcutEntireScreen: string;
+        globalShortcutToggleMute: string;
         pongPlaybackEnabled: boolean;
+        autoUnmuteOnPastedScreenshotEnabled: boolean;
         selectLastSessionEnabled: boolean;
         showStatEnabled: boolean;
         showSubtitleEnabled: boolean;
@@ -72,7 +78,9 @@
         llmImageHistoryLimit: number | null;
         onUpdateGlobalShortcut: (shortcut: string) => void;
         onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
+        onUpdateGlobalShortcutToggleMute: (shortcut: string) => void;
         onUpdatePongPlayback: (enabled: boolean) => void;
+        onUpdateAutoUnmuteOnPastedScreenshot: (enabled: boolean) => void;
         onUpdateSelectLastSession: (enabled: boolean) => void;
         onUpdateShowStat: (enabled: boolean) => void;
         onUpdateShowSubtitle: (enabled: boolean) => void;
@@ -86,6 +94,7 @@
     let isRefreshing = $state(false);
     let editedShortcut = $state("");
     let editedShortcutEntireScreen = $state("");
+    let editedShortcutToggleMute = $state("");
 
     $effect(() => {
         editedShortcut = globalShortcut;
@@ -93,6 +102,10 @@
 
     $effect(() => {
         editedShortcutEntireScreen = globalShortcutEntireScreen;
+    });
+
+    $effect(() => {
+        editedShortcutToggleMute = globalShortcutToggleMute;
     });
 
     function clearCopyFeedback() {
@@ -378,6 +391,27 @@
             </div>
             <div class="about-metadata-row">
                 <span class="about-metadata-label"
+                    >Auto-Unmute After Attaching Screenshot</span
+                >
+                <button
+                    type="button"
+                    class="quantize-toggle"
+                    class:active={autoUnmuteOnPastedScreenshotEnabled}
+                    onclick={() =>
+                        onUpdateAutoUnmuteOnPastedScreenshot(
+                            !autoUnmuteOnPastedScreenshotEnabled,
+                        )}
+                >
+                    <span class="quantize-dot"></span>
+                    <span
+                        >{autoUnmuteOnPastedScreenshotEnabled
+                            ? "Enabled"
+                            : "Disabled"}</span
+                    >
+                </button>
+            </div>
+            <div class="about-metadata-row">
+                <span class="about-metadata-label"
                     >Select Last Session When Startup</span
                 >
                 <button
@@ -601,6 +635,20 @@
                         onUpdate={(newValue) => {
                             editedShortcutEntireScreen = newValue;
                             onUpdateGlobalShortcutEntireScreen(newValue);
+                        }}
+                    />
+                </div>
+            </div>
+            <div class="about-metadata-row shortcut-row">
+                <span class="about-metadata-label"
+                    >Toggle Mute / Unmute (During Call)</span
+                >
+                <div class="shortcut-input-wrapper">
+                    <ShortcutCapture
+                        value={editedShortcutToggleMute}
+                        onUpdate={(newValue) => {
+                            editedShortcutToggleMute = newValue;
+                            onUpdateGlobalShortcutToggleMute(newValue);
                         }}
                     />
                 </div>

@@ -57,10 +57,14 @@
         SELECT_LAST_SESSION_STORAGE_KEY,
         SHOW_STAT_STORAGE_KEY,
         SHOW_SUBTITLE_STORAGE_KEY,
+        AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
         GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
+        GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY,
+        DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
+        DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
     } from "$lib/openduck/config";
     import {
         formatDownloadPercent,
@@ -131,6 +135,11 @@
     };
 
     type StoredShowSubtitlePreference = {
+        version: 1;
+        enabled: boolean;
+    };
+
+    type StoredAutoUnmuteOnPastedScreenshotPreference = {
         version: 1;
         enabled: boolean;
     };
@@ -242,6 +251,9 @@
     let activePongSource = $state<AudioBufferSourceNode | null>(null);
     let activePongGainNode = $state<GainNode | null>(null);
     let pongPlaybackEnabled = $state(true);
+    let autoUnmuteOnPastedScreenshotEnabled = $state(
+        DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
+    );
     let selectLastSessionEnabled = $state(false);
     let showStatEnabled = $state(false);
     let showSubtitleEnabled = $state(true);
@@ -255,6 +267,9 @@
     let globalShortcut = $state(DEFAULT_GLOBAL_SHORTCUT);
     let globalShortcutEntireScreen = $state(
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
+    );
+    let globalShortcutToggleMute = $state(
+        DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
     );
     let contacts = $state<ContactProfile[]>([createDefaultContact()]);
     let selectedContactId = $state(DEFAULT_CONTACT_ID);
@@ -1052,6 +1067,15 @@
         } else {
             screenCaptureFileName = payload.fileName?.trim() || null;
         }
+
+        if (
+            payload.phase === "ready" &&
+            payload.hasPendingAttachment &&
+            autoUnmuteOnPastedScreenshotEnabled &&
+            micMuted
+        ) {
+            setMicMuted(false);
+        }
     }
 
     async function handleClearPendingScreenCapture() {
@@ -1114,6 +1138,21 @@
         };
         window.localStorage.setItem(
             PONG_PLAYBACK_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function persistAutoUnmuteOnPastedScreenshotPreference(enabled: boolean) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredAutoUnmuteOnPastedScreenshotPreference = {
+            version: 1,
+            enabled,
+        };
+        window.localStorage.setItem(
+            AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
             JSON.stringify(payload),
         );
     }
@@ -1281,6 +1320,37 @@
         } catch (err) {
             console.error("Failed to restore pong playback preference:", err);
             return true;
+        }
+    }
+
+    function loadAutoUnmuteOnPastedScreenshotPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error(
+                "Failed to restore auto-unmute-on-pasted-screenshot preference:",
+                err,
+            );
+            return DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT;
         }
     }
 
@@ -1501,6 +1571,11 @@
         }
     }
 
+    function applyAutoUnmuteOnPastedScreenshotPreference(enabled: boolean) {
+        autoUnmuteOnPastedScreenshotEnabled = enabled;
+        persistAutoUnmuteOnPastedScreenshotPreference(enabled);
+    }
+
     function applySelectLastSessionPreference(enabled: boolean) {
         selectLastSessionEnabled = enabled;
         persistSelectLastSessionPreference(enabled);
@@ -1574,6 +1649,12 @@
         }
 
         applyPongPlaybackPreference(effectiveEnabled);
+    }
+
+    async function initializeAutoUnmuteOnPastedScreenshotPreference() {
+        const storedEnabled =
+            loadAutoUnmuteOnPastedScreenshotPreferenceFromStorage();
+        applyAutoUnmuteOnPastedScreenshotPreference(storedEnabled);
     }
 
     async function initializeSelectLastSessionPreference() {
@@ -1756,6 +1837,85 @@
         } catch (err) {
             console.error(
                 "Failed to initialize global shortcut (entire screen) preference:",
+                err,
+            );
+        }
+    }
+
+    function persistGlobalShortcutToggleMutePreference(shortcut: string) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload = {
+            version: 1,
+            shortcut,
+        };
+        window.localStorage.setItem(
+            GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function loadGlobalShortcutToggleMutePreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                shortcut?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.shortcut !== "string") {
+                return DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE;
+            }
+
+            return parsed.shortcut;
+        } catch (err) {
+            console.error(
+                "Failed to restore global shortcut (toggle mute) preference:",
+                err,
+            );
+            return DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE;
+        }
+    }
+
+    async function applyGlobalShortcutToggleMutePreference(shortcut: string) {
+        try {
+            const effectiveShortcut = await invoke<string>(
+                "set_global_shortcut_toggle_mute",
+                { shortcutStr: shortcut },
+            );
+            globalShortcutToggleMute = effectiveShortcut;
+            persistGlobalShortcutToggleMutePreference(effectiveShortcut);
+        } catch (err) {
+            console.error(
+                "Failed to apply global shortcut (toggle mute) preference:",
+                err,
+            );
+            alert(`Failed to set shortcut: ${err}`);
+        }
+    }
+
+    async function initializeGlobalShortcutToggleMutePreference() {
+        const storedShortcut = loadGlobalShortcutToggleMutePreferenceFromStorage();
+        try {
+            const effectiveShortcut = await invoke<string>(
+                "initialize_global_shortcut_toggle_mute",
+                { shortcutStr: storedShortcut },
+            );
+            globalShortcutToggleMute = effectiveShortcut;
+        } catch (err) {
+            console.error(
+                "Failed to initialize global shortcut (toggle mute) preference:",
                 err,
             );
         }
@@ -2788,6 +2948,34 @@
                 "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
             ) !== null
         );
+    }
+
+    async function handleWindowPaste(event: ClipboardEvent) {
+        if (
+            !calling ||
+            shouldIgnoreGlobalShortcutTarget(event.target) ||
+            !event.clipboardData
+        ) {
+            return;
+        }
+
+        const imageItem = Array.from(event.clipboardData.items).find(
+            (item) => item.kind === "file" && item.type.startsWith("image/"),
+        );
+        const file = imageItem?.getAsFile();
+        if (!file) {
+            return;
+        }
+
+        event.preventDefault();
+
+        try {
+            const dataUrl = await readFileAsDataUrl(file);
+            await invoke("attach_pasted_screen_capture", { dataUrl });
+        } catch (err) {
+            console.error("Failed to attach pasted screenshot:", err);
+            alert(`Failed to paste screenshot.\n${String(err)}`);
+        }
     }
 
     function handleWindowKeydown(event: KeyboardEvent) {
@@ -4272,12 +4460,20 @@
         }
     }
 
-    function toggleMic() {
-        micMuted = !micMuted;
+    function setMicMuted(muted: boolean) {
+        if (micMuted === muted) {
+            return;
+        }
+
+        micMuted = muted;
         syncCaptureMutedState(micMuted);
         void invoke("set_call_muted", { muted: micMuted }).catch((err) =>
             console.error("Failed to sync tray mute state", err),
         );
+    }
+
+    function toggleMic() {
+        setMicMuted(!micMuted);
     }
 
     async function handleDownloadGemma() {
@@ -5069,6 +5265,7 @@
             await syncLmStudioConfig();
             await syncOpenAiCompatibleConfig();
             await initializePongPlaybackPreference();
+            await initializeAutoUnmuteOnPastedScreenshotPreference();
             await initializeSelectLastSessionPreference();
             await initializeShowStatPreference();
             await initializeShowSubtitlePreference();
@@ -5077,6 +5274,7 @@
             await initializeLlmImageHistoryLimitPreference();
             await initializeGlobalShortcutPreference();
             await initializeGlobalShortcutEntireScreenPreference();
+            await initializeGlobalShortcutToggleMutePreference();
             await loadSessions();
             if (
                 !currentSessionId &&
@@ -5192,7 +5390,11 @@
     });
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} onfocus={handleWindowFocus} />
+<svelte:window
+    onkeydown={handleWindowKeydown}
+    onfocus={handleWindowFocus}
+    onpaste={handleWindowPaste}
+/>
 
 <div class="app-container" class:contacts-open={showContactsPopup}>
     <div class="background" style={selectedContactImageStyle}></div>
@@ -5645,7 +5847,9 @@
                     {closeAboutPopup}
                     {globalShortcut}
                     {globalShortcutEntireScreen}
+                    {globalShortcutToggleMute}
                     {pongPlaybackEnabled}
+                    {autoUnmuteOnPastedScreenshotEnabled}
                     {selectLastSessionEnabled}
                     {showStatEnabled}
                     {showSubtitleEnabled}
@@ -5654,7 +5858,9 @@
                     {llmImageHistoryLimit}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
                     onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
+                    onUpdateGlobalShortcutToggleMute={applyGlobalShortcutToggleMutePreference}
                     onUpdatePongPlayback={applyPongPlaybackPreference}
+                    onUpdateAutoUnmuteOnPastedScreenshot={applyAutoUnmuteOnPastedScreenshotPreference}
                     onUpdateSelectLastSession={applySelectLastSessionPreference}
                     onUpdateShowStat={applyShowStatPreference}
                     onUpdateShowSubtitle={applyShowSubtitlePreference}

@@ -404,6 +404,9 @@ struct AppState {
     global_shortcut_look_at_entire_screen: Mutex<String>,
     global_shortcut_look_at_entire_screen_hydrated: Mutex<bool>,
     global_shortcut_look_at_entire_screen_modified_before_hydration: Mutex<bool>,
+    global_shortcut_toggle_mute: Mutex<String>,
+    global_shortcut_toggle_mute_hydrated: Mutex<bool>,
+    global_shortcut_toggle_mute_modified_before_hydration: Mutex<bool>,
     next_conversation_entry_id: AtomicU64,
     last_tray_icon_variant: Mutex<Option<TrayIconVariant>>,
     last_tray_menu_state: Mutex<Option<TrayMenuState>>,
@@ -425,6 +428,9 @@ struct TrayMenuState {
     stt_loaded: bool,
     csm_loaded: bool,
     memory_snapshot_summary: String,
+    region_shortcut: String,
+    entire_screen_shortcut: String,
+    toggle_mute_shortcut: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -987,6 +993,92 @@ fn set_global_shortcut_look_at_screen_region(
 }
 
 #[tauri::command]
+fn get_global_shortcut_toggle_mute(state: State<'_, AppState>) -> String {
+    state.global_shortcut_toggle_mute.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn initialize_global_shortcut_toggle_mute(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    shortcut_str: String,
+) -> String {
+    let mut hydrated = state.global_shortcut_toggle_mute_hydrated.lock().unwrap();
+    let mut modified_before_hydration = state
+        .global_shortcut_toggle_mute_modified_before_hydration
+        .lock()
+        .unwrap();
+    let mut current_shortcut_str = state.global_shortcut_toggle_mute.lock().unwrap();
+
+    if !*hydrated {
+        if !*modified_before_hydration && *current_shortcut_str != shortcut_str {
+            if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+                let _ = app_handle.global_shortcut().unregister(old_shortcut);
+            }
+
+            if let Ok(new_shortcut) = shortcut_str.parse::<Shortcut>() {
+                if let Err(err) = app_handle.global_shortcut().register(new_shortcut) {
+                    error!("Failed to register new global shortcut: {}", err);
+                } else {
+                    *current_shortcut_str = shortcut_str;
+                }
+            }
+        }
+
+        *hydrated = true;
+        *modified_before_hydration = false;
+    }
+
+    let effective_shortcut = current_shortcut_str.clone();
+    drop(current_shortcut_str);
+    drop(modified_before_hydration);
+    drop(hydrated);
+
+    effective_shortcut
+}
+
+#[tauri::command]
+fn set_global_shortcut_toggle_mute(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    shortcut_str: String,
+) -> Result<String, String> {
+    let mut current_shortcut_str = state.global_shortcut_toggle_mute.lock().unwrap();
+
+    if *current_shortcut_str == shortcut_str {
+        return Ok(shortcut_str);
+    }
+
+    let new_shortcut = shortcut_str
+        .parse::<Shortcut>()
+        .map_err(|err| format!("Invalid shortcut format: {}", err))?;
+
+    if let Ok(old_shortcut) = current_shortcut_str.parse::<Shortcut>() {
+        let _ = app_handle.global_shortcut().unregister(old_shortcut);
+    }
+
+    app_handle
+        .global_shortcut()
+        .register(new_shortcut)
+        .map_err(|err| format!("Failed to register global shortcut: {}", err))?;
+
+    *current_shortcut_str = shortcut_str.clone();
+
+    let hydrated = state.global_shortcut_toggle_mute_hydrated.lock().unwrap();
+    if !*hydrated {
+        let mut modified_before_hydration = state
+            .global_shortcut_toggle_mute_modified_before_hydration
+            .lock()
+            .unwrap();
+        *modified_before_hydration = true;
+    }
+
+    refresh_tray_menu(&app_handle);
+
+    Ok(shortcut_str)
+}
+
+#[tauri::command]
 async fn check_for_app_update(
     app_handle: AppHandle,
     pending_update: State<'_, PendingAppUpdate>,
@@ -1066,6 +1158,29 @@ async fn capture_screen_selection(app_handle: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn clear_pending_screen_capture(app_handle: AppHandle) {
     clear_pending_screen_capture_inner(&app_handle, true);
+}
+
+#[tauri::command]
+fn attach_pasted_screen_capture(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    data_url: String,
+) -> Result<(), String> {
+    if !*state.call_in_progress.lock().unwrap() {
+        return Err("Pasted screenshots are only available during an active call.".to_string());
+    }
+
+    let Some(path) = write_data_url_to_temp_file(&data_url) else {
+        return Err("Failed to decode pasted screenshot.".to_string());
+    };
+
+    resize_image_file_for_context(&path);
+    attach_pending_screen_capture(
+        &app_handle,
+        path,
+        "Pasted screenshot attached to your next turn.",
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -5263,6 +5378,34 @@ fn write_data_url_to_temp_file(data_url: &str) -> Option<PathBuf> {
     Some(path)
 }
 
+#[cfg(target_os = "macos")]
+fn resize_image_file_for_context(image_path: &Path) {
+    let image_path_string = image_path.to_string_lossy().into_owned();
+    let _ = std::process::Command::new("/usr/bin/sips")
+        .args([
+            "-Z",
+            "1024",
+            &image_path_string,
+            "--out",
+            &image_path_string,
+        ])
+        .output();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn resize_image_file_for_context(_image_path: &Path) {}
+
+fn attach_pending_screen_capture(app_handle: &AppHandle, path: PathBuf, message: &str) {
+    let state = app_handle.state::<AppState>();
+    add_pending_screen_capture(state.inner(), path);
+    if *state.tray_pong_playback_enabled.lock().unwrap() {
+        emit_play_tray_pong(app_handle);
+    }
+    emit_screen_capture_event(app_handle, "ready", message);
+    show_temporary_tray_icon(app_handle, Duration::from_secs(3));
+    refresh_tray_presentation(app_handle);
+}
+
 fn sanitize_for_voice_output(text: &str) -> String {
     let mut cleaned_lines = Vec::new();
 
@@ -6603,6 +6746,17 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     } else {
         "No models loaded".to_string()
     };
+    let region_shortcut_str = state
+        .global_shortcut_look_at_screen_region
+        .lock()
+        .unwrap()
+        .clone();
+    let entire_shortcut_str = state
+        .global_shortcut_look_at_entire_screen
+        .lock()
+        .unwrap()
+        .clone();
+    let toggle_mute_shortcut_str = state.global_shortcut_toggle_mute.lock().unwrap().clone();
 
     let menu_state = TrayMenuState {
         call_in_progress,
@@ -6615,6 +6769,9 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
         stt_loaded,
         csm_loaded,
         memory_snapshot_summary: summary_text.clone(),
+        region_shortcut: region_shortcut_str.clone(),
+        entire_screen_shortcut: entire_shortcut_str.clone(),
+        toggle_mute_shortcut: toggle_mute_shortcut_str.clone(),
     };
 
     {
@@ -6627,17 +6784,6 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
 
     let mut builder = MenuBuilder::new(app_handle).text(TRAY_SHOW_MENU_ID, "Show OpenDuck");
     if call_in_progress {
-        let region_shortcut_str = state
-            .global_shortcut_look_at_screen_region
-            .lock()
-            .unwrap()
-            .clone();
-        let entire_shortcut_str = state
-            .global_shortcut_look_at_entire_screen
-            .lock()
-            .unwrap()
-            .clone();
-
         let look_at_screen_label = if screen_capture_in_progress {
             "Selecting Screen...".to_string()
         } else {
@@ -6759,7 +6905,11 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     }
 
     if call_in_progress {
-        let mute_label = if call_muted { "Unmute" } else { "Mute" };
+        let mute_label = if call_muted {
+            format!("Unmute ({})", toggle_mute_shortcut_str)
+        } else {
+            format!("Mute ({})", toggle_mute_shortcut_str)
+        };
         let clear_image_history_item =
             match MenuItemBuilder::with_id(TRAY_CLEAR_IMAGE_HISTORY_MENU_ID, "Clear Image History")
                 .enabled(has_conversation_image_history)
@@ -8086,17 +8236,11 @@ async fn capture_screen_selection_inner(app_handle: &AppHandle) -> Result<(), St
 
     match capture_result {
         Ok(Some(path)) => {
-            add_pending_screen_capture(state.inner(), path);
-            if *state.tray_pong_playback_enabled.lock().unwrap() {
-                emit_play_tray_pong(app_handle);
-            }
-            emit_screen_capture_event(
+            attach_pending_screen_capture(
                 app_handle,
-                "ready",
+                path,
                 "Screen region attached to your next turn.",
             );
-            show_temporary_tray_icon(app_handle, Duration::from_secs(3));
-            refresh_tray_presentation(app_handle);
             Ok(())
         }
         Ok(None) => {
@@ -8162,17 +8306,11 @@ async fn capture_entire_screen_inner(app_handle: &AppHandle) -> Result<(), Strin
 
     match capture_result {
         Ok(Some(path)) => {
-            add_pending_screen_capture(state.inner(), path);
-            if *state.tray_pong_playback_enabled.lock().unwrap() {
-                emit_play_tray_pong(app_handle);
-            }
-            emit_screen_capture_event(
+            attach_pending_screen_capture(
                 app_handle,
-                "ready",
+                path,
                 "Entire screen attached to your next turn.",
             );
-            show_temporary_tray_icon(app_handle, Duration::from_secs(3));
-            refresh_tray_presentation(app_handle);
             Ok(())
         }
         Ok(None) => {
@@ -8239,16 +8377,7 @@ async fn run_interactive_screen_capture(app_handle: &AppHandle) -> Result<Option
     if output.success() {
         if let Ok(metadata) = std::fs::metadata(&capture_path) {
             if metadata.len() > 0 {
-                // Resize image to max 1024px width/height to avoid large payload issues with LLM providers
-                let _ = std::process::Command::new("/usr/bin/sips")
-                    .args([
-                        "-Z",
-                        "1024",
-                        &capture_path.to_string_lossy(),
-                        "--out",
-                        &capture_path.to_string_lossy(),
-                    ])
-                    .output();
+                resize_image_file_for_context(&capture_path);
                 return Ok(Some(capture_path));
             }
         }
@@ -8282,16 +8411,7 @@ async fn run_entire_screen_capture() -> Result<Option<PathBuf>, String> {
     if output.status.success() {
         if let Ok(metadata) = std::fs::metadata(&capture_path) {
             if metadata.len() > 0 {
-                // Resize image to max 1024px width/height to avoid large payload issues with LLM providers
-                let _ = std::process::Command::new("/usr/bin/sips")
-                    .args([
-                        "-Z",
-                        "1024",
-                        &capture_path.to_string_lossy(),
-                        "--out",
-                        &capture_path.to_string_lossy(),
-                    ])
-                    .output();
+                resize_image_file_for_context(&capture_path);
                 return Ok(Some(capture_path));
             }
         }
@@ -10078,6 +10198,8 @@ pub fn run() {
                             .lock()
                             .unwrap()
                             .clone();
+                        let toggle_mute_shortcut_str =
+                            state.global_shortcut_toggle_mute.lock().unwrap().clone();
 
                         if let Ok(region_shortcut) = region_shortcut_str.parse::<Shortcut>() {
                             if shortcut == &region_shortcut {
@@ -10096,6 +10218,16 @@ pub fn run() {
                                     let _ = capture_entire_screen_inner(&app_handle).await;
                                 });
                                 return;
+                            }
+                        }
+
+                        if let Ok(toggle_mute_shortcut) =
+                            toggle_mute_shortcut_str.parse::<Shortcut>()
+                        {
+                            if shortcut == &toggle_mute_shortcut {
+                                if let Err(err) = app.emit(TRAY_TOGGLE_MUTE_EVENT, ()) {
+                                    error!("Failed to emit tray mute toggle event: {}", err);
+                                }
                             }
                         }
                     }
@@ -10118,6 +10250,11 @@ pub fn run() {
                 .unwrap()
                 .clone();
             if let Ok(shortcut) = entire_shortcut_str.parse::<Shortcut>() {
+                let _ = app.global_shortcut().register(shortcut);
+            }
+            let toggle_mute_shortcut_str =
+                state.global_shortcut_toggle_mute.lock().unwrap().clone();
+            if let Ok(shortcut) = toggle_mute_shortcut_str.parse::<Shortcut>() {
                 let _ = app.global_shortcut().register(shortcut);
             }
 
@@ -10246,6 +10383,9 @@ pub fn run() {
             global_shortcut_look_at_entire_screen: Mutex::new("Command+Shift+Option+L".to_string()),
             global_shortcut_look_at_entire_screen_hydrated: Mutex::new(false),
             global_shortcut_look_at_entire_screen_modified_before_hydration: Mutex::new(false),
+            global_shortcut_toggle_mute: Mutex::new("Command+Shift+Option+U".to_string()),
+            global_shortcut_toggle_mute_hydrated: Mutex::new(false),
+            global_shortcut_toggle_mute_modified_before_hydration: Mutex::new(false),
             next_conversation_entry_id: AtomicU64::new(1),
             last_tray_icon_variant: Mutex::new(None),
             last_tray_menu_state: Mutex::new(None),
@@ -10259,6 +10399,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             capture_screen_selection,
             clear_pending_screen_capture,
+            attach_pasted_screen_capture,
             receive_audio_chunk,
             ping,
             get_build_info,
@@ -10287,6 +10428,9 @@ pub fn run() {
             get_global_shortcut_look_at_screen_region,
             initialize_global_shortcut_look_at_screen_region,
             set_global_shortcut_look_at_screen_region,
+            get_global_shortcut_toggle_mute,
+            initialize_global_shortcut_toggle_mute,
+            set_global_shortcut_toggle_mute,
             clear_conversation_context_images,
             sync_conversation_log_has_visible_images,
             get_gemma_variant,

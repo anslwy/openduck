@@ -18,6 +18,8 @@ export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
 export const SELECT_LAST_SESSION_STORAGE_KEY = "openduck.select-last-session.v1";
 export const SHOW_STAT_STORAGE_KEY = "openduck.show-stat.v1";
 export const SHOW_SUBTITLE_STORAGE_KEY = "openduck.show-subtitle.v1";
+export const AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY =
+  "openduck.auto-unmute-on-pasted-screenshot.v1";
 export const END_OF_UTTERANCE_SILENCE_STORAGE_KEY =
   "openduck.end-of-utterance-silence-ms.v1";
 export const LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY =
@@ -25,7 +27,10 @@ export const LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY =
 export const LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY =
   "openduck.llm-image-history-limit.v1";
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
-export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY = "openduck.global-shortcut-entire.v1";
+export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY =
+  "openduck.global-shortcut-entire.v1";
+export const GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY =
+  "openduck.global-shortcut-toggle-mute.v1";
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
 export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
 export const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
@@ -48,6 +53,9 @@ export const LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE =
   MAX_LLM_IMAGE_HISTORY_LIMIT + 1;
 export const DEFAULT_GLOBAL_SHORTCUT = "Command+Shift+L";
 export const DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN = "Command+Shift+Option+L";
+export const DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE =
+  "Command+Shift+Option+U";
+export const DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT = true;
 
 export const MODEL_PRESETS: Record<
   Exclude<ModelPreset, "custom">,
