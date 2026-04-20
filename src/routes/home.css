@@ -1578,23 +1578,25 @@ main.idle-layout {
 
 .image-preview-close-btn {
     position: absolute;
-    top: -48px;
-    right: -24px;
+    top: 100px;
+    right: 100px;
     width: 44px;
     height: 44px;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.2);
     color: white;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: background 0.2s ease;
+    transition: all 0.2s ease;
+    z-index: 2001;
 }
 
 .image-preview-close-btn:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.25);
+    transform: scale(1.05);
 }
 
 @keyframes fadeIn {
@@ -1633,6 +1635,10 @@ main.idle-layout {
         background-color 0.2s ease,
         color 0.2s ease,
         opacity 0.2s ease;
+}
+
+.conversation-action-delete-btn {
+    margin-right: 10px;
 }
 
 .conversation-attachment-remove-btn:disabled,
