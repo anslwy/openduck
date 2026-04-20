@@ -16,6 +16,7 @@ export const DEFAULT_CONTACT_ID = "contact-openduck";
 export const MODEL_PREFERENCES_STORAGE_KEY = "openduck.model-preferences.v1";
 export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
 export const SELECT_LAST_SESSION_STORAGE_KEY = "openduck.select-last-session.v1";
+export const AUTO_LOAD_MODELS_ON_STARTUP_STORAGE_KEY = "openduck.auto-load-models-on-startup.v1";
 export const SHOW_STAT_STORAGE_KEY = "openduck.show-stat.v1";
 export const SHOW_SUBTITLE_STORAGE_KEY = "openduck.show-subtitle.v1";
 export const SHOW_AI_SUBTITLE_STORAGE_KEY = "openduck.show-ai-subtitle.v1";
@@ -81,6 +82,7 @@ export const DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT = true;
 export const DEFAULT_SHOW_AI_SUBTITLE = true;
 export const DEFAULT_SHOW_CALL_TIMER = true;
 export const DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY = true;
+export const DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP = true;
 
 export const MODEL_PRESETS: Record<
   Exclude<ModelPreset, "custom">,

@@ -66,6 +66,7 @@
         MODEL_PRESETS,
         PONG_PLAYBACK_STORAGE_KEY,
         SELECT_LAST_SESSION_STORAGE_KEY,
+        AUTO_LOAD_MODELS_ON_STARTUP_STORAGE_KEY,
         SHOW_STAT_STORAGE_KEY,
         SHOW_SUBTITLE_STORAGE_KEY,
         SHOW_AI_SUBTITLE_STORAGE_KEY,
@@ -80,6 +81,7 @@
         DEFAULT_SHOW_AI_SUBTITLE,
         DEFAULT_SHOW_CALL_TIMER,
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
+        DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
         DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
@@ -300,6 +302,7 @@
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
     );
     let selectLastSessionEnabled = $state(false);
+    let autoLoadModelsOnStartupEnabled = $state(false);
     let showStatEnabled = $state(false);
     let showSubtitleEnabled = $state(true);
     let showAiSubtitleEnabled = $state(DEFAULT_SHOW_AI_SUBTITLE);
@@ -1631,6 +1634,37 @@
         }
     }
 
+    function loadAutoLoadModelsOnStartupPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            AUTO_LOAD_MODELS_ON_STARTUP_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error(
+                "Failed to restore auto load models on startup preference:",
+                err,
+            );
+            return DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP;
+        }
+    }
+
     function loadShowStatPreferenceFromStorage() {
         if (typeof window === "undefined") {
             return false;
@@ -1955,7 +1989,18 @@
 
     function applySelectLastSessionPreference(enabled: boolean) {
         selectLastSessionEnabled = enabled;
-        persistSelectLastSessionPreference(enabled);
+        window.localStorage.setItem(
+            SELECT_LAST_SESSION_STORAGE_KEY,
+            JSON.stringify({ version: 1, enabled }),
+        );
+    }
+
+    function applyAutoLoadModelsOnStartupPreference(enabled: boolean) {
+        autoLoadModelsOnStartupEnabled = enabled;
+        window.localStorage.setItem(
+            AUTO_LOAD_MODELS_ON_STARTUP_STORAGE_KEY,
+            JSON.stringify({ version: 1, enabled }),
+        );
     }
 
     function applyShowStatPreference(enabled: boolean) {
@@ -2092,6 +2137,11 @@
     async function initializeSelectLastSessionPreference() {
         const storedEnabled = loadSelectLastSessionPreferenceFromStorage();
         applySelectLastSessionPreference(storedEnabled);
+    }
+
+    async function initializeAutoLoadModelsOnStartupPreference() {
+        const storedEnabled = loadAutoLoadModelsOnStartupPreferenceFromStorage();
+        applyAutoLoadModelsOnStartupPreference(storedEnabled);
     }
 
     async function initializeShowStatPreference() {
@@ -5924,6 +5974,7 @@
             await initializePongPlaybackPreference();
             await initializeAutoUnmuteOnPastedScreenshotPreference();
             await initializeSelectLastSessionPreference();
+            await initializeAutoLoadModelsOnStartupPreference();
             await initializeShowStatPreference();
             await initializeShowSubtitlePreference();
             await initializeShowAiSubtitlePreference();
@@ -5951,6 +6002,17 @@
             await syncOllamaModels();
             await syncLmStudioModels();
             await syncOpenAiCompatibleModels();
+
+            if (autoLoadModelsOnStartupEnabled) {
+                const sttNeeded = selectedSttModel !== "gemma";
+                const allDownloaded =
+                    isGemmaDownloaded &&
+                    isCsmDownloaded &&
+                    (!sttNeeded || isSttDownloaded);
+                if (allDownloaded) {
+                    void handleLoadAll();
+                }
+            }
         })();
 
         healthCheckInterval = window.setInterval(() => {
@@ -6553,6 +6615,7 @@
                     {pongPlaybackEnabled}
                     {autoUnmuteOnPastedScreenshotEnabled}
                     {selectLastSessionEnabled}
+                    {autoLoadModelsOnStartupEnabled}
                     {showStatEnabled}
                     {showSubtitleEnabled}
                     {showAiSubtitleEnabled}
@@ -6570,6 +6633,7 @@
                     onUpdatePongPlayback={applyPongPlaybackPreference}
                     onUpdateAutoUnmuteOnPastedScreenshot={applyAutoUnmuteOnPastedScreenshotPreference}
                     onUpdateSelectLastSession={applySelectLastSessionPreference}
+                    onUpdateAutoLoadModelsOnStartup={applyAutoLoadModelsOnStartupPreference}
                     onUpdateShowStat={applyShowStatPreference}
                     onUpdateShowSubtitle={applyShowSubtitlePreference}
                     onUpdateShowAiSubtitle={applyShowAiSubtitlePreference}

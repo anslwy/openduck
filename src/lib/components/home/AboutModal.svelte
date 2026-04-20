@@ -53,6 +53,7 @@
         pongPlaybackEnabled,
         autoUnmuteOnPastedScreenshotEnabled,
         selectLastSessionEnabled,
+        autoLoadModelsOnStartupEnabled,
         showStatEnabled,
         showSubtitleEnabled,
         showAiSubtitleEnabled,
@@ -70,6 +71,7 @@
         onUpdatePongPlayback,
         onUpdateAutoUnmuteOnPastedScreenshot,
         onUpdateSelectLastSession,
+        onUpdateAutoLoadModelsOnStartup,
         onUpdateShowStat,
         onUpdateShowSubtitle,
         onUpdateShowAiSubtitle,
@@ -98,6 +100,7 @@
         pongPlaybackEnabled: boolean;
         autoUnmuteOnPastedScreenshotEnabled: boolean;
         selectLastSessionEnabled: boolean;
+        autoLoadModelsOnStartupEnabled: boolean;
         showStatEnabled: boolean;
         showSubtitleEnabled: boolean;
         showAiSubtitleEnabled: boolean;
@@ -115,6 +118,7 @@
         onUpdatePongPlayback: (enabled: boolean) => void;
         onUpdateAutoUnmuteOnPastedScreenshot: (enabled: boolean) => void;
         onUpdateSelectLastSession: (enabled: boolean) => void;
+        onUpdateAutoLoadModelsOnStartup: (enabled: boolean) => void;
         onUpdateShowStat: (enabled: boolean) => void;
         onUpdateShowSubtitle: (enabled: boolean) => void;
         onUpdateShowAiSubtitle: (enabled: boolean) => void;
@@ -451,6 +455,13 @@
             label: "Select Last Session When Startup",
             value: selectLastSessionEnabled,
             onUpdate: onUpdateSelectLastSession,
+        },
+        {
+            id: "auto-load",
+            type: "toggle",
+            label: "Automatically load last selected models when startup",
+            value: autoLoadModelsOnStartupEnabled,
+            onUpdate: onUpdateAutoLoadModelsOnStartup,
         },
         {
             id: "show-stats",
