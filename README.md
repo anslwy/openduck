@@ -13,7 +13,8 @@ Screen-aware, voice-first, local AI tool that stays lean and out of your away un
 
 ## Demo (In App)
 
-https://github.com/user-attachments/assets/39bc1187-ddb4-42f4-8225-7f873734fa62
+https://github.com/user-attachments/assets/052aa02c-7be8-411e-9bb1-8f5a13515c47
+
 
 ## Demo (Screen-aware assistance)
 
