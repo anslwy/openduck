@@ -92,6 +92,7 @@ export type ScreenCaptureEvent = {
     hasPendingAttachment: boolean;
     attachmentCount: number;
     fileName?: string | null;
+    imageDataUrls: string[];
 };
 
 export type TrayEndCallEvent = Record<string, never>;

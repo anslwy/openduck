@@ -321,9 +321,7 @@
     let globalShortcutEntireScreen = $state(
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
     );
-    let globalShortcutToggleMute = $state(
-        DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
-    );
+    let globalShortcutToggleMute = $state(DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE);
     let globalShortcutInterrupt = $state(DEFAULT_GLOBAL_SHORTCUT_INTERRUPT);
     let contacts = $state<ContactProfile[]>([createDefaultContact()]);
     let selectedContactId = $state(DEFAULT_CONTACT_ID);
@@ -378,6 +376,7 @@
     let screenCaptureMessage = $state("");
     let screenCaptureHasPendingAttachment = $state(false);
     let screenCaptureFileName = $state<string | null>(null);
+    let screenCaptureImageDataUrls = $state<string[]>([]);
     let contactsImportInput: HTMLInputElement | null = null;
     let contactIconInput: HTMLInputElement | null = null;
     let contactRefAudioInput: HTMLInputElement | null = null;
@@ -609,7 +608,7 @@
                 ? "Gemma STT is not supported with LM Studio. Start LM Studio's local server and load a model so it appears here."
                 : selectedGemmaVariant === "openai_compatible"
                   ? "Gemma STT is not supported with OpenAI-compatible APIs. Use a text-and-image chat model here and switch STT to Whisper."
-                : 'Gemma STT is not supported with Ollama. If your model does not show, run "ollama run {your_model}" in Terminal (One-time only).',
+                  : 'Gemma STT is not supported with Ollama. If your model does not show, run "ollama run {your_model}" in Terminal (One-time only).',
     );
     const selectedGemmaUsesExternalProvider = $derived(
         isExternalGemmaVariant(selectedGemmaVariant),
@@ -622,9 +621,9 @@
             ? isLmStudioSupported
             : selectedGemmaVariant === "openai_compatible"
               ? isOpenAiCompatibleSupported
-            : selectedGemmaVariant === "ollama"
-              ? isOllamaSupported
-              : false,
+              : selectedGemmaVariant === "ollama"
+                ? isOllamaSupported
+                : false,
     );
     const selectedExternalProviderGuideText = $derived(
         selectedGemmaUsesExternalProvider && !selectedExternalProviderSupported
@@ -643,7 +642,7 @@
             ? selectedLmStudioModel
             : selectedGemmaVariant === "openai_compatible"
               ? selectedOpenAiCompatibleModel
-            : selectedOllamaModel,
+              : selectedOllamaModel,
     );
     const selectedCsmModelLabel = $derived(
         csmModelOptions.find((option) => option.value === selectedCsmModel)
@@ -819,7 +818,7 @@
               ? "Screen Capture Failed"
               : screenCapturePhase === "error"
                 ? "Screen Region Unchanged"
-                : "Screen Region Attached",
+                : "Image(s) Attached to Next Turn",
     );
     const screenCaptureActionLabel = $derived(
         screenCaptureHasPendingAttachment ? "Clear" : "Dismiss",
@@ -1192,6 +1191,7 @@
         screenCaptureMessage = "";
         screenCaptureHasPendingAttachment = false;
         screenCaptureFileName = null;
+        screenCaptureImageDataUrls = [];
     }
 
     function applyScreenCaptureEvent(payload: ScreenCaptureEvent) {
@@ -1203,6 +1203,7 @@
         } else {
             screenCaptureFileName = payload.fileName?.trim() || null;
         }
+        screenCaptureImageDataUrls = payload.imageDataUrls || [];
 
         if (
             payload.phase === "ready" &&
@@ -1225,6 +1226,14 @@
         } catch (err) {
             console.error("Failed to clear pending screen capture:", err);
             alert(`Failed to clear the screen attachment.\n${String(err)}`);
+        }
+    }
+
+    async function handleRemoveScreenCaptureAt(index: number) {
+        try {
+            await invoke("remove_pending_screen_capture_at", { index });
+        } catch (err) {
+            console.error("Failed to remove screen capture:", err);
         }
     }
 
@@ -1421,9 +1430,7 @@
         );
     }
 
-    function persistAutoContinueSilencePreference(
-        milliseconds: number | null,
-    ) {
+    function persistAutoContinueSilencePreference(milliseconds: number | null) {
         if (typeof window === "undefined") {
             return;
         }
@@ -1698,7 +1705,10 @@
 
             return parsed.enabled;
         } catch (err) {
-            console.error("Failed to restore show AI subtitle preference:", err);
+            console.error(
+                "Failed to restore show AI subtitle preference:",
+                err,
+            );
             return DEFAULT_SHOW_AI_SUBTITLE;
         }
     }
@@ -1985,11 +1995,8 @@
         });
     }
 
-    function applyAutoContinueSilencePreference(
-        milliseconds: number | null,
-    ) {
-        const normalizedMilliseconds =
-            clampAutoContinueSilenceMs(milliseconds);
+    function applyAutoContinueSilencePreference(milliseconds: number | null) {
+        const normalizedMilliseconds = clampAutoContinueSilenceMs(milliseconds);
         autoContinueSilenceMs = normalizedMilliseconds;
         persistAutoContinueSilencePreference(normalizedMilliseconds);
 
@@ -2088,7 +2095,8 @@
     }
 
     async function initializeShowHiddenWindowOverlayPreference() {
-        const storedEnabled = loadShowHiddenWindowOverlayPreferenceFromStorage();
+        const storedEnabled =
+            loadShowHiddenWindowOverlayPreferenceFromStorage();
         applyShowHiddenWindowOverlayPreference(storedEnabled);
     }
 
@@ -2337,7 +2345,8 @@
     }
 
     async function initializeGlobalShortcutToggleMutePreference() {
-        const storedShortcut = loadGlobalShortcutToggleMutePreferenceFromStorage();
+        const storedShortcut =
+            loadGlobalShortcutToggleMutePreferenceFromStorage();
         try {
             const effectiveShortcut = await invoke<string>(
                 "initialize_global_shortcut_toggle_mute",
@@ -2416,7 +2425,8 @@
     }
 
     async function initializeGlobalShortcutInterruptPreference() {
-        const storedShortcut = loadGlobalShortcutInterruptPreferenceFromStorage();
+        const storedShortcut =
+            loadGlobalShortcutInterruptPreferenceFromStorage();
         try {
             const effectiveShortcut = await invoke<string>(
                 "initialize_global_shortcut_interrupt",
@@ -3130,10 +3140,7 @@
         }
     }
 
-    function applyLoadedSession(
-        sessionId: string,
-        turns: ConversationTurn[],
-    ) {
+    function applyLoadedSession(sessionId: string, turns: ConversationTurn[]) {
         currentSessionId = sessionId;
         const session = sessions.find((s) => s.id === sessionId);
         currentSessionTitle = session?.title || null;
@@ -3143,7 +3150,10 @@
             appendConversationLogEntry("user", turn.user_text as string, [
                 ...turn.image_paths,
             ]);
-            upsertAssistantConversationLogEntry(0, turn.assistant_text as string);
+            upsertAssistantConversationLogEntry(
+                0,
+                turn.assistant_text as string,
+            );
         }
         scrollConversationLogToBottom();
     }
@@ -4214,7 +4224,9 @@
             return;
         }
         try {
-            const models = await invoke<string[]>("get_openai_compatible_models");
+            const models = await invoke<string[]>(
+                "get_openai_compatible_models",
+            );
             openAiCompatibleModels = models;
             const current = await invoke<string>("get_openai_compatible_model");
 
@@ -6110,7 +6122,7 @@
                         ? handleLmStudioModelChange
                         : selectedGemmaVariant === "openai_compatible"
                           ? handleOpenAiCompatibleModelChange
-                        : handleOllamaModelChange}
+                          : handleOllamaModelChange}
                     {externalModelDisabled}
                     {openExternalConfig}
                 />
@@ -6309,29 +6321,64 @@
                 data-phase={screenCapturePhase ?? "ready"}
                 aria-live="polite"
             >
-                <div class="screen-capture-copy">
-                    <span class="screen-capture-title"
-                        >{screenCaptureTitle}</span
-                    >
-                    {#if screenCaptureFileName && screenCaptureHasPendingAttachment}
-                        <span class="screen-capture-file"
-                            >{screenCaptureFileName}</span
+                <div class="screen-capture-card-header">
+                    <div class="screen-capture-copy">
+                        <span class="screen-capture-title"
+                            >{screenCaptureTitle}</span
                         >
-                    {/if}
-                    {#if screenCaptureMessage}
-                        <span class="screen-capture-detail"
-                            >{screenCaptureMessage}</span
+                    </div>
+                    {#if screenCapturePhase !== "capturing"}
+                        <button
+                            type="button"
+                            class="utility-btn subtitle-action-btn"
+                            onclick={handleClearPendingScreenCapture}
                         >
+                            {screenCaptureActionLabel}
+                        </button>
                     {/if}
                 </div>
-                {#if screenCapturePhase !== "capturing"}
-                    <button
-                        type="button"
-                        class="utility-btn subtitle-action-btn"
-                        onclick={handleClearPendingScreenCapture}
-                    >
-                        {screenCaptureActionLabel}
-                    </button>
+
+                {#if screenCaptureImageDataUrls.length > 0}
+                    <div class="screen-capture-thumbnails">
+                        {#each screenCaptureImageDataUrls as url, i}
+                            <div class="screen-capture-thumbnail-wrapper">
+                                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                                <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                                <div
+                                    class="screen-capture-thumbnail"
+                                    onclick={() => (previewImageUrl = url)}
+                                    role="button"
+                                    tabindex="0"
+                                >
+                                    <img src={url} alt="Screen Capture" />
+                                </div>
+                                <button
+                                    type="button"
+                                    class="screen-capture-remove-btn"
+                                    onclick={() =>
+                                        handleRemoveScreenCaptureAt(i)}
+                                    aria-label="Remove attachment"
+                                >
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="3"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        ><line x1="18" y1="6" x2="6" y2="18"
+                                        ></line><line
+                                            x1="6"
+                                            y1="6"
+                                            x2="18"
+                                            y2="18"
+                                        ></line></svg
+                                    >
+                                </button>
+                            </div>
+                        {/each}
+                    </div>
                 {/if}
             </div>
         {/if}
@@ -6813,7 +6860,6 @@
             }}
         />
     {/if}
-
 
     <input
         class="hidden-file-input"

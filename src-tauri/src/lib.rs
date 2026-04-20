@@ -1314,6 +1314,18 @@ fn clear_pending_screen_capture(app_handle: AppHandle) {
 }
 
 #[tauri::command]
+fn remove_pending_screen_capture_at(app_handle: AppHandle, index: usize) {
+    let state = app_handle.state::<AppState>();
+    let mut captures = state.pending_screen_captures.lock().unwrap();
+    if index < captures.len() {
+        let path = captures.remove(index);
+        remove_temp_image_file(&path);
+        drop(captures);
+        emit_screen_capture_event(&app_handle, "ready", "Attachment removed.");
+    }
+}
+
+#[tauri::command]
 fn attach_pasted_screen_capture(
     app_handle: AppHandle,
     state: State<'_, AppState>,
@@ -11292,6 +11304,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             capture_screen_selection,
             clear_pending_screen_capture,
+            remove_pending_screen_capture_at,
             attach_pasted_screen_capture,
             is_main_window_visible_to_user,
             receive_audio_chunk,

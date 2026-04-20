@@ -103,6 +103,7 @@ pub(crate) struct ScreenCaptureEvent {
     pub(crate) has_pending_attachment: bool,
     pub(crate) attachment_count: usize,
     pub(crate) file_name: Option<String>,
+    pub(crate) image_data_urls: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -245,10 +246,7 @@ pub(crate) fn emit_assistant_response(app_handle: &AppHandle, payload: Assistant
     }
 }
 
-pub(crate) fn emit_overlay_notification(
-    app_handle: &AppHandle,
-    payload: OverlayNotificationEvent,
-) {
+pub(crate) fn emit_overlay_notification(app_handle: &AppHandle, payload: OverlayNotificationEvent) {
     if let Err(err) = app_handle.emit(OVERLAY_NOTIFICATION_EVENT, payload) {
         error!("Failed to emit overlay-notification event: {}", err);
     }
@@ -258,6 +256,14 @@ pub(crate) fn emit_screen_capture_event(app_handle: &AppHandle, phase: &str, mes
     let state = app_handle.state::<AppState>();
     let file_name = pending_screen_capture_file_name(state.inner());
     let attachment_count = crate::pending_screen_capture_count(state.inner());
+    let image_data_urls = {
+        let captures = state.pending_screen_captures.lock().unwrap();
+        captures
+            .iter()
+            .filter_map(|path| crate::load_image_data_url(path))
+            .collect::<Vec<_>>()
+    };
+
     if let Err(err) = app_handle.emit(
         SCREEN_CAPTURE_EVENT,
         ScreenCaptureEvent {
@@ -266,6 +272,7 @@ pub(crate) fn emit_screen_capture_event(app_handle: &AppHandle, phase: &str, mes
             has_pending_attachment: attachment_count > 0,
             attachment_count,
             file_name,
+            image_data_urls,
         },
     ) {
         error!("Failed to emit screen capture event: {}", err);
