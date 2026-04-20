@@ -50,6 +50,9 @@ Environment variables:
   TAURI_SIGNING_PRIVATE_KEY=... Required Tauri updater signing key content or path.
   TAURI_SIGNING_PRIVATE_KEY_PATH=...
                                 Optional signer key path supported by newer Tauri CLIs.
+  APPLE_ID=email                Apple ID for macOS notarization.
+  APPLE_PASSWORD=password      App-specific password for macOS notarization.
+  APPLE_TEAM_ID=team_id        Apple Team ID for macOS notarization.
 
 Examples:
   GITHUB_RELEASE_TAG=v1.2.3 ./scripts/release.sh openduck-1.2.3
@@ -202,6 +205,14 @@ main() {
     [ -n "$GITHUB_RELEASE_TAG" ] || die "Set GITHUB_RELEASE_TAG to the GitHub release tag that will host the release assets."
     [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ] || die "Set TAURI_SIGNING_PRIVATE_KEY or TAURI_SIGNING_PRIVATE_KEY_PATH so Tauri can sign updater artifacts."
 
+    if [ -n "${APPLE_ID:-}" ]; then
+        [ -n "${APPLE_PASSWORD:-}" ] || die "APPLE_PASSWORD (app-specific) must be set if APPLE_ID is provided."
+        [ -n "${APPLE_TEAM_ID:-}" ] || die "APPLE_TEAM_ID must be set if APPLE_ID is provided."
+        echo "macOS signing and notarization enabled for $APPLE_ID (Team: $APPLE_TEAM_ID)"
+    else
+        echo "Warning: APPLE_ID not set. The build will NOT be signed or notarized for macOS."
+    fi
+
     require_command npm
     require_command cargo
     require_command node
@@ -221,7 +232,38 @@ main() {
     echo "Building OpenDuck release bundle for $TARGET_TRIPLE..."
     TEMP_TAURI_CONFIG="$(mktemp "${TMPDIR:-/tmp}/openduck-tauri-release.XXXXXX.json")"
     trap 'rm -f "${TEMP_TAURI_CONFIG:-}"' EXIT
-    printf '{\n  "version": "%s",\n  "bundle": {\n    "createUpdaterArtifacts": true\n  }\n}\n' "$app_version" >"$TEMP_TAURI_CONFIG"
+
+    # Base config
+    local config_json
+    config_json=$(cat <<EOF
+{
+  "version": "$app_version",
+  "bundle": {
+    "createUpdaterArtifacts": true
+EOF
+)
+
+    # Add macOS signing/notarization if credentials provided
+    if [ -n "${APPLE_ID:-}" ]; then
+        config_json+=$(cat <<EOF
+,
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    }
+EOF
+)
+    fi
+
+    # Close config
+    config_json+=$(cat <<EOF
+
+  }
+}
+EOF
+)
+
+    printf '%s\n' "$config_json" >"$TEMP_TAURI_CONFIG"
+
     config_args=(--config "$TEMP_TAURI_CONFIG")
     echo "Using app version for this build: $app_version"
     echo "Using updater endpoint for this build: $updater_endpoint"
@@ -232,6 +274,9 @@ main() {
     [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || build_env+=("TAURI_SIGNING_PRIVATE_KEY=$TAURI_SIGNING_PRIVATE_KEY")
     [ -z "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ] || build_env+=("TAURI_SIGNING_PRIVATE_KEY_PATH=$TAURI_SIGNING_PRIVATE_KEY_PATH")
     [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] || build_env+=("TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
+    [ -z "${APPLE_ID:-}" ] || build_env+=("APPLE_ID=$APPLE_ID")
+    [ -z "${APPLE_PASSWORD:-}" ] || build_env+=("APPLE_PASSWORD=$APPLE_PASSWORD")
+    [ -z "${APPLE_TEAM_ID:-}" ] || build_env+=("APPLE_TEAM_ID=$APPLE_TEAM_ID")
 
     if [ -n "$VERSION_LABEL_OVERRIDE" ]; then
         echo "Using About label for this build: $VERSION_LABEL_OVERRIDE"
