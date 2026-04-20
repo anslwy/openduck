@@ -1578,8 +1578,8 @@ main.idle-layout {
 
 .image-preview-close-btn {
     position: absolute;
-    top: 100px;
-    right: 100px;
+    top: 48px;
+    right: 48px;
     width: 44px;
     height: 44px;
     border-radius: 50%;
