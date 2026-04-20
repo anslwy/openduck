@@ -19,6 +19,7 @@ export const SELECT_LAST_SESSION_STORAGE_KEY = "openduck.select-last-session.v1"
 export const SHOW_STAT_STORAGE_KEY = "openduck.show-stat.v1";
 export const SHOW_SUBTITLE_STORAGE_KEY = "openduck.show-subtitle.v1";
 export const SHOW_AI_SUBTITLE_STORAGE_KEY = "openduck.show-ai-subtitle.v1";
+export const SHOW_CALL_TIMER_STORAGE_KEY = "openduck.show-call-timer.v1";
 export const SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY =
   "openduck.show-hidden-window-overlay.v1";
 export const AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY =
@@ -78,6 +79,7 @@ export const NO_GLOBAL_SHORTCUT = "None";
 export const DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT = true;
 
 export const DEFAULT_SHOW_AI_SUBTITLE = true;
+export const DEFAULT_SHOW_CALL_TIMER = true;
 export const DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY = true;
 
 export const MODEL_PRESETS: Record<

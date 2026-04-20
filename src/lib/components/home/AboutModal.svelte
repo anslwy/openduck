@@ -56,6 +56,7 @@
         showStatEnabled,
         showSubtitleEnabled,
         showAiSubtitleEnabled,
+        showCallTimerEnabled,
         showHiddenWindowOverlayEnabled,
         endOfUtteranceSilenceMs,
         autoContinueSilenceMs,
@@ -72,6 +73,7 @@
         onUpdateShowStat,
         onUpdateShowSubtitle,
         onUpdateShowAiSubtitle,
+        onUpdateShowCallTimer,
         onUpdateShowHiddenWindowOverlay,
         onUpdateEndOfUtteranceSilenceMs,
         onUpdateAutoContinueSilenceMs,
@@ -99,6 +101,7 @@
         showStatEnabled: boolean;
         showSubtitleEnabled: boolean;
         showAiSubtitleEnabled: boolean;
+        showCallTimerEnabled: boolean;
         showHiddenWindowOverlayEnabled: boolean;
         endOfUtteranceSilenceMs: number;
         autoContinueSilenceMs: number | null;
@@ -115,6 +118,7 @@
         onUpdateShowStat: (enabled: boolean) => void;
         onUpdateShowSubtitle: (enabled: boolean) => void;
         onUpdateShowAiSubtitle: (enabled: boolean) => void;
+        onUpdateShowCallTimer: (enabled: boolean) => void;
         onUpdateShowHiddenWindowOverlay: (enabled: boolean) => void;
         onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
         onUpdateAutoContinueSilenceMs: (milliseconds: number | null) => void;
@@ -468,6 +472,13 @@
             label: "Show AI Subtitle",
             value: showAiSubtitleEnabled,
             onUpdate: onUpdateShowAiSubtitle,
+        },
+        {
+            id: "call-timer",
+            type: "toggle",
+            label: "Show Call Timer",
+            value: showCallTimerEnabled,
+            onUpdate: onUpdateShowCallTimer,
         },
         {
             id: "overlay",

@@ -69,6 +69,7 @@
         SHOW_STAT_STORAGE_KEY,
         SHOW_SUBTITLE_STORAGE_KEY,
         SHOW_AI_SUBTITLE_STORAGE_KEY,
+        SHOW_CALL_TIMER_STORAGE_KEY,
         SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
         AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
@@ -77,6 +78,7 @@
         GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY,
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
         DEFAULT_SHOW_AI_SUBTITLE,
+        DEFAULT_SHOW_CALL_TIMER,
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
@@ -301,6 +303,7 @@
     let showStatEnabled = $state(false);
     let showSubtitleEnabled = $state(true);
     let showAiSubtitleEnabled = $state(DEFAULT_SHOW_AI_SUBTITLE);
+    let showCallTimerEnabled = $state(DEFAULT_SHOW_CALL_TIMER);
     let showHiddenWindowOverlayEnabled = $state(
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
     );
@@ -1967,8 +1970,20 @@
 
     function applyShowAiSubtitlePreference(enabled: boolean) {
         showAiSubtitleEnabled = enabled;
-        persistShowAiSubtitlePreference(enabled);
+        localStorage.setItem(
+            SHOW_AI_SUBTITLE_STORAGE_KEY,
+            JSON.stringify(enabled),
+        );
     }
+
+    function applyShowCallTimerPreference(enabled: boolean) {
+        showCallTimerEnabled = enabled;
+        localStorage.setItem(
+            SHOW_CALL_TIMER_STORAGE_KEY,
+            JSON.stringify(enabled),
+        );
+    }
+
 
     function applyShowHiddenWindowOverlayPreference(enabled: boolean) {
         showHiddenWindowOverlayEnabled = enabled;
@@ -2090,9 +2105,23 @@
     }
 
     async function initializeShowAiSubtitlePreference() {
-        const storedEnabled = loadShowAiSubtitlePreferenceFromStorage();
+        const stored = localStorage.getItem(SHOW_AI_SUBTITLE_STORAGE_KEY);
+        const storedEnabled =
+            stored !== null
+                ? (JSON.parse(stored) as boolean)
+                : DEFAULT_SHOW_AI_SUBTITLE;
         applyShowAiSubtitlePreference(storedEnabled);
     }
+
+    async function initializeShowCallTimerPreference() {
+        const stored = localStorage.getItem(SHOW_CALL_TIMER_STORAGE_KEY);
+        const storedEnabled =
+            stored !== null
+                ? (JSON.parse(stored) as boolean)
+                : DEFAULT_SHOW_CALL_TIMER;
+        applyShowCallTimerPreference(storedEnabled);
+    }
+
 
     async function initializeShowHiddenWindowOverlayPreference() {
         const storedEnabled =
@@ -5882,6 +5911,7 @@
             await initializeShowStatPreference();
             await initializeShowSubtitlePreference();
             await initializeShowAiSubtitlePreference();
+            await initializeShowCallTimerPreference();
             await initializeShowHiddenWindowOverlayPreference();
             await initializeEndOfUtteranceSilencePreference();
             await initializeAutoContinueSilencePreference();
@@ -6510,6 +6540,7 @@
                     {showStatEnabled}
                     {showSubtitleEnabled}
                     {showAiSubtitleEnabled}
+                    {showCallTimerEnabled}
                     {showHiddenWindowOverlayEnabled}
                     {endOfUtteranceSilenceMs}
                     {autoContinueSilenceMs}
@@ -6526,6 +6557,7 @@
                     onUpdateShowStat={applyShowStatPreference}
                     onUpdateShowSubtitle={applyShowSubtitlePreference}
                     onUpdateShowAiSubtitle={applyShowAiSubtitlePreference}
+                    onUpdateShowCallTimer={applyShowCallTimerPreference}
                     onUpdateShowHiddenWindowOverlay={applyShowHiddenWindowOverlayPreference}
                     onUpdateEndOfUtteranceSilenceMs={applyEndOfUtteranceSilencePreference}
                     onUpdateAutoContinueSilenceMs={applyAutoContinueSilencePreference}
@@ -6544,13 +6576,15 @@
                 <span class="username"
                     >{selectedContact?.name.trim() || "OpenDuck"}</span
                 >
-                <span class="timer"
-                    >{calling
-                        ? formattedTime
-                        : modelsReady
-                          ? "Ready"
-                          : "Pending"}</span
-                >
+                {#if showCallTimerEnabled}
+                    <span class="timer"
+                        >{calling
+                            ? formattedTime
+                            : modelsReady
+                              ? "Ready"
+                              : "Pending"}</span
+                    >
+                {/if}
             </div>
 
             <div class="actions">
