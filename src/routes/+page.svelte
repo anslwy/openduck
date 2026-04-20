@@ -3503,11 +3503,7 @@
     }
 
     async function handleWindowPaste(event: ClipboardEvent) {
-        if (
-            !calling ||
-            shouldIgnoreGlobalShortcutTarget(event.target) ||
-            !event.clipboardData
-        ) {
+        if (!event.clipboardData) {
             return;
         }
 
@@ -3516,6 +3512,14 @@
         );
         const file = imageItem?.getAsFile();
         if (!file) {
+            return;
+        }
+
+        if (
+            !calling ||
+            (shouldIgnoreGlobalShortcutTarget(event.target) &&
+                !imageItem.type.startsWith("image/"))
+        ) {
             return;
         }
 
