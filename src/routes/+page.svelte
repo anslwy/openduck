@@ -5398,41 +5398,57 @@
         try {
             await syncModelStatus();
 
-            if (!isGemmaDownloaded) {
-                await handleDownloadGemma();
-                if (!isGemmaDownloaded || !isGemmaLoaded) {
-                    return;
-                }
-            } else if (!isGemmaLoaded) {
-                await handleLoadGemma();
-                if (!isGemmaLoaded) {
-                    return;
-                }
-            }
+            const sttNeeded = selectedSttModel !== "gemma";
+            const allDownloaded =
+                isGemmaDownloaded &&
+                isCsmDownloaded &&
+                (!sttNeeded || isSttDownloaded);
 
-            if (selectedSttModel !== "gemma") {
-                if (!isSttDownloaded) {
-                    await handleDownloadStt();
-                    if (!isSttDownloaded || !isSttLoaded) {
+            if (allDownloaded) {
+                await Promise.all([
+                    !isGemmaLoaded ? handleLoadGemma() : Promise.resolve(),
+                    sttNeeded && !isSttLoaded
+                        ? handleLoadStt()
+                        : Promise.resolve(),
+                    !isCsmLoaded ? handleLoadCsm() : Promise.resolve(),
+                ]);
+            } else {
+                if (!isGemmaDownloaded) {
+                    await handleDownloadGemma();
+                    if (!isGemmaDownloaded || !isGemmaLoaded) {
                         return;
                     }
-                } else if (!isSttLoaded) {
-                    await handleLoadStt();
-                    if (!isSttLoaded) {
+                } else if (!isGemmaLoaded) {
+                    await handleLoadGemma();
+                    if (!isGemmaLoaded) {
                         return;
                     }
                 }
-            }
 
-            if (!isCsmDownloaded) {
-                await handleDownloadCsm();
-                if (!isCsmDownloaded || !isCsmLoaded) {
-                    return;
+                if (selectedSttModel !== "gemma") {
+                    if (!isSttDownloaded) {
+                        await handleDownloadStt();
+                        if (!isSttDownloaded || !isSttLoaded) {
+                            return;
+                        }
+                    } else if (!isSttLoaded) {
+                        await handleLoadStt();
+                        if (!isSttLoaded) {
+                            return;
+                        }
+                    }
                 }
-            } else if (!isCsmLoaded) {
-                await handleLoadCsm();
-                if (!isCsmLoaded) {
-                    return;
+
+                if (!isCsmDownloaded) {
+                    await handleDownloadCsm();
+                    if (!isCsmDownloaded || !isCsmLoaded) {
+                        return;
+                    }
+                } else if (!isCsmLoaded) {
+                    await handleLoadCsm();
+                    if (!isCsmLoaded) {
+                        return;
+                    }
                 }
             }
         } finally {
