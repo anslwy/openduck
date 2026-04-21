@@ -38,3 +38,4 @@ npm-debug.log*
 # Env
 .env
 .env.*
+src-tauri/temp-tauri-config.json
