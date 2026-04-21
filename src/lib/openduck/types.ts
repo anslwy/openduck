@@ -12,6 +12,7 @@ export type CsmAudioQueuedEvent = {
 export type CsmAudioChunkEvent = {
     request_id: number;
     audio_wav_base64: string;
+    is_first_chunk: boolean;
 };
 
 export type CsmAudioDoneEvent = {

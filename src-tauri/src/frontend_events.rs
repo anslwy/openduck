@@ -21,6 +21,7 @@ pub(crate) struct CsmAudioQueuedEvent {
 pub(crate) struct CsmAudioChunkEvent {
     pub(crate) request_id: u64,
     pub(crate) audio_wav_base64: String,
+    pub(crate) is_first_chunk: bool,
 }
 
 #[derive(Clone, Serialize)]

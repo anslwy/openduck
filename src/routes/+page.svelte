@@ -4799,6 +4799,7 @@
                     requestId: payload.request_id,
                     samples: playbackSamples,
                     prebufferSamples: PLAYBACK_PREBUFFER_SAMPLES,
+                    isNewSegment: payload.is_first_chunk,
                 },
                 [playbackSamples.buffer],
             );

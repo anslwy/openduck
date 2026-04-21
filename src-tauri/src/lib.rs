@@ -485,6 +485,8 @@ enum CsmWorkerEvent {
     Chunk {
         request_id: u64,
         audio_wav_base64: String,
+        #[serde(default)]
+        is_first_chunk: bool,
     },
     Done {
         request_id: u64,
@@ -7820,6 +7822,7 @@ async fn csm_stdout_task(
             Ok(CsmWorkerEvent::Chunk {
                 request_id,
                 audio_wav_base64,
+                is_first_chunk,
             }) => {
                 log_processing_audio_latency_for_first_chunk(&app_handle, request_id);
                 if let Err(err) = app_handle.emit(
@@ -7827,6 +7830,7 @@ async fn csm_stdout_task(
                     CsmAudioChunkEvent {
                         request_id,
                         audio_wav_base64,
+                        is_first_chunk,
                     },
                 ) {
                     error!("Failed to emit CSM audio chunk: {}", err);

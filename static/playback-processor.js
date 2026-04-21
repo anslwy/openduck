@@ -44,7 +44,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         return;
       }
 
-      const { requestId, samples, prebufferSamples } = event.data;
+      const { requestId, samples, prebufferSamples, isNewSegment } = event.data;
       if (this.currentRequestId !== requestId) {
         this.reset();
         this.currentRequestId = requestId;
@@ -56,7 +56,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         return;
       }
 
-      this.queue.push({ requestId, samples: chunk });
+      this.queue.push({ requestId, samples: chunk, isNewSegment });
       this.bufferedSamples += chunk.length;
       this.prebufferSamples = Math.max(
         0,
@@ -105,10 +105,12 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
         if (this.offset === 0 && !this.chunkStarted) {
           this.chunkStarted = true;
-          this.port.postMessage({
-            type: "chunk-started",
-            requestId: head.requestId,
-          });
+          if (head.isNewSegment !== false) {
+            this.port.postMessage({
+              type: "chunk-started",
+              requestId: head.requestId,
+            });
+          }
         }
 
         const available = head.samples.length - this.offset;

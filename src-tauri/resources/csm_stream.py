@@ -719,6 +719,7 @@ def run_csm_server(
                         "type": "chunk",
                         "request_id": request_id,
                         "audio_wav_base64": audio_wav_base64,
+                        "is_first_chunk": not emitted_audio,
                     }
                 )
                 emitted_audio = True
@@ -866,6 +867,7 @@ def run_kokoro_server(_quantize: bool) -> int:
                             "type": "chunk",
                             "request_id": request_id,
                             "audio_wav_base64": audio_wav_base64,
+                            "is_first_chunk": not emitted_audio,
                         }
                     )
                     emitted_audio = True
@@ -1061,6 +1063,7 @@ def run_cosyvoice2_server(_quantize: bool, context_audio: Path | None = None) ->
                             "type": "chunk",
                             "request_id": request_id,
                             "audio_wav_base64": audio_wav_base64,
+                            "is_first_chunk": not emitted_audio,
                         }
                     )
                     emitted_audio = True
@@ -1259,6 +1262,7 @@ def run_cosyvoice3_server(
                             "type": "chunk",
                             "request_id": request_id,
                             "audio_wav_base64": audio_wav_base64,
+                            "is_first_chunk": not emitted_audio,
                         }
                     )
                     emitted_audio = True
@@ -1518,6 +1522,7 @@ def run_chatterbox_server(
                             "type": "chunk",
                             "request_id": request_id,
                             "audio_wav_base64": audio_wav_base64,
+                            "is_first_chunk": not emitted_audio,
                         }
                     )
                     emitted_audio = True
