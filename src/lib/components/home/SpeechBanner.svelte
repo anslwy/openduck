@@ -19,6 +19,7 @@
         csmDownloadProgress,
         csmDownloadIndeterminate,
         csmLoadMessage,
+        csmNotificationMessage,
         isCancellingCsmDownload,
         isUnloadingCsm,
         isLoadingCsm,
@@ -48,6 +49,7 @@
         csmDownloadProgress: number | null;
         csmDownloadIndeterminate: boolean;
         csmLoadMessage: string;
+        csmNotificationMessage: string | null;
         isCancellingCsmDownload: boolean;
         isUnloadingCsm: boolean;
         isLoadingCsm: boolean;
@@ -168,6 +170,11 @@
                             </div>
                         </div>
                         <span class="banner-subtitle">Loaded</span>
+                        {#if csmNotificationMessage}
+                            <div class="banner-notification">
+                                {csmNotificationMessage}
+                            </div>
+                        {/if}
                     </div>
                     <div class="loaded-actions">
                         <button
@@ -329,3 +336,13 @@
         </div>
     {/if}
 </div>
+
+<style>
+    .banner-notification {
+        font-size: 11px;
+        color: #ff9500;
+        margin-top: 2px;
+        line-height: 1.2;
+        max-width: 320px;
+    }
+</style>

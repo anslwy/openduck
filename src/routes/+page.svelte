@@ -259,6 +259,7 @@
     let csmDownloadIndeterminate = $state(true);
     let csmDownloadError = $state<string | null>(null);
     let csmLoadMessage = $state("Starting worker...");
+    let csmNotificationMessage = $state<string | null>(null);
     let sttDownloadMessage = $state("Preparing download...");
     let sttDownloadProgress = $state<number | null>(null);
     let sttDownloadIndeterminate = $state(true);
@@ -5590,8 +5591,9 @@
     }
 
     async function handleUnloadCsm(options?: { suppressAlert?: boolean }) {
-        isUnloadingCsm = true;
         try {
+            isUnloadingCsm = true;
+            csmNotificationMessage = null;
             await invoke("stop_csm_server");
             isCsmLoaded = false;
         } catch (err) {
@@ -5755,6 +5757,12 @@
                     listen<CsmStatusEvent>("csm-status", ({ payload }) => {
                         if (isLoadingCsm) {
                             csmLoadMessage = payload.message;
+                        }
+                        if (payload.message.startsWith("WARNING: ")) {
+                            csmNotificationMessage = payload.message.replace(
+                                "WARNING: ",
+                                "",
+                            );
                         }
                     }),
                     listen<SttStatusEvent>("stt-status", ({ payload }) => {
@@ -6338,6 +6346,7 @@
                     {csmDownloadProgress}
                     {csmDownloadIndeterminate}
                     {csmLoadMessage}
+                    {csmNotificationMessage}
                     {isCancellingCsmDownload}
                     {isUnloadingCsm}
                     {isLoadingCsm}

@@ -89,10 +89,6 @@ def emit_status(message: str) -> None:
     emit({"type": "status", "message": message})
 
 
-def emit_notification(message: str) -> None:
-    emit({"type": "notification", "message": message})
-
-
 @contextlib.contextmanager
 def redirect_library_stdout():
     # Third-party TTS libraries sometimes print warnings/progress to stdout.
@@ -1385,11 +1381,11 @@ def run_chatterbox_server(
         duration = len(audio_np) / sample_rate
         if duration < 5.05:  # 5 seconds + some margin
             message = (
-                f"Reference audio too short ({duration:.2f}s). "
+                f"WARNING: Reference audio too short ({duration:.2f}s). "
                 "Chatterbox requires at least 5s for voice cloning. "
                 "Falling back to default voice."
             )
-            emit_notification(message)
+            emit_status(message)
             fallback_to_default()
 
         return reference_audio
