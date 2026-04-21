@@ -4616,6 +4616,7 @@
             }
         } catch (err) {
             console.error("Failed to start audio capture:", err);
+            alert("Failed to start audio capture: " + String(err));
             calling = false;
             stopCallTimerTracking();
         }
@@ -5020,6 +5021,7 @@
             await invoke("start_new_session");
         } catch (err) {
             console.error("Failed to start new session:", err);
+            alert("Failed to start new session: " + String(err));
         }
 
         closeContactsPopup();
@@ -5036,16 +5038,18 @@
         syncTtsPlaybackState(false);
         setCallStage("listening", "Listening");
 
-        void invoke("start_call_timer", { muted: micMuted }).catch((err) =>
-            console.error("Failed to start tray call timer", err),
-        );
+        void invoke("start_call_timer", { muted: micMuted }).catch((err) => {
+            console.error("Failed to start tray call timer", err);
+            alert("Failed to start tray call timer: " + String(err));
+        });
         await startAudioCapture();
         if (calling) {
             void playCallStartPong();
         }
-        void invoke("ping").catch((err) =>
-            console.error("Backend ping failed", err),
-        );
+        void invoke("ping").catch((err) => {
+            console.error("Backend ping failed", err);
+            alert("Backend ping failed: " + String(err));
+        });
 
         if (callTimerInterval) {
             clearInterval(callTimerInterval);
@@ -5084,16 +5088,18 @@
         syncTtsPlaybackState(false);
         setCallStage("listening", "Listening");
 
-        void invoke("start_call_timer", { muted: micMuted }).catch((err) =>
-            console.error("Failed to start tray call timer", err),
-        );
+        void invoke("start_call_timer", { muted: micMuted }).catch((err) => {
+            console.error("Failed to start tray call timer", err);
+            alert("Failed to start tray call timer: " + String(err));
+        });
         await startAudioCapture();
         if (calling) {
             void playCallStartPong();
         }
-        void invoke("ping").catch((err) =>
-            console.error("Backend ping failed", err),
-        );
+        void invoke("ping").catch((err) => {
+            console.error("Backend ping failed", err);
+            alert("Backend ping failed: " + String(err));
+        });
 
         if (callTimerInterval) {
             clearInterval(callTimerInterval);
@@ -5618,6 +5624,13 @@
     }
 
     onMount(() => {
+        window.addEventListener("error", (event) => {
+            alert(`JS Error: ${event.message}\nAt: ${event.filename}:${event.lineno}`);
+        });
+        window.addEventListener("unhandledrejection", (event) => {
+            alert(`Unhandled Promise Rejection: ${String(event.reason)}`);
+        });
+
         void (async () => {
             await ensureOverlayWindow();
 

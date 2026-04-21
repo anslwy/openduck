@@ -230,8 +230,12 @@ main() {
     mkdir -p "$OUTPUT_DIR"
 
     echo "Building OpenDuck release bundle for $TARGET_TRIPLE..."
-    TEMP_TAURI_CONFIG="$(mktemp "${TMPDIR:-/tmp}/openduck-tauri-release.XXXXXX.json")"
+    TEMP_TAURI_CONFIG="$ROOT_DIR/src-tauri/temp-tauri-config.json"
     trap 'rm -f "${TEMP_TAURI_CONFIG:-}"' EXIT
+    
+    # Absolute paths for entitlements and Info.plist
+    local entitlements_path="$ROOT_DIR/src-tauri/entitlements.plist"
+    local info_plist_path="$ROOT_DIR/src-tauri/Info.plist"
 
     # Base config
     local config_json
@@ -248,7 +252,8 @@ EOF
         config_json+=$(cat <<EOF
 ,
     "macOS": {
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "infoPlist": "Info.plist"
     }
 EOF
 )
