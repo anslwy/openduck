@@ -283,6 +283,36 @@ def build_csm_model(quantize: bool):
 
 
 def build_kokoro_model():
+    # Identify architecture for diagnostics
+    import platform
+
+    arch = platform.machine()
+    system = platform.system()
+    emit_status(f"Kokoro running on {system} {arch}")
+
+    # Monkeypatch misaki to avoid espeak fallback if it crashes on M4
+    try:
+        # Pre-import misaki components to patch them BEFORE mlx_audio imports them
+        import misaki.espeak
+
+        class SafeEspeakFallback:
+            def __init__(self, *args, **kwargs):
+                # Using print instead of emit_status here because it's during init
+                # and we want it to go to stderr via redirect if needed,
+                # but actually emit_status is fine too.
+                # emit_status("Espeak fallback initialization bypassed for stability.")
+                raise RuntimeError(
+                    "Bypassed espeak-ng initialization to prevent crash on M4"
+                )
+
+            def __call__(self, *args, **kwargs):
+                return None
+
+        misaki.espeak.EspeakFallback = SafeEspeakFallback
+        emit_status("Applied stability patch for Kokoro G2P.")
+    except Exception as exc:
+        emit_status(f"Kokoro stability patch skipped: {exc}")
+
     emit_status("Importing MLX-Audio runtime...")
     from mlx_audio.tts.utils import load_model
 
@@ -294,6 +324,17 @@ def build_kokoro_model():
 
     emit_status("Resolving Kokoro MLX assets...")
     download_kokoro_assets()
+
+    # Test spaCy loading as it can sometimes crash on M4
+    try:
+        emit_status("Testing spaCy model integrity...")
+        import spacy
+
+        spacy.load("en_core_web_sm")
+        emit_status("spaCy model is healthy.")
+    except Exception as exc:
+        emit_status(f"spaCy health check failed: {exc}")
+
     emit_status("Initializing Kokoro model...")
     with redirect_library_stdout():
         return load_model(KOKORO_MODEL_REPO)
@@ -677,8 +718,23 @@ def run_kokoro_server(_quantize: bool) -> int:
 
     sample_rate = resolve_model_sample_rate(model)
     try:
-        emit_status("Warming up Kokoro runtime...")
+        emit_status("Warming up Kokoro runtime (G2P)...")
         with redirect_library_stdout():
+            # Test G2P specifically
+            emit_status("Accessing Kokoro pipeline...")
+            pipeline = model._get_pipeline(KOKORO_LANG_CODE)
+            emit_status(f"G2P warming up for lang {KOKORO_LANG_CODE}...")
+
+            # Check if espeak fallback is the issue
+            if hasattr(pipeline, "g2p") and hasattr(pipeline.g2p, "fallback"):
+                emit_status("Checking Espeak fallback...")
+                if pipeline.g2p.fallback is not None:
+                    emit_status("Espeak fallback is active.")
+
+            emit_status("Running G2P on warmup text...")
+            _, tokens = pipeline.g2p("Okay.")
+
+            emit_status("Warming up Kokoro runtime (Synthesis)...")
             generator = model.generate(
                 text="Okay.",
                 voice=KOKORO_DEFAULT_VOICE,
@@ -686,10 +742,12 @@ def run_kokoro_server(_quantize: bool) -> int:
                 lang_code=KOKORO_LANG_CODE,
             )
             for result in generator:
+                emit_status("Normalizing audio chunk...")
                 normalize_audio_array(result.audio)
                 break
     except Exception as exc:
         emit_status(f"Kokoro warmup skipped: {exc}")
+        traceback.print_exc(file=sys.stderr)
 
     emit_status("Kokoro worker ready.")
     emit({"type": "ready", "sample_rate": sample_rate})
