@@ -39,11 +39,7 @@ https://github.com/user-attachments/assets/4603ce80-9b74-4b0e-8f8c-ff242f7bdc37
 
 1. Go to [Releases](https://github.com/anslwy/openduck/releases)
 2. Download the latest `openduck-beta-xxx.dmg` and move it to your Applications folder
-3. Execute the following in your Terminal:
-   ```bash
-   xattr -d com.apple.quarantine /Applications/OpenDuck.app
-   ```
-4. Start OpenDuck from your Applications folder
+3. Start OpenDuck from your Applications folder
 
 ### From source
 
