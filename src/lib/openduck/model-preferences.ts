@@ -47,7 +47,8 @@ export function isCsmModelVariant(value: unknown): value is CsmModelVariant {
         value === "cosyvoice2_0_5b" ||
         value === "cosyvoice3_0_5b_8bit" ||
         value === "cosyvoice3_0_5b_4bit" ||
-        value === "cosyvoice3_0_5b_fp16"
+        value === "cosyvoice3_0_5b_fp16" ||
+        value === "chatterbox_turbo_8bit"
     );
 }
 

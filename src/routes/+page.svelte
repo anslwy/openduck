@@ -591,6 +591,7 @@
         { value: "cosyvoice3_0_5b_4bit", label: "Fun-CosyVoice3-0.5B (4-bit)" },
         { value: "cosyvoice3_0_5b_8bit", label: "Fun-CosyVoice3-0.5B (8-bit)" },
         { value: "cosyvoice3_0_5b_fp16", label: "Fun-CosyVoice3-0.5B (fp16)" },
+        { value: "chatterbox_turbo_8bit", label: "Chatterbox Turbo (8-bit)" },
         { value: "expressiva_1b", label: "CSM Expressiva 1B" },
     ];
     const sttModelOptions: Array<SelectOption<SttModelVariant>> = $derived([
@@ -668,7 +669,9 @@
                   ? "Fun-CosyVoice3-0.5B (8-bit) provides a balance between realistic voice quality and RAM usage."
                   : selectedCsmModel === "cosyvoice3_0_5b_fp16"
                     ? "Fun-CosyVoice3-0.5B (fp16) provides the highest possible voice quality."
-                    : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM.",
+                    : selectedCsmModel === "chatterbox_turbo_8bit"
+                      ? "Chatterbox Turbo (8-bit) provides a fast and realistic voice with lower RAM usage."
+                      : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM.",
     );
     const selectedSttModelLabel = $derived(
         sttModelOptions.find((option) => option.value === selectedSttModel)
@@ -788,7 +791,8 @@
                 isCsmLoaded &&
                 (selectedCsmModel === "cosyvoice3_0_5b_8bit" ||
                     selectedCsmModel === "cosyvoice3_0_5b_4bit" ||
-                    selectedCsmModel === "cosyvoice3_0_5b_fp16")
+                    selectedCsmModel === "cosyvoice3_0_5b_fp16" ||
+                    selectedCsmModel === "chatterbox_turbo_8bit")
             ) {
                 void (async () => {
                     try {

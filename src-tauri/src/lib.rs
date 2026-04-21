@@ -10383,7 +10383,8 @@ fn resolve_speech_site_packages(
         CsmModelVariant::CosyVoice205b
         | CsmModelVariant::CosyVoice305b8bit
         | CsmModelVariant::CosyVoice305b4bit
-        | CsmModelVariant::CosyVoice305bFp16 => resolve_cosyvoice_site_packages(app_handle),
+        | CsmModelVariant::CosyVoice305bFp16
+        | CsmModelVariant::ChatterboxTurbo8bit => resolve_cosyvoice_site_packages(app_handle),
     }
 }
 
