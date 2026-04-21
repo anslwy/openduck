@@ -8,7 +8,7 @@ Screen-aware, voice-first, local AI tool that stays lean and out of your away un
 
 ![Rust](https://img.shields.io/badge/rust-1.80+-orange.svg)
 ![Svelte](https://img.shields.io/badge/svelte-5.0+-ff3e00.svg)
-![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/anslwy/openduck)](https://github.com/anslwy/openduck/releases)
 [![License](https://img.shields.io/github/license/anslwy/openduck)](https://img.shields.io/github/license/anslwy/openduck)
 
 ## Demo (In App)
