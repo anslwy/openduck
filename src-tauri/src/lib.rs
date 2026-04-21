@@ -493,6 +493,9 @@ enum CsmWorkerEvent {
         request_id: Option<u64>,
         message: String,
     },
+    Notification {
+        message: String,
+    },
 }
 
 #[derive(Clone, Deserialize)]
@@ -2917,6 +2920,10 @@ async fn start_csm_server_inner(
 
     if let Some(context_text) = &startup_context_text {
         command.arg("--context-text").arg(context_text);
+    }
+
+    if let Ok(default_audio) = resolve_csm_context_audio_file(app_handle, state, CsmVoice::Female) {
+        command.arg("--default-audio").arg(default_audio);
     }
 
     let should_quantize_csm = *state.selected_csm_quantized.lock().unwrap();
@@ -7849,6 +7856,17 @@ async fn csm_stdout_task(
                     },
                 );
                 send_ready_signal(&ready_tx, Err(message));
+            }
+            Ok(CsmWorkerEvent::Notification { message }) => {
+                info!("CSM worker notification: {}", message);
+                if let Err(err) = app_handle.emit(
+                    OVERLAY_NOTIFICATION_EVENT,
+                    OverlayNotificationEvent {
+                        message: message.clone(),
+                    },
+                ) {
+                    error!("Failed to emit CSM notification: {}", err);
+                }
             }
             Err(err) => {
                 warn!("Ignoring non-JSON speech worker stdout: {} ({})", err, line);

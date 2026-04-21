@@ -89,6 +89,10 @@ def emit_status(message: str) -> None:
     emit({"type": "status", "message": message})
 
 
+def emit_notification(message: str) -> None:
+    emit({"type": "notification", "message": message})
+
+
 @contextlib.contextmanager
 def redirect_library_stdout():
     # Third-party TTS libraries sometimes print warnings/progress to stdout.
@@ -1297,6 +1301,7 @@ def run_server(
     model_name: str,
     quantize: bool,
     context_audio: Path | None = None,
+    default_audio: Path | None = None,
     context_text: str = "",
 ) -> int:
     if model_name == "csm":
@@ -1318,13 +1323,17 @@ def run_server(
             quantize, COSYVOICE3_FP16_MODEL_REPO, context_audio
         )
     if model_name == "chatterbox_8bit":
-        return run_chatterbox_server(quantize, context_audio)
+        return run_chatterbox_server(quantize, context_audio, default_audio)
 
     emit({"type": "error", "message": f"Unsupported speech model: {model_name}"})
     return 2
 
 
-def run_chatterbox_server(_quantize: bool, context_audio: Path | None = None) -> int:
+def run_chatterbox_server(
+    _quantize: bool,
+    context_audio: Path | None = None,
+    default_audio: Path | None = None,
+) -> int:
     try:
         emit_status("Importing Chatterbox helpers...")
         import mlx.core as mx
@@ -1350,20 +1359,44 @@ def run_chatterbox_server(_quantize: bool, context_audio: Path | None = None) ->
     sample_rate = resolve_model_sample_rate(model)
     reference_audio = None
 
-    def load_reference_audio():
+    def fallback_to_default():
         nonlocal reference_audio
-        if context_audio is None:
+        if default_audio and default_audio.exists():
+            emit_status("Falling back to default Chatterbox voice...")
+            with redirect_library_stdout():
+                reference_audio = load_audio(
+                    str(default_audio), sample_rate=sample_rate
+                )
+        else:
+            reference_audio = None
+
+    def load_reference_audio(path: Path | None):
+        nonlocal reference_audio
+        if path is None:
             reference_audio = None
             return None
 
-        emit_status(f"Loading Chatterbox reference audio from {context_audio.name}...")
+        emit_status(f"Loading Chatterbox reference audio from {path.name}...")
         with redirect_library_stdout():
-            reference_audio = load_audio(str(context_audio), sample_rate=sample_rate)
+            reference_audio = load_audio(str(path), sample_rate=sample_rate)
+
+        # Chatterbox requires audio prompt to be longer than 5 seconds.
+        audio_np = normalize_audio_array(reference_audio)
+        duration = len(audio_np) / sample_rate
+        if duration < 5.05:  # 5 seconds + some margin
+            message = (
+                f"Reference audio too short ({duration:.2f}s). "
+                "Chatterbox requires at least 5s for voice cloning. "
+                "Falling back to default voice."
+            )
+            emit_notification(message)
+            fallback_to_default()
+
         return reference_audio
 
     if context_audio is not None:
         try:
-            load_reference_audio()
+            load_reference_audio(context_audio)
         except Exception as exc:
             emit(
                 {
@@ -1372,7 +1405,9 @@ def run_chatterbox_server(_quantize: bool, context_audio: Path | None = None) ->
                 }
             )
             traceback.print_exc(file=sys.stderr)
-            return 1
+            fallback_to_default()
+    else:
+        fallback_to_default()
 
     if reference_audio is not None:
         try:
@@ -1415,7 +1450,7 @@ def run_chatterbox_server(_quantize: bool, context_audio: Path | None = None) ->
                 context_audio = (
                     Path(str(context_audio_path)) if context_audio_path else None
                 )
-                load_reference_audio()
+                load_reference_audio(context_audio)
             except Exception as exc:
                 emit(
                     {
@@ -1424,6 +1459,7 @@ def run_chatterbox_server(_quantize: bool, context_audio: Path | None = None) ->
                     }
                 )
                 traceback.print_exc(file=sys.stderr)
+                fallback_to_default()
             continue
         if request_type in {"reset_context", "finalize_response"}:
             continue
@@ -1527,6 +1563,7 @@ def main() -> int:
     parser.add_argument("--model", default="csm")
     parser.add_argument("--quantize", action="store_true")
     parser.add_argument("--context-audio", type=Path)
+    parser.add_argument("--default-audio", type=Path)
     parser.add_argument("--context-text", default="")
     args = parser.parse_args()
 
@@ -1569,6 +1606,7 @@ def main() -> int:
             args.model,
             args.quantize,
             args.context_audio,
+            args.default_audio,
             args.context_text,
         )
 

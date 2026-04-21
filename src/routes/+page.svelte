@@ -588,10 +588,13 @@
     ]);
     const csmModelOptions: Array<SelectOption<CsmModelVariant>> = [
         { value: "kokoro_82m", label: "Kokoro-82M" },
+        {
+            value: "chatterbox_turbo_8bit",
+            label: "Chatterbox Turbo-350M (8-bit)",
+        },
         { value: "cosyvoice3_0_5b_4bit", label: "Fun-CosyVoice3-0.5B (4-bit)" },
         { value: "cosyvoice3_0_5b_8bit", label: "Fun-CosyVoice3-0.5B (8-bit)" },
         { value: "cosyvoice3_0_5b_fp16", label: "Fun-CosyVoice3-0.5B (fp16)" },
-        { value: "chatterbox_turbo_8bit", label: "Chatterbox Turbo (8-bit)" },
         { value: "expressiva_1b", label: "CSM Expressiva 1B" },
     ];
     const sttModelOptions: Array<SelectOption<SttModelVariant>> = $derived([
@@ -2036,7 +2039,6 @@
         );
     }
 
-
     function applyShowHiddenWindowOverlayPreference(enabled: boolean) {
         showHiddenWindowOverlayEnabled = enabled;
         persistShowHiddenWindowOverlayPreference(enabled);
@@ -2147,7 +2149,8 @@
     }
 
     async function initializeAutoLoadModelsOnStartupPreference() {
-        const storedEnabled = loadAutoLoadModelsOnStartupPreferenceFromStorage();
+        const storedEnabled =
+            loadAutoLoadModelsOnStartupPreferenceFromStorage();
         applyAutoLoadModelsOnStartupPreference(storedEnabled);
     }
 
@@ -2178,7 +2181,6 @@
                 : DEFAULT_SHOW_CALL_TIMER;
         applyShowCallTimerPreference(storedEnabled);
     }
-
 
     async function initializeShowHiddenWindowOverlayPreference() {
         const storedEnabled =
@@ -5629,7 +5631,9 @@
 
     onMount(() => {
         window.addEventListener("error", (event) => {
-            alert(`JS Error: ${event.message}\nAt: ${event.filename}:${event.lineno}`);
+            alert(
+                `JS Error: ${event.message}\nAt: ${event.filename}:${event.lineno}`,
+            );
         });
         window.addEventListener("unhandledrejection", (event) => {
             alert(`Unhandled Promise Rejection: ${String(event.reason)}`);
