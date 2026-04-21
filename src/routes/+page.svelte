@@ -5,6 +5,8 @@
     import { onDestroy, onMount } from "svelte";
     import { fade } from "svelte/transition";
     import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+    import { check, type Update } from "@tauri-apps/plugin-updater";
+    import { relaunch } from "@tauri-apps/plugin-process";
     import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
     import { getCurrentWindow } from "@tauri-apps/api/window";
     import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -354,6 +356,7 @@
     let availableAppUpdate = $state<AppUpdateInfo | null>(null);
     let appUpdateStatus = $state<AppUpdateStatus>("idle");
     let appUpdateError = $state<string | null>(null);
+    let updateObject: Update | null = null;
     let nextConversationEntryId = 1;
     let pendingConversationUserLogEntryId: number | null = null;
     let activeAssistantResponseId: number | null = null;
@@ -2953,22 +2956,33 @@
         appUpdateStatus = "checking";
         appUpdateError = null;
         availableAppUpdate = null;
+        updateObject = null;
 
         try {
-            availableAppUpdate = await invoke<AppUpdateInfo | null>(
-                "check_for_app_update",
-            );
-            appUpdateStatus = availableAppUpdate ? "available" : "up_to_date";
+            updateObject = await check();
+            if (updateObject) {
+                availableAppUpdate = {
+                    version: updateObject.version,
+                    currentVersion: buildInfo?.version || "",
+                    notes: updateObject.body,
+                    publishedAt: updateObject.date,
+                    target: "",
+                };
+                appUpdateStatus = "available";
+            } else {
+                appUpdateStatus = "up_to_date";
+            }
         } catch (err) {
             console.error("Failed to check for app updates:", err);
             availableAppUpdate = null;
+            updateObject = null;
             appUpdateStatus = "error";
             appUpdateError = normalizeErrorMessage(err);
         }
     }
 
     async function installAppUpdate() {
-        if (appUpdateStatus !== "available") {
+        if (appUpdateStatus !== "available" || !updateObject) {
             return;
         }
 
@@ -2976,11 +2990,32 @@
         appUpdateError = null;
 
         try {
-            await invoke("install_app_update");
+            let downloaded = 0;
+            let contentLength = 0;
+            await updateObject.downloadAndInstall((event) => {
+                switch (event.event) {
+                    case "Started":
+                        contentLength = event.data.contentLength || 0;
+                        console.log(
+                            `started downloading ${contentLength} bytes`,
+                        );
+                        break;
+                    case "Progress":
+                        downloaded += event.data.chunkLength;
+                        if (contentLength > 0) {
+                            console.log(
+                                `downloaded ${downloaded} from ${contentLength}`,
+                            );
+                        }
+                        break;
+                    case "Finished":
+                        console.log("download finished");
+                        break;
+                }
+            });
             appUpdateStatus = "installed";
         } catch (err) {
             console.error("Failed to install app update:", err);
-            availableAppUpdate = null;
             appUpdateStatus = "error";
             appUpdateError = normalizeErrorMessage(err);
         }
@@ -2988,7 +3023,7 @@
 
     async function restartToApplyUpdate() {
         try {
-            await invoke("restart_app");
+            await relaunch();
         } catch (err) {
             console.error("Failed to restart after installing update:", err);
             appUpdateError = normalizeErrorMessage(err);

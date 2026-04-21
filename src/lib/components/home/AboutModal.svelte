@@ -1003,9 +1003,9 @@
                                 <button
                                     type="button"
                                     class="utility-btn about-update-install-btn"
-                                    onclick={handleDownloadFromGithub}
+                                    onclick={installAvailableUpdate}
                                 >
-                                    Download from Github
+                                    Install Update
                                 </button>
                             {:else if appUpdateStatus === "installed"}
                                 <button
