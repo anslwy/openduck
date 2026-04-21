@@ -35,19 +35,11 @@ https://github.com/user-attachments/assets/4603ce80-9b74-4b0e-8f8c-ff242f7bdc37
 
 ## Installation
 
-### From Releases (recommended)
+### From Releases
 
 1. Go to [Releases](https://github.com/anslwy/openduck/releases)
 2. Download the latest `openduck-beta-xxx.dmg` and move it to your Applications folder
 3. Start OpenDuck from your Applications folder
-
-### From source
-
-```bash
-git clone https://github.com/anslwy/openduck.git
-cd openduck
-./start.sh
-```
 
 ## Technologies Used
 
@@ -63,7 +55,7 @@ cd openduck
 ```bash
 git clone https://github.com/anslwy/openduck.git
 cd openduck
-./scripts/setup_python_env.sh
+./install.sh
 ```
 
 ### Running the App
