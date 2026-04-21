@@ -6,6 +6,9 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "dialog:allow-ask",
+    "dialog:allow-confirm",
+    "dialog:allow-message",
     "shell:default",
     "core:window:allow-set-title",
     "core:webview:allow-create-webview-window",

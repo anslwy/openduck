@@ -3154,7 +3154,6 @@
     }
 
     async function handleDeleteSession(session: SessionMetadata) {
-        if (!confirm(`Delete session "${session.title}"?`)) return;
         try {
             await invoke("delete_session", { sessionId: session.id });
             if (session.id === currentSessionId) {
