@@ -2795,12 +2795,7 @@ async fn set_csm_voice(
 ) -> Result<(), String> {
     let selected_voice = CsmVoice::from_key(&voice)?;
     let context_audio = resolve_csm_context_audio_file(&app_handle, state.inner(), selected_voice)?;
-
-    let context_text = if selected_voice == CsmVoice::Custom {
-        state.csm_reference_text.lock().unwrap().clone()
-    } else {
-        None
-    };
+    let context_text = load_csm_context_transcript(&app_handle, state.inner(), selected_voice);
 
     {
         let mut selected_voice_guard = state.selected_csm_voice.lock().unwrap();
@@ -2883,11 +2878,7 @@ async fn start_csm_server_inner(
 
     let (startup_context_audio, startup_context_text) = if selected_variant.uses_reference_audio() {
         let audio = resolve_csm_context_audio_file(app_handle, state, selected_voice).ok();
-        let text = if selected_voice == CsmVoice::Custom {
-            state.csm_reference_text.lock().unwrap().clone()
-        } else {
-            None
-        };
+        let text = load_csm_context_transcript(app_handle, state, selected_voice);
         (audio, text)
     } else {
         (None, None)
@@ -10486,6 +10477,52 @@ fn resolve_csm_context_audio_file(
         .into_iter()
         .find(|candidate| candidate.exists())
         .ok_or_else(|| format!("Unable to locate {}", file_name))
+}
+
+fn resolve_csm_context_transcript_file(
+    app_handle: &tauri::AppHandle,
+    state: &AppState,
+    voice: CsmVoice,
+) -> Result<PathBuf, String> {
+    if voice == CsmVoice::Custom {
+        return Err("Custom voice does not have a default transcript file".to_string());
+    }
+
+    let file_name = voice.transcript_file_name().unwrap();
+    let mut candidates = Vec::new();
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir.join(file_name));
+        candidates.push(current_dir.join("src-tauri").join("..").join(file_name));
+
+        if current_dir.ends_with("src-tauri") {
+            candidates.push(current_dir.join("..").join(file_name));
+        }
+    }
+
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        candidates.push(resource_dir.join(file_name));
+        candidates.push(resource_dir.join("_up_").join(file_name));
+        candidates.push(resource_dir.join("resources").join(file_name));
+    }
+
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .ok_or_else(|| format!("Unable to locate {}", file_name))
+}
+
+fn load_csm_context_transcript(
+    app_handle: &tauri::AppHandle,
+    state: &AppState,
+    voice: CsmVoice,
+) -> Option<String> {
+    if voice == CsmVoice::Custom {
+        return state.csm_reference_text.lock().unwrap().clone();
+    }
+
+    let path = resolve_csm_context_transcript_file(app_handle, state, voice).ok()?;
+    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }
 
 fn reap_stale_model_processes(app_handle: &tauri::AppHandle) {

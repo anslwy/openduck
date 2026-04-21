@@ -98,6 +98,14 @@ impl CsmVoice {
             Self::Custom => None,
         }
     }
+
+    pub(crate) fn transcript_file_name(self) -> Option<&'static str> {
+        match self {
+            Self::Male => Some(CSM_MALE_REFERENCE_TEXT_FILE),
+            Self::Female => Some(CSM_FEMALE_REFERENCE_TEXT_FILE),
+            Self::Custom => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

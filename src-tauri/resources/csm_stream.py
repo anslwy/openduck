@@ -617,6 +617,7 @@ def run_csm_server(
             break
         if request_type == "set_context":
             context_audio_path = request.get("context_audio_path")
+            context_text = request.get("context_text", "")
             try:
                 reference_audio = (
                     load_reference_audio(Path(str(context_audio_path)), read_audio)
@@ -901,7 +902,9 @@ def run_kokoro_server(_quantize: bool) -> int:
     return 0
 
 
-def run_cosyvoice2_server(_quantize: bool, context_audio: Path | None = None) -> int:
+def run_cosyvoice2_server(
+    _quantize: bool, context_audio: Path | None = None, context_text: str = ""
+) -> int:
     try:
         emit_status("Importing CosyVoice2 helpers...")
         import mlx.core as mx
@@ -926,6 +929,7 @@ def run_cosyvoice2_server(_quantize: bool, context_audio: Path | None = None) ->
 
     sample_rate = resolve_model_sample_rate(model)
     reference_audio = None
+    reference_text = context_text
 
     def load_reference_audio():
         nonlocal reference_audio
@@ -988,6 +992,7 @@ def run_cosyvoice2_server(_quantize: bool, context_audio: Path | None = None) ->
             break
         if request_type == "set_context":
             context_audio_path = request.get("context_audio_path")
+            reference_text = request.get("context_text", "")
             try:
                 context_audio = (
                     Path(str(context_audio_path)) if context_audio_path else None
@@ -1042,7 +1047,7 @@ def run_cosyvoice2_server(_quantize: bool, context_audio: Path | None = None) ->
                 model,
                 text=text,
                 ref_audio=reference_audio,
-                ref_text=request.get("ref_text"),
+                ref_text=request.get("ref_text", reference_text),
                 speed=float(request.get("speed", 1.0)),
                 temperature=float(request.get("temperature", 0.7)),
                 top_k=int(request.get("top_k", 50)),
@@ -1099,7 +1104,10 @@ def run_cosyvoice2_server(_quantize: bool, context_audio: Path | None = None) ->
 
 
 def run_cosyvoice3_server(
-    _quantize: bool, repo_id: str, context_audio: Path | None = None
+    _quantize: bool,
+    repo_id: str,
+    context_audio: Path | None = None,
+    context_text: str = "",
 ) -> int:
     try:
         emit_status("Importing CosyVoice3 helpers...")
@@ -1125,6 +1133,7 @@ def run_cosyvoice3_server(
 
     sample_rate = resolve_model_sample_rate(model)
     reference_audio = None
+    reference_text = context_text
 
     def load_reference_audio():
         nonlocal reference_audio
@@ -1187,6 +1196,7 @@ def run_cosyvoice3_server(
             break
         if request_type == "set_context":
             context_audio_path = request.get("context_audio_path")
+            reference_text = request.get("context_text", "")
             try:
                 context_audio = (
                     Path(str(context_audio_path)) if context_audio_path else None
@@ -1241,7 +1251,7 @@ def run_cosyvoice3_server(
                 model,
                 text=text,
                 ref_audio=reference_audio,
-                ref_text=request.get("ref_text"),
+                ref_text=request.get("ref_text", reference_text),
                 speed=float(request.get("speed", 1.0)),
                 temperature=float(request.get("temperature", 0.7)),
                 top_k=int(request.get("top_k", 50)),
@@ -1309,21 +1319,23 @@ def run_server(
     if model_name == "kokoro":
         return run_kokoro_server(quantize)
     if model_name == "cosyvoice2":
-        return run_cosyvoice2_server(quantize, context_audio)
+        return run_cosyvoice2_server(quantize, context_audio, context_text)
     if model_name == "cosyvoice3_8bit":
         return run_cosyvoice3_server(
-            quantize, COSYVOICE3_8BIT_MODEL_REPO, context_audio
+            quantize, COSYVOICE3_8BIT_MODEL_REPO, context_audio, context_text
         )
     if model_name == "cosyvoice3_4bit":
         return run_cosyvoice3_server(
-            quantize, COSYVOICE3_4BIT_MODEL_REPO, context_audio
+            quantize, COSYVOICE3_4BIT_MODEL_REPO, context_audio, context_text
         )
     if model_name == "cosyvoice3_fp16":
         return run_cosyvoice3_server(
-            quantize, COSYVOICE3_FP16_MODEL_REPO, context_audio
+            quantize, COSYVOICE3_FP16_MODEL_REPO, context_audio, context_text
         )
     if model_name == "chatterbox_8bit":
-        return run_chatterbox_server(quantize, context_audio, default_audio)
+        return run_chatterbox_server(
+            quantize, context_audio, default_audio, context_text
+        )
 
     emit({"type": "error", "message": f"Unsupported speech model: {model_name}"})
     return 2
@@ -1333,6 +1345,7 @@ def run_chatterbox_server(
     _quantize: bool,
     context_audio: Path | None = None,
     default_audio: Path | None = None,
+    context_text: str = "",
 ) -> int:
     try:
         emit_status("Importing Chatterbox helpers...")
@@ -1358,6 +1371,7 @@ def run_chatterbox_server(
 
     sample_rate = resolve_model_sample_rate(model)
     reference_audio = None
+    reference_text = context_text
 
     def fallback_to_default():
         nonlocal reference_audio
@@ -1446,6 +1460,7 @@ def run_chatterbox_server(
             break
         if request_type == "set_context":
             context_audio_path = request.get("context_audio_path")
+            reference_text = request.get("context_text", "")
             try:
                 context_audio = (
                     Path(str(context_audio_path)) if context_audio_path else None
@@ -1501,7 +1516,7 @@ def run_chatterbox_server(
                 model,
                 text=text,
                 ref_audio=reference_audio,
-                ref_text=request.get("ref_text"),
+                ref_text=request.get("ref_text", reference_text),
                 speed=float(request.get("speed", 1.0)),
                 temperature=float(request.get("temperature", 0.7)),
                 top_k=int(request.get("top_k", 50)),
