@@ -1324,42 +1324,6 @@ def run_server(
     return 2
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--download", action="store_true")
-    parser.add_argument("--server", action="store_true")
-    parser.add_argument("--model", default="csm")
-    parser.add_argument("--quantize", action="store_true")
-    parser.add_argument("--context-audio", type=Path)
-    parser.add_argument("--context-text", default="")
-    args = parser.parse_args()
-
-    if args.download:
-        try:
-            if args.model == "kokoro":
-                paths = download_kokoro_assets()
-                emit({"type": "downloaded", "paths": paths})
-            elif args.model == "cosyvoice2":
-                paths = download_cosyvoice2_assets()
-                emit({"type": "downloaded", "paths": paths})
-            elif args.model == "cosyvoice3_8bit":
-                paths = download_cosyvoice3_assets(COSYVOICE3_8BIT_MODEL_REPO)
-                emit({"type": "downloaded", "paths": paths})
-            elif args.model == "cosyvoice3_4bit":
-                paths = download_cosyvoice3_assets(COSYVOICE3_4BIT_MODEL_REPO)
-                emit({"type": "downloaded", "paths": paths})
-            elif args.model == "cosyvoice3_fp16":
-                paths = download_cosyvoice3_assets(COSYVOICE3_FP16_MODEL_REPO)
-                emit({"type": "downloaded", "paths": paths})
-            elif args.model == "chatterbox_8bit":
-                paths = download_chatterbox_assets()
-                emit({"type": "downloaded", "paths": paths})
-            else:
-                path = download_csm_weights()
-                emit({"type": "downloaded", "path": path})
-    return 0
-
-
 def run_chatterbox_server(_quantize: bool, context_audio: Path | None = None) -> int:
     try:
         emit_status("Importing Chatterbox helpers...")
@@ -1554,6 +1518,42 @@ def run_chatterbox_server(_quantize: bool, context_audio: Path | None = None) ->
             gc.collect()
 
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--download", action="store_true")
+    parser.add_argument("--server", action="store_true")
+    parser.add_argument("--model", default="csm")
+    parser.add_argument("--quantize", action="store_true")
+    parser.add_argument("--context-audio", type=Path)
+    parser.add_argument("--context-text", default="")
+    args = parser.parse_args()
+
+    if args.download:
+        try:
+            if args.model == "kokoro":
+                paths = download_kokoro_assets()
+                emit({"type": "downloaded", "paths": paths})
+            elif args.model == "cosyvoice2":
+                paths = download_cosyvoice2_assets()
+                emit({"type": "downloaded", "paths": paths})
+            elif args.model == "cosyvoice3_8bit":
+                paths = download_cosyvoice3_assets(COSYVOICE3_8BIT_MODEL_REPO)
+                emit({"type": "downloaded", "paths": paths})
+            elif args.model == "cosyvoice3_4bit":
+                paths = download_cosyvoice3_assets(COSYVOICE3_4BIT_MODEL_REPO)
+                emit({"type": "downloaded", "paths": paths})
+            elif args.model == "cosyvoice3_fp16":
+                paths = download_cosyvoice3_assets(COSYVOICE3_FP16_MODEL_REPO)
+                emit({"type": "downloaded", "paths": paths})
+            elif args.model == "chatterbox_8bit":
+                paths = download_chatterbox_assets()
+                emit({"type": "downloaded", "paths": paths})
+            else:
+                path = download_csm_weights()
+                emit({"type": "downloaded", "path": path})
+            return 0
         except Exception as exc:
             emit(
                 {
