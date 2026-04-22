@@ -18,6 +18,7 @@
     import AppHeader from "$lib/components/home/AppHeader.svelte";
     import SearchModal from "$lib/components/home/SearchModal.svelte";
     import ExternalLlmConfigModal from "$lib/components/home/ExternalLlmConfigModal.svelte";
+    import SubtitleTranslationLlmConfigModal from "$lib/components/home/SubtitleTranslationLlmConfigModal.svelte";
     import GemmaBanner from "$lib/components/home/GemmaBanner.svelte";
     import SpeechBanner from "$lib/components/home/SpeechBanner.svelte";
     import SttBanner from "$lib/components/home/SttBanner.svelte";
@@ -72,6 +73,7 @@
         SHOW_STAT_STORAGE_KEY,
         SHOW_SUBTITLE_STORAGE_KEY,
         SHOW_AI_SUBTITLE_STORAGE_KEY,
+        AI_SUBTITLE_TARGET_LANGUAGE_STORAGE_KEY,
         SHOW_CALL_TIMER_STORAGE_KEY,
         SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
         AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
@@ -81,6 +83,7 @@
         GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY,
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
         DEFAULT_SHOW_AI_SUBTITLE,
+        DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE,
         DEFAULT_SHOW_CALL_TIMER,
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
         DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP,
@@ -104,7 +107,9 @@
         AppUpdateInfo,
         AppUpdateStatus,
         AiSubtitleEvent,
+        AiSubtitleTargetLanguage,
         AssistantResponseEvent,
+        AssistantTranslationsEvent,
         BuildInfo,
         CallStageEvent,
         CallStagePhase,
@@ -166,6 +171,11 @@
     type StoredShowAiSubtitlePreference = {
         version: 1;
         enabled: boolean;
+    };
+    
+    type StoredAiSubtitleTargetLanguagePreference = {
+        version: 1;
+        targetLanguage: AiSubtitleTargetLanguage;
     };
 
     type StoredShowHiddenWindowOverlayPreference = {
@@ -290,7 +300,11 @@
     let playbackIdleTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let eventUnlisteners: UnlistenFn[] = [];
     let activeTtsRequestId: number | null = null;
-    let ttsSegmentTextMap = new Map<number, string[]>();
+    let ttsSegmentTextMap = new Map<number, { text: string; index: number }[]>();
+    let assistantSegmentTranslationsMap = new Map<
+        number,
+        Map<number, Record<string, string>>
+    >();
     let syncedTtsPlaybackActive = false;
     let pendingCompletionPongRequestId = $state<number | null>(null);
     let pendingTtsSegments = $state(0);
@@ -309,6 +323,9 @@
     let showStatEnabled = $state(false);
     let showSubtitleEnabled = $state(true);
     let showAiSubtitleEnabled = $state(DEFAULT_SHOW_AI_SUBTITLE);
+    let aiSubtitleTargetLanguage = $state<AiSubtitleTargetLanguage>(
+        DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE,
+    );
     let showCallTimerEnabled = $state(DEFAULT_SHOW_CALL_TIMER);
     let showHiddenWindowOverlayEnabled = $state(
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
@@ -343,6 +360,10 @@
     let lmstudioApiKey = $state("");
     let openAiCompatibleBaseUrl = $state("");
     let openAiCompatibleApiKey = $state("");
+    let showSubtitleTranslationLlmConfig = $state(false);
+    let subtitleTranslationBaseUrl = $state("");
+    let subtitleTranslationApiKey = $state("");
+    let subtitleTranslationModelId = $state("");
     let showConversationPopup = $state(false);
     let showSessionsPopup = $state(false);
     let sessions = $state<SessionMetadata[]>([]);
@@ -436,7 +457,9 @@
         isPreparingRuntime || runtimeSetupError !== null,
     );
     const conversationLogHasVisibleImages = $derived(
-        conversationLogEntries.some((entry) => entry.imageUrls.length > 0),
+        conversationLogEntries.some(
+            (entry) => (entry.imageUrls?.length ?? 0) > 0,
+        ),
     );
     const modelsReady = $derived(
         isGemmaLoaded && isCsmLoaded && effectiveSttLoaded,
@@ -550,6 +573,11 @@
 
         return ollamaApiKey;
     }
+
+    const subtitleTranslationLlmConfigured = $derived(
+        subtitleTranslationBaseUrl.trim() !== "" &&
+            subtitleTranslationModelId.trim() !== "",
+    );
 
     async function syncExternalModelsForVariant(variant: ExternalGemmaVariant) {
         if (variant === "ollama") {
@@ -898,7 +926,11 @@
         });
     }
 
-    function setCurrentAiSubtitle(text: string) {
+    async function setCurrentAiSubtitle(
+        text: string,
+        requestId?: number,
+        segmentIndex?: number,
+    ) {
         const nextText = text.trim();
         if (nextText && showAiSubtitleEnabled) {
             clearLiveTranscriptSubtitle();
@@ -907,8 +939,40 @@
             return;
         }
 
-        currentAiSubtitle = nextText;
-        syncAiSubtitle(nextText);
+        if (nextText && aiSubtitleTargetLanguage !== "none") {
+            let translated: string | undefined;
+
+            if (requestId != null && segmentIndex != null) {
+                const requestMap = assistantSegmentTranslationsMap.get(requestId);
+                if (requestMap) {
+                    const translations = requestMap.get(segmentIndex);
+                    if (translations) {
+                        translated = translations[aiSubtitleTargetLanguage];
+                    }
+                }
+            }
+
+            if (!translated) {
+                try {
+                    translated = await invoke<string>("translate_text", {
+                        text: nextText,
+                        targetLang: aiSubtitleTargetLanguage,
+                    });
+                } catch (err) {
+                    console.error("Failed to translate subtitle:", err);
+                }
+            }
+
+            if (translated) {
+                currentAiSubtitle = `${translated}\n${nextText}`;
+            } else {
+                currentAiSubtitle = nextText;
+            }
+        } else {
+            currentAiSubtitle = nextText;
+        }
+
+        syncAiSubtitle(currentAiSubtitle);
     }
 
     function updateLiveTranscriptSubtitle(text: string) {
@@ -1019,38 +1083,36 @@
     }
 
     function appendConversationLogEntry(
-        role: ConversationLogEntry["role"],
+        role: "user" | "assistant",
         text: string,
-        imageUrls: string[] = [],
-    ) {
-        const normalizedText = text.trim();
-        if (!normalizedText && imageUrls.length === 0) {
-            return null;
-        }
-
-        const entryId = nextConversationEntryId;
+        imageUrls: string[],
+        translations: Record<string, string> = {},
+    ): number {
+        const id = nextConversationEntryId++;
         conversationLogEntries = [
             ...conversationLogEntries,
             {
-                id: entryId,
+                id,
                 role,
-                text: normalizedText,
-                imageUrls: imageUrls,
+                text,
+                imageUrls,
                 contextEntryId: null,
+                isContextBacked: false,
+                translations,
             },
         ];
-        nextConversationEntryId += 1;
         scrollConversationLogToBottom();
-        return entryId;
+        return id;
     }
 
     function upsertAssistantConversationLogEntry(
         requestId: number,
         text: string,
         appendToAssistantEntryId: number | null = null,
+        translations: Record<string, string> = {},
     ) {
         const normalizedText = text.trim();
-        if (!normalizedText) {
+        if (!normalizedText && Object.keys(translations).length === 0) {
             return;
         }
 
@@ -1063,7 +1125,14 @@
                 activeAssistantConversationEntryId = appendToAssistantEntryId;
                 conversationLogEntries = conversationLogEntries.map((entry) =>
                     entry.id === appendToAssistantEntryId
-                        ? { ...entry, text: normalizedText }
+                        ? {
+                              ...entry,
+                              text: normalizedText,
+                              translations: {
+                                  ...(entry.translations || {}),
+                                  ...translations,
+                              },
+                          }
                         : entry,
                 );
                 scrollConversationLogToBottom();
@@ -1080,13 +1149,21 @@
                 "assistant",
                 normalizedText,
                 [],
+                translations,
             );
             return;
         }
 
         conversationLogEntries = conversationLogEntries.map((entry) =>
             entry.id === activeAssistantConversationEntryId
-                ? { ...entry, text: normalizedText }
+                ? {
+                      ...entry,
+                      text: normalizedText,
+                      translations: {
+                          ...(entry.translations || {}),
+                          ...translations,
+                      },
+                  }
                 : entry,
         );
         scrollConversationLogToBottom();
@@ -1176,6 +1253,7 @@
                 return {
                     ...entry,
                     contextEntryId: payload.userEntryId,
+                    isContextBacked: true,
                 };
             }
 
@@ -1183,6 +1261,7 @@
                 return {
                     ...entry,
                     contextEntryId: payload.assistantEntryId,
+                    isContextBacked: true,
                 };
             }
 
@@ -1375,6 +1454,23 @@
         };
         window.localStorage.setItem(
             SHOW_AI_SUBTITLE_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function persistAiSubtitleTargetLanguagePreference(
+        targetLanguage: AiSubtitleTargetLanguage,
+    ) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredAiSubtitleTargetLanguagePreference = {
+            version: 1,
+            targetLanguage,
+        };
+        window.localStorage.setItem(
+            AI_SUBTITLE_TARGET_LANGUAGE_STORAGE_KEY,
             JSON.stringify(payload),
         );
     }
@@ -2026,10 +2122,17 @@
 
     function applyShowAiSubtitlePreference(enabled: boolean) {
         showAiSubtitleEnabled = enabled;
-        localStorage.setItem(
-            SHOW_AI_SUBTITLE_STORAGE_KEY,
-            JSON.stringify(enabled),
-        );
+        persistShowAiSubtitlePreference(enabled);
+    }
+
+    function applyAiSubtitleTargetLanguagePreference(
+        targetLanguage: AiSubtitleTargetLanguage,
+    ) {
+        aiSubtitleTargetLanguage = targetLanguage;
+        void invoke("set_ai_subtitle_target_language", {
+            targetLang: targetLanguage,
+        });
+        persistAiSubtitleTargetLanguagePreference(targetLanguage);
     }
 
     function applyShowCallTimerPreference(enabled: boolean) {
@@ -2169,9 +2272,21 @@
         const stored = localStorage.getItem(SHOW_AI_SUBTITLE_STORAGE_KEY);
         const storedEnabled =
             stored !== null
-                ? (JSON.parse(stored) as boolean)
+                ? (JSON.parse(stored) as StoredShowAiSubtitlePreference).enabled
                 : DEFAULT_SHOW_AI_SUBTITLE;
         applyShowAiSubtitlePreference(storedEnabled);
+    }
+
+    async function initializeAiSubtitleTargetLanguagePreference() {
+        const stored = localStorage.getItem(
+            AI_SUBTITLE_TARGET_LANGUAGE_STORAGE_KEY,
+        );
+        const storedTargetLanguage =
+            stored !== null
+                ? (JSON.parse(stored) as StoredAiSubtitleTargetLanguagePreference)
+                      .targetLanguage
+                : DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE;
+        applyAiSubtitleTargetLanguagePreference(storedTargetLanguage);
     }
 
     async function initializeShowCallTimerPreference() {
@@ -2613,11 +2728,8 @@
         }
 
         const normalizedText = nextText.trim();
-        const nextImageUrls = clearImage ? [] : entry.imageUrls;
-        if (!normalizedText && nextImageUrls.length === 0) {
-            alert("Conversation messages need text or an attached image.");
-            return false;
-        }
+        const nextImageUrls = clearImage ? [] : (entry.imageUrls || []);
+        const nextTranslations = { ...(entry.translations || {}) };
 
         if (
             normalizedText === entry.text &&
@@ -2627,19 +2739,10 @@
         }
 
         // If it's a context-backed entry, we must update the backend.
-        // Even if it was "pruned" in the UI (contextEntryId == null),
-        // it might still be in the active backend context if it's recent enough.
-        // However, the UI currently clears contextEntryId for anything beyond 48 entries.
         if (entry.contextEntryId !== null) {
             isSavingConversationLogEntryEdit = true;
 
             try {
-                console.log(
-                    "Updating context entry",
-                    entry.contextEntryId,
-                    "with text",
-                    normalizedText,
-                );
                 await invoke("update_conversation_context_entry", {
                     entryId: entry.contextEntryId,
                     text: normalizedText,
@@ -2654,6 +2757,7 @@
                                   ...candidate,
                                   text: normalizedText,
                                   imageUrls: nextImageUrls,
+                                  translations: nextTranslations,
                               }
                             : candidate,
                 );
@@ -2670,6 +2774,7 @@
                                       text: normalizedText,
                                       imageUrls: nextImageUrls,
                                       contextEntryId: null,
+                                      translations: nextTranslations,
                                   }
                                 : candidate,
                     );
@@ -2684,13 +2789,13 @@
             }
         } else {
             // No context ID. Just update locally.
-            // If it's currently being responded to, markConversationTurnAsContextBacked will sync it later.
             conversationLogEntries = conversationLogEntries.map((candidate) =>
                 candidate.id === entryId
                     ? {
                           ...candidate,
                           text: normalizedText,
                           imageUrls: nextImageUrls,
+                          translations: nextTranslations,
                       }
                     : candidate,
             );
@@ -2700,7 +2805,7 @@
 
     async function clearConversationLogImages() {
         const hasVisibleImages = conversationLogEntries.some(
-            (entry) => entry.imageUrls.length > 0,
+            (entry) => (entry.imageUrls?.length ?? 0) > 0,
         );
         if (!hasVisibleImages) {
             return;
@@ -2708,7 +2813,8 @@
 
         const hasContextImages = conversationLogEntries.some(
             (entry) =>
-                entry.contextEntryId !== null && entry.imageUrls.length > 0,
+                entry.contextEntryId !== null &&
+                (entry.imageUrls?.length ?? 0) > 0,
         );
 
         isClearingConversationLogImages = true;
@@ -2949,6 +3055,7 @@
     }
 
     function closeAboutPopup() {
+        closeSubtitleTranslationLlmConfig();
         showAboutPopup = false;
     }
 
@@ -3120,6 +3227,7 @@
                     "assistant",
                     turn.assistant_text,
                     [],
+                    turn.translations,
                 );
                 // Mark them as context backed immediately
                 conversationLogEntries = conversationLogEntries.map((entry) => {
@@ -3695,6 +3803,11 @@
 
         if (previewImageUrl) {
             previewImageUrl = null;
+            return;
+        }
+
+        if (showSubtitleTranslationLlmConfig) {
+            closeSubtitleTranslationLlmConfig();
             return;
         }
 
@@ -4420,6 +4533,22 @@
         }
     }
 
+    async function syncSubtitleTranslationLlmConfig() {
+        try {
+            const [url, key, modelId] = await invoke<
+                [string, string | null, string]
+            >("get_subtitle_translation_llm_config");
+            subtitleTranslationBaseUrl = url;
+            subtitleTranslationApiKey = key ?? "";
+            subtitleTranslationModelId = modelId;
+        } catch (err) {
+            console.error(
+                "Failed to sync subtitle translation LLM config:",
+                err,
+            );
+        }
+    }
+
     async function saveExternalLlmConfig(url: string, key: string) {
         const normalizedUrl = url.trim();
         const normalizedKey = key.trim();
@@ -4458,12 +4587,48 @@
         }
     }
 
+    async function testSubtitleTranslationConnection(
+        url: string,
+        key: string,
+    ) {
+        return await invoke<string[]>("test_subtitle_translation_connection", {
+            url,
+            key: key || null,
+        });
+    }
+
+    async function saveSubtitleTranslationLlmConfig(
+        url: string,
+        key: string,
+        modelId: string,
+    ) {
+        try {
+            await invoke("set_subtitle_translation_llm_config", {
+                url,
+                key: key || null,
+                modelId,
+            });
+            await syncSubtitleTranslationLlmConfig();
+        } catch (err) {
+            console.error("Failed to save subtitle translation LLM config:", err);
+            throw err;
+        }
+    }
+
     function openExternalConfig() {
         showExternalLlmConfig = true;
     }
 
     function closeExternalConfig() {
         showExternalLlmConfig = false;
+    }
+
+    function openSubtitleTranslationLlmConfig() {
+        showSubtitleTranslationLlmConfig = true;
+    }
+
+    function closeSubtitleTranslationLlmConfig() {
+        showSubtitleTranslationLlmConfig = false;
     }
 
     async function ensureRuntimeDependencies() {
@@ -4572,12 +4737,16 @@
                     if (requestId != null) {
                         const segments = ttsSegmentTextMap.get(requestId);
                         if (segments && segments.length > 0) {
-                            const startedText = segments.shift();
-                            if (startedText) {
+                            const segment = segments.shift();
+                            if (segment) {
                                 currentSpokenResponse = (
-                                    currentSpokenResponse + startedText
+                                    currentSpokenResponse + segment.text
                                 ).trim();
-                                setCurrentAiSubtitle(startedText);
+                                setCurrentAiSubtitle(
+                                    segment.text,
+                                    requestId,
+                                    segment.index,
+                                );
                             }
                         }
                     }
@@ -5686,9 +5855,34 @@
                             pendingTtsSegments += 1;
                             const segments =
                                 ttsSegmentTextMap.get(payload.request_id) ?? [];
-                            segments.push(payload.text);
+                            segments.push({
+                                text: payload.text,
+                                index: payload.index,
+                            });
                             ttsSegmentTextMap.set(payload.request_id, segments);
                             updateStageAfterPlaybackStateChange();
+                        },
+                    ),
+                    listen<AssistantTranslationsEvent>(
+                        "assistant-translations",
+                        ({ payload }) => {
+                            let requestMap =
+                                assistantSegmentTranslationsMap.get(
+                                    payload.request_id,
+                                );
+                            if (!requestMap) {
+                                requestMap = new Map();
+                                assistantSegmentTranslationsMap.set(
+                                    payload.request_id,
+                                    requestMap,
+                                );
+                            }
+
+                            for (const [indexStr, translations] of Object.entries(
+                                payload.translations,
+                            )) {
+                                requestMap.set(parseInt(indexStr), translations);
+                            }
                         },
                     ),
                     listen<CsmAudioChunkEvent>(
@@ -5787,11 +5981,12 @@
                                 reasoningText = payload.reasoning_text;
                             }
 
-                            upsertAssistantConversationLogEntry(
-                                payload.request_id,
-                                payload.text,
-                                payload.append_to_assistant_entry_id ?? null,
-                            );
+                             upsertAssistantConversationLogEntry(
+                                 payload.request_id,
+                                 payload.text,
+                                 payload.append_to_assistant_entry_id ?? null,
+                                 payload.translations,
+                             );
                         },
                     ),
                     listen<ConversationContextCommittedEvent>(
@@ -6035,6 +6230,7 @@
             await syncOllamaConfig();
             await syncLmStudioConfig();
             await syncOpenAiCompatibleConfig();
+            await syncSubtitleTranslationLlmConfig();
             await initializePongPlaybackPreference();
             await initializeAutoUnmuteOnPastedScreenshotPreference();
             await initializeSelectLastSessionPreference();
@@ -6042,6 +6238,7 @@
             await initializeShowStatPreference();
             await initializeShowSubtitlePreference();
             await initializeShowAiSubtitlePreference();
+            await initializeAiSubtitleTargetLanguagePreference();
             await initializeShowCallTimerPreference();
             await initializeShowHiddenWindowOverlayPreference();
             await initializeEndOfUtteranceSilencePreference();
@@ -6085,6 +6282,9 @@
 
         const handleClickOutside = (event: MouseEvent) => {
             const target = event.target as HTMLElement;
+            const isInsideSubtitleTranslationModal =
+                !!target.closest(".subtitle-translation-config-modal") ||
+                !!target.closest(".subtitle-translation-config-backdrop");
 
             // If the image preview is open, don't close other popups
             if (previewImageUrl) {
@@ -6140,7 +6340,8 @@
             if (
                 showAboutPopup &&
                 aboutPopupEl &&
-                !aboutPopupEl.contains(target)
+                !aboutPopupEl.contains(target) &&
+                !isInsideSubtitleTranslationModal
             ) {
                 if (!document.querySelector(".about-btn")?.contains(target)) {
                     closeAboutPopup();
@@ -6601,6 +6802,7 @@
                 <ConversationPopup
                     {conversationLogEntries}
                     sessionTitle={currentSessionTitle}
+                    {aiSubtitleTargetLanguage}
                     {popupActionsBusy}
                     {calling}
                     onClearHistory={clearConversationLogImages}
@@ -6684,6 +6886,8 @@
                     {showStatEnabled}
                     {showSubtitleEnabled}
                     {showAiSubtitleEnabled}
+                    {aiSubtitleTargetLanguage}
+                    {subtitleTranslationLlmConfigured}
                     {showCallTimerEnabled}
                     {showHiddenWindowOverlayEnabled}
                     {endOfUtteranceSilenceMs}
@@ -6702,6 +6906,8 @@
                     onUpdateShowStat={applyShowStatPreference}
                     onUpdateShowSubtitle={applyShowSubtitlePreference}
                     onUpdateShowAiSubtitle={applyShowAiSubtitlePreference}
+                    onUpdateAiSubtitleTargetLanguage={applyAiSubtitleTargetLanguagePreference}
+                    onOpenSubtitleTranslationLlmConfig={openSubtitleTranslationLlmConfig}
                     onUpdateShowCallTimer={applyShowCallTimerPreference}
                     onUpdateShowHiddenWindowOverlay={applyShowHiddenWindowOverlayPreference}
                     onUpdateEndOfUtteranceSilenceMs={applyEndOfUtteranceSilencePreference}
@@ -6711,6 +6917,17 @@
                     onUpdateLlmImageHistoryLimit={applyLlmImageHistoryLimitPreference}
                 />
             </div>
+        {/if}
+
+        {#if showSubtitleTranslationLlmConfig}
+            <SubtitleTranslationLlmConfigModal
+                baseUrl={subtitleTranslationBaseUrl}
+                apiKey={subtitleTranslationApiKey}
+                modelId={subtitleTranslationModelId}
+                onSave={saveSubtitleTranslationLlmConfig}
+                onTestConnection={testSubtitleTranslationConnection}
+                onClose={closeSubtitleTranslationLlmConfig}
+            />
         {/if}
 
         <div

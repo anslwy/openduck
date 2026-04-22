@@ -15,6 +15,35 @@ pub(crate) struct CsmAudioStartEvent {
 pub(crate) struct CsmAudioQueuedEvent {
     pub(crate) request_id: u64,
     pub(crate) text: String,
+    pub(crate) index: usize,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct AssistantTranslationsEvent {
+    pub(crate) request_id: u64,
+    pub(crate) translations:
+        std::collections::HashMap<usize, std::collections::HashMap<String, String>>,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct AssistantResponseEvent {
+    pub(crate) request_id: u64,
+    pub(crate) text: String,
+    pub(crate) reasoning_text: String,
+    pub(crate) is_final: bool,
+    pub(crate) append_to_assistant_entry_id: Option<u64>,
+    pub(crate) translations: std::collections::HashMap<String, String>,
+}
+
+pub(crate) const ASSISTANT_TRANSLATIONS_EVENT: &str = "assistant-translations";
+
+pub(crate) fn emit_assistant_translations(
+    app_handle: &AppHandle,
+    payload: AssistantTranslationsEvent,
+) {
+    if let Err(err) = app_handle.emit(ASSISTANT_TRANSLATIONS_EVENT, payload) {
+        error!("Failed to emit assistant translations event: {}", err);
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -80,15 +109,6 @@ pub(crate) struct TranscriptEvent {
 #[derive(Clone, Serialize)]
 pub(crate) struct TranscriptPartialEvent {
     pub(crate) text: String,
-}
-
-#[derive(Clone, Serialize)]
-pub(crate) struct AssistantResponseEvent {
-    pub(crate) request_id: u64,
-    pub(crate) text: String,
-    pub(crate) reasoning_text: String,
-    pub(crate) is_final: bool,
-    pub(crate) append_to_assistant_entry_id: Option<u64>,
 }
 
 #[derive(Clone, Serialize)]

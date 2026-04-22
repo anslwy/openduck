@@ -155,6 +155,8 @@ struct ConversationTurn {
     image_paths: Vec<PathBuf>,
     #[serde(default)]
     user_image_data_urls: Vec<String>,
+    #[serde(default)]
+    translations: HashMap<String, String>,
 
     #[serde(skip_serializing, default)]
     image_path: Option<PathBuf>,
@@ -307,6 +309,16 @@ struct PersistedExternalLlmProviderConfig {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+struct PersistedSubtitleTranslationLlmConfig {
+    #[serde(default)]
+    base_url: String,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    model_id: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct PersistedExternalLlmProvidersConfig {
     #[serde(default = "default_ollama_provider_config")]
     ollama: PersistedExternalLlmProviderConfig,
@@ -322,6 +334,8 @@ struct PersistedAppConfig {
     version: u32,
     #[serde(default)]
     external_llm_providers: PersistedExternalLlmProvidersConfig,
+    #[serde(default)]
+    subtitle_translation_llm: PersistedSubtitleTranslationLlmConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -429,6 +443,9 @@ struct AppState {
     selected_openai_compatible_model: Mutex<String>,
     openai_compatible_base_url: Mutex<String>,
     openai_compatible_api_key: Mutex<Option<String>>,
+    subtitle_translation_base_url: Mutex<String>,
+    subtitle_translation_api_key: Mutex<Option<String>>,
+    subtitle_translation_model_id: Mutex<String>,
     global_shortcut_look_at_screen_region: Mutex<String>,
     global_shortcut_look_at_screen_region_hydrated: Mutex<bool>,
     global_shortcut_look_at_screen_region_modified_before_hydration: Mutex<bool>,
@@ -448,6 +465,7 @@ struct AppState {
     is_quitting: Mutex<bool>,
     vad: Mutex<Option<vad::Silero>>,
     screen_capture_child: Mutex<Option<std::process::Child>>,
+    ai_subtitle_target_language: Mutex<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -608,6 +626,12 @@ impl Default for PersistedExternalLlmProviderConfig {
     }
 }
 
+impl Default for PersistedSubtitleTranslationLlmConfig {
+    fn default() -> Self {
+        default_subtitle_translation_llm_config()
+    }
+}
+
 impl Default for PersistedExternalLlmProvidersConfig {
     fn default() -> Self {
         Self {
@@ -623,6 +647,7 @@ impl Default for PersistedAppConfig {
         Self {
             version: default_persisted_app_config_version(),
             external_llm_providers: PersistedExternalLlmProvidersConfig::default(),
+            subtitle_translation_llm: PersistedSubtitleTranslationLlmConfig::default(),
         }
     }
 }
@@ -675,6 +700,14 @@ fn default_openai_compatible_provider_config() -> PersistedExternalLlmProviderCo
     PersistedExternalLlmProviderConfig {
         base_url: default_openai_compatible_base_url(),
         api_key: None,
+    }
+}
+
+fn default_subtitle_translation_llm_config() -> PersistedSubtitleTranslationLlmConfig {
+    PersistedSubtitleTranslationLlmConfig {
+        base_url: default_openai_compatible_base_url(),
+        api_key: None,
+        model_id: String::new(),
     }
 }
 
@@ -814,6 +847,152 @@ fn app_update_info(update: &Update) -> AppUpdateInfo {
             .and_then(|value| value.as_str())
             .map(|value| value.to_string()),
         target: update.target.clone(),
+    }
+}
+
+async fn translate_text_with_llm(
+    text: &str,
+    target_lang: &str,
+    base_url: String,
+    api_key: Option<String>,
+    model_name: String,
+) -> Result<String, String> {
+    let text = text.trim();
+    if text.is_empty() || target_lang == "none" {
+        return Ok(text.to_string());
+    }
+
+    let prompt = format!(
+        "Translate the following text to {}. Reply with the translated text ONLY. Do not include any explanation or intro.\n\nText: {}",
+        target_lang, text
+    );
+
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: vec![ChatContent::Text {
+            text: prompt.to_string(),
+        }],
+    }];
+
+    let request = ChatRequest {
+        model: model_name,
+        messages,
+        stream: false,
+    };
+
+    let client = reqwest::Client::new();
+    let mut request_builder = client
+        .post(format!(
+            "{}/v1/chat/completions",
+            base_url.trim_end_matches('/')
+        ))
+        .json(&request);
+
+    if let Some(api_key) = api_key.as_ref() {
+        request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let response = request_builder
+        .send()
+        .await
+        .map_err(|e| format!("Failed to call LLM for translation: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("LLM returned error {status}: {body}"));
+    }
+
+    let payload = response
+        .json::<ChatCompletionResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse translation response: {e}"))?;
+
+    let translated_text_value = payload
+        .choices
+        .into_iter()
+        .next()
+        .and_then(|choice| choice.message.content)
+        .ok_or_else(|| "LLM translation response did not include content".to_string())?;
+
+    let translated_text = extract_chat_content_text(translated_text_value);
+    Ok(translated_text.trim().to_string())
+}
+
+async fn translate_text_internal(
+    state: &AppState,
+    text: &str,
+    target_lang: &str,
+) -> Result<String, String> {
+    if let Some((base_url, api_key, model_id)) = subtitle_translation_llm_config(state) {
+        return translate_text_with_llm(text, target_lang, base_url, api_key, model_id).await;
+    }
+
+    let server_port = *state.server_port.lock().unwrap();
+    let loaded_variant = loaded_gemma_variant(state)
+        .unwrap_or_else(|| selected_gemma_variant(state));
+
+    let model_name = selected_external_llm_model(state, loaded_variant)
+        .unwrap_or_else(|| "gemma".to_string());
+
+    let (base_url, api_key) = if loaded_variant.is_external() {
+        (
+            external_llm_base_url(state, loaded_variant)
+                .ok_or_else(|| format!("Missing {} base URL.", loaded_variant.label()))?,
+            external_llm_api_key(state, loaded_variant),
+        )
+    } else {
+        let port = server_port.ok_or_else(|| "LLM server is not running.".to_string())?;
+        (server_base_url(port), None)
+    };
+
+    translate_text_with_llm(text, target_lang, base_url, api_key, model_name).await
+}
+
+#[tauri::command]
+fn set_ai_subtitle_target_language(state: State<'_, AppState>, target_lang: String) {
+    let mut lang = state.ai_subtitle_target_language.lock().unwrap();
+    *lang = target_lang;
+}
+
+#[tauri::command]
+async fn translate_text(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+    target_lang: String,
+) -> Result<String, String> {
+    translate_text_internal(state.inner(), &text, &target_lang).await
+}
+
+fn ai_subtitle_target_language_name(target_lang: &str) -> Option<&'static str> {
+    match target_lang {
+        "ar" => Some("Arabic"),
+        "bn" => Some("Bengali"),
+        "zh" => Some("Simplified Chinese"),
+        "tw" => Some("Traditional Chinese"),
+        "en" => Some("English"),
+        "fr" => Some("French"),
+        "de" => Some("German"),
+        "gu" => Some("Gujarati"),
+        "hi" => Some("Hindi"),
+        "id" => Some("Indonesian"),
+        "it" => Some("Italian"),
+        "jp" => Some("Japanese"),
+        "ko" => Some("Korean"),
+        "mr" => Some("Marathi"),
+        "fa" => Some("Persian"),
+        "pt" => Some("Portuguese"),
+        "pa" => Some("Punjabi"),
+        "ru" => Some("Russian"),
+        "es" => Some("Spanish"),
+        "ta" => Some("Tamil"),
+        "te" => Some("Telugu"),
+        "th" => Some("Thai"),
+        "tr" => Some("Turkish"),
+        "ur" => Some("Urdu"),
+        "vi" => Some("Vietnamese"),
+        _ => None,
     }
 }
 
@@ -1821,6 +2000,10 @@ fn normalize_base_url(url: String) -> String {
     url.trim().to_string()
 }
 
+fn normalize_model_id(model_id: String) -> String {
+    model_id.trim().to_string()
+}
+
 fn selected_external_llm_model(state: &AppState, variant: GemmaVariant) -> Option<String> {
     match variant {
         GemmaVariant::Ollama => Some(state.selected_ollama_model.lock().unwrap().clone()),
@@ -1854,6 +2037,20 @@ fn external_llm_api_key(state: &AppState, variant: GemmaVariant) -> Option<Strin
         GemmaVariant::OpenAiCompatible => state.openai_compatible_api_key.lock().unwrap().clone(),
         GemmaVariant::E4b | GemmaVariant::E2b => None,
     }
+}
+
+fn subtitle_translation_llm_config(
+    state: &AppState,
+) -> Option<(String, Option<String>, String)> {
+    let base_url = state.subtitle_translation_base_url.lock().unwrap().clone();
+    let model_id = state.subtitle_translation_model_id.lock().unwrap().clone();
+
+    if base_url.trim().is_empty() || model_id.trim().is_empty() {
+        return None;
+    }
+
+    let api_key = state.subtitle_translation_api_key.lock().unwrap().clone();
+    Some((base_url, api_key, model_id))
 }
 
 async fn ollama_service_is_running(state: &AppState) -> bool {
@@ -2068,6 +2265,16 @@ fn get_openai_compatible_config(state: State<'_, AppState>) -> (String, Option<S
 }
 
 #[tauri::command]
+fn get_subtitle_translation_llm_config(
+    state: State<'_, AppState>,
+) -> (String, Option<String>, String) {
+    let url = state.subtitle_translation_base_url.lock().unwrap().clone();
+    let key = state.subtitle_translation_api_key.lock().unwrap().clone();
+    let model_id = state.subtitle_translation_model_id.lock().unwrap().clone();
+    (url, key, model_id)
+}
+
+#[tauri::command]
 fn set_ollama_config(
     state: State<'_, AppState>,
     url: String,
@@ -2116,6 +2323,49 @@ fn set_openai_compatible_config(
         *key_guard = normalize_optional_api_key(key);
     }
     persist_external_llm_provider_configs(state.inner())
+}
+
+#[tauri::command]
+fn set_subtitle_translation_llm_config(
+    state: State<'_, AppState>,
+    url: String,
+    key: Option<String>,
+    model_id: String,
+) -> Result<(), String> {
+    let normalized_url = normalize_base_url(url);
+    let normalized_model_id = normalize_model_id(model_id);
+    let normalized_key = if normalized_url.is_empty() && normalized_model_id.is_empty() {
+        None
+    } else {
+        normalize_optional_api_key(key)
+    };
+
+    {
+        let mut url_guard = state.subtitle_translation_base_url.lock().unwrap();
+        *url_guard = normalized_url;
+    }
+    {
+        let mut key_guard = state.subtitle_translation_api_key.lock().unwrap();
+        *key_guard = normalized_key;
+    }
+    {
+        let mut model_guard = state.subtitle_translation_model_id.lock().unwrap();
+        *model_guard = normalized_model_id;
+    }
+    persist_subtitle_translation_llm_config(state.inner())
+}
+
+#[tauri::command]
+async fn test_subtitle_translation_connection(
+    url: String,
+    key: Option<String>,
+) -> Result<Vec<String>, String> {
+    fetch_openai_compatible_models(
+        normalize_base_url(url),
+        normalize_optional_api_key(key),
+        "subtitle translation LLM",
+    )
+    .await
 }
 
 #[tauri::command]
@@ -4091,7 +4341,7 @@ fn start_response_generation(
         )
         .await
         {
-            Ok((response_id, response_text)) => {
+            Ok((response_id, response_text, translations)) => {
                 if response_text.is_empty() {
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
@@ -4113,6 +4363,7 @@ fn start_response_generation(
                     user_text.clone(),
                     response_text.clone(),
                     persisted_image_paths,
+                    translations,
                 );
 
                 let session_title = {
@@ -4246,7 +4497,7 @@ fn start_assistant_auto_continue_generation(
         )
         .await
         {
-            Ok((_, response_text)) => {
+            Ok((_, response_text, translations)) => {
                 if response_text.is_empty() {
                     emit_call_stage(&app_handle_for_task, "listening", "Listening");
                     return;
@@ -4263,6 +4514,7 @@ fn start_assistant_auto_continue_generation(
                     app_handle_for_task.state::<AppState>().inner(),
                     assistant_entry_id,
                     response_text,
+                    translations,
                 ) {
                     warn!("Failed to append assistant auto-continue text: {}", err);
                 }
@@ -4534,13 +4786,35 @@ fn serialize_external_chat_request(request: &ChatRequest) -> serde_json::Value {
     })
 }
 
+async fn translate_response_to_selected_language(
+    state: &AppState,
+    text: &str,
+) -> HashMap<String, String> {
+    let target_lang = state.ai_subtitle_target_language.lock().unwrap().clone();
+    let mut translations = HashMap::new();
+
+    if target_lang == "none" {
+        return translations;
+    }
+
+    let Some(lang_name) = ai_subtitle_target_language_name(target_lang.as_str()) else {
+        return translations;
+    };
+
+    if let Ok(translated) = translate_text_internal(state, text, lang_name).await {
+        translations.insert(target_lang, translated);
+    }
+
+    translations
+}
+
 async fn stream_gemma_response_to_csm(
     app_handle: &tauri::AppHandle,
     server_port: u16,
     gemma_model: &str,
     mode: ResponseGenerationMode,
     cancellation_token: Arc<AtomicBool>,
-) -> Result<(u64, String), String> {
+) -> Result<(u64, String, HashMap<String, String>), String> {
     start_csm_server_inner(app_handle, app_handle.state::<AppState>().inner()).await?;
 
     let llm_started_at = Instant::now();
@@ -4775,6 +5049,7 @@ async fn stream_gemma_response_to_csm(
     let mut latest_response_text = String::new();
     let mut latest_reasoning_text = String::new();
     let mut queued_response_bytes = 0usize;
+    let mut queued_segment_count = 0usize;
     let mut started_audio_response = false;
     let mut incomplete_stream_segment_started_at = None;
     let mut raw_body = Vec::new();
@@ -4822,6 +5097,7 @@ async fn stream_gemma_response_to_csm(
                         &mut latest_response_text,
                         &mut latest_reasoning_text,
                         &mut queued_response_bytes,
+                        &mut queued_segment_count,
                         &mut started_audio_response,
                         &mut incomplete_stream_segment_started_at,
                     )
@@ -4858,6 +5134,7 @@ async fn stream_gemma_response_to_csm(
                         &mut latest_response_text,
                         &mut latest_reasoning_text,
                         &mut queued_response_bytes,
+                        &mut queued_segment_count,
                         &mut started_audio_response,
                         &mut incomplete_stream_segment_started_at,
                     )
@@ -4895,6 +5172,8 @@ async fn stream_gemma_response_to_csm(
         response_text.chars().count()
     );
 
+    let translations = translate_response_to_selected_language(state.inner(), &response_text).await;
+
     if response_text.is_empty() && raw_reasoning_text.is_empty() {
         warn!("Gemma returned an empty response, skipping CSM synthesis");
     } else {
@@ -4911,6 +5190,7 @@ async fn stream_gemma_response_to_csm(
                     reasoning_text: raw_reasoning_text.clone(),
                     is_final: false,
                     append_to_assistant_entry_id,
+                    translations: HashMap::new(),
                 },
             );
         }
@@ -4922,6 +5202,7 @@ async fn stream_gemma_response_to_csm(
                 reasoning_text: raw_reasoning_text.clone(),
                 is_final: true,
                 append_to_assistant_entry_id,
+                translations: translations.clone(),
             },
         );
         let flushed_segments = queue_spoken_response_segments_for_csm(
@@ -4930,6 +5211,7 @@ async fn stream_gemma_response_to_csm(
             &response_text,
             append_to_assistant_entry_id,
             &mut queued_response_bytes,
+            &mut queued_segment_count,
             &mut started_audio_response,
             true,
         )
@@ -4949,7 +5231,7 @@ async fn stream_gemma_response_to_csm(
         );
     }
 
-    Ok((response_id, response_text))
+    Ok((response_id, response_text, translations))
 }
 
 async fn emit_streamed_response_update(
@@ -4962,6 +5244,7 @@ async fn emit_streamed_response_update(
     latest_response_text: &mut String,
     latest_reasoning_text: &mut String,
     queued_response_bytes: &mut usize,
+    queued_segment_count: &mut usize,
     started_audio_response: &mut bool,
     incomplete_stream_segment_started_at: &mut Option<Instant>,
 ) -> Result<(), String> {
@@ -4980,6 +5263,7 @@ async fn emit_streamed_response_update(
                 reasoning_text: raw_reasoning_text.to_string(),
                 is_final: false,
                 append_to_assistant_entry_id,
+                translations: HashMap::new(),
             },
         );
         *latest_response_text = display_response_text;
@@ -4997,6 +5281,7 @@ async fn emit_streamed_response_update(
         &response_text,
         append_to_assistant_entry_id,
         queued_response_bytes,
+        queued_segment_count,
         started_audio_response,
         false,
     )
@@ -5033,6 +5318,7 @@ async fn emit_streamed_response_update(
             &response_text,
             append_to_assistant_entry_id,
             queued_response_bytes,
+            queued_segment_count,
             started_audio_response,
             true,
         )
@@ -5201,6 +5487,7 @@ async fn queue_spoken_response_segments_for_csm(
     response_text: &str,
     append_to_assistant_entry_id: Option<u64>,
     queued_response_bytes: &mut usize,
+    queued_segment_count: &mut usize,
     started_audio_response: &mut bool,
     flush_incomplete_segment: bool,
 ) -> Result<usize, String> {
@@ -5246,6 +5533,7 @@ async fn queue_spoken_response_segments_for_csm(
     }
 
     for (index, spoken_segment) in spoken_segments.iter().enumerate() {
+        let segment_index = *queued_segment_count + index;
         info!(
             "Queueing streamed CSM response segment {}/{}: {}",
             index + 1,
@@ -5257,12 +5545,47 @@ async fn queue_spoken_response_segments_for_csm(
             CsmAudioQueuedEvent {
                 request_id,
                 text: spoken_segment.clone(),
+                index: segment_index,
             },
         );
+
+        let app_handle_clone = app_handle.clone();
+        let segment_clone = spoken_segment.clone();
+        let request_id_clone = request_id;
+        tauri::async_runtime::spawn(async move {
+            let state = app_handle_clone.state::<AppState>();
+            let target_lang = state.ai_subtitle_target_language.lock().unwrap().clone();
+
+            if target_lang == "none" {
+                return;
+            }
+
+            let Some(lang_name) = ai_subtitle_target_language_name(target_lang.as_str()) else {
+                return;
+            };
+
+            let mut segment_translations = HashMap::new();
+            if let Ok(translated) =
+                translate_text_internal(state.inner(), &segment_clone, lang_name).await
+            {
+                segment_translations.insert(target_lang, translated);
+                let mut translations_map = HashMap::new();
+                translations_map.insert(segment_index, segment_translations);
+                emit_assistant_translations(
+                    &app_handle_clone,
+                    AssistantTranslationsEvent {
+                        request_id: request_id_clone,
+                        translations: translations_map,
+                    },
+                );
+            }
+        });
+
         send_csm_synthesis_request(app_handle, request_id, spoken_segment).await?;
     }
 
     *queued_response_bytes = queued_start + consumed_len;
+    *queued_segment_count += spoken_segments.len();
     Ok(spoken_segments.len())
 }
 
@@ -8377,23 +8700,16 @@ fn append_conversation_turn(
     assistant_text: String,
     image_paths: Vec<PathBuf>,
     user_image_data_urls: Vec<String>,
+    translations: HashMap<String, String>,
 ) -> (u64, u64) {
-    reset_auto_continue_tracker(state);
-
-    {
-        let mut conversation_image_paths = state.conversation_image_paths.lock().unwrap();
-        for image_path in &image_paths {
-            conversation_image_paths.push(image_path.clone());
-        }
-    }
-
+    let mut turns = state.conversation_turns.lock().unwrap();
     let user_entry_id = state
         .next_conversation_entry_id
         .fetch_add(1, Ordering::Relaxed);
     let assistant_entry_id = state
         .next_conversation_entry_id
         .fetch_add(1, Ordering::Relaxed);
-    let mut turns = state.conversation_turns.lock().unwrap();
+
     turns.push_back(ConversationTurn {
         user_entry_id,
         assistant_entry_id,
@@ -8401,9 +8717,11 @@ fn append_conversation_turn(
         assistant_text,
         image_paths,
         user_image_data_urls,
+        translations,
         image_path: None,
         user_image_data_url: None,
     });
+
 
     while turns.len() > MAX_CONVERSATION_TURNS {
         if let Some(removed_turn) = turns.pop_front() {
@@ -8423,6 +8741,7 @@ fn append_conversation_turn_with_save(
     user_text: String,
     assistant_text: String,
     image_paths: Vec<PathBuf>,
+    translations: HashMap<String, String>,
 ) -> (u64, u64) {
     let mut final_image_paths = Vec::new();
     let mut user_image_data_urls = Vec::new();
@@ -8460,6 +8779,7 @@ fn append_conversation_turn_with_save(
         assistant_text,
         final_image_paths,
         user_image_data_urls,
+        translations,
     );
 
     // Auto-title if it's the first turn and no title is set
@@ -8490,6 +8810,7 @@ fn append_to_existing_assistant_turn_with_save(
     state: &AppState,
     assistant_entry_id: u64,
     continuation_text: String,
+    continuation_translations: HashMap<String, String>,
 ) -> Result<(u64, u64, String, String), String> {
     let trimmed_continuation = continuation_text.trim();
     if trimmed_continuation.is_empty() {
@@ -8510,6 +8831,12 @@ fn append_to_existing_assistant_turn_with_save(
 
         last_turn.assistant_text =
             append_assistant_message_text(&last_turn.assistant_text, trimmed_continuation);
+
+        for (lang, translated_text) in continuation_translations {
+            let existing = last_turn.translations.entry(lang).or_default();
+            *existing = append_assistant_message_text(existing, &translated_text);
+        }
+
         (
             last_turn.user_entry_id,
             last_turn.assistant_entry_id,
@@ -9860,11 +10187,34 @@ fn snapshot_external_llm_provider_configs(state: &AppState) -> PersistedExternal
     }
 }
 
-fn persist_external_llm_provider_configs(state: &AppState) -> Result<(), String> {
-    save_persisted_app_config(&PersistedAppConfig {
+fn snapshot_subtitle_translation_llm_config(
+    state: &AppState,
+) -> PersistedSubtitleTranslationLlmConfig {
+    PersistedSubtitleTranslationLlmConfig {
+        base_url: state.subtitle_translation_base_url.lock().unwrap().clone(),
+        api_key: state.subtitle_translation_api_key.lock().unwrap().clone(),
+        model_id: state.subtitle_translation_model_id.lock().unwrap().clone(),
+    }
+}
+
+fn snapshot_persisted_app_config(state: &AppState) -> PersistedAppConfig {
+    PersistedAppConfig {
         version: default_persisted_app_config_version(),
         external_llm_providers: snapshot_external_llm_provider_configs(state),
-    })
+        subtitle_translation_llm: snapshot_subtitle_translation_llm_config(state),
+    }
+}
+
+fn persist_app_config(state: &AppState) -> Result<(), String> {
+    save_persisted_app_config(&snapshot_persisted_app_config(state))
+}
+
+fn persist_external_llm_provider_configs(state: &AppState) -> Result<(), String> {
+    persist_app_config(state)
+}
+
+fn persist_subtitle_translation_llm_config(state: &AppState) -> Result<(), String> {
+    persist_app_config(state)
 }
 
 fn resolve_sessions_dir(_app_handle: &AppHandle) -> Result<PathBuf, String> {
@@ -9949,7 +10299,28 @@ fn save_current_session(app_handle: &AppHandle, state: &AppState) -> Result<(), 
         }
     };
 
-    let data = SessionData { metadata, turns };
+    let target_lang = state.ai_subtitle_target_language.lock().unwrap().clone();
+
+    let mut turns_to_save = Vec::new();
+    for turn in turns {
+        let mut turn_clone = turn.clone();
+        if target_lang == "none" {
+            turn_clone.translations.clear();
+        } else {
+            // Only keep the selected translation
+            let mut filtered_translations = HashMap::new();
+            if let Some(translation) = turn.translations.get(&target_lang) {
+                filtered_translations.insert(target_lang.clone(), translation.clone());
+            }
+            turn_clone.translations = filtered_translations;
+        }
+        turns_to_save.push(turn_clone);
+    }
+
+    let data = SessionData {
+        metadata,
+        turns: turns_to_save,
+    };
 
     let content = serde_json::to_string_pretty(&data).map_err(|err| err.to_string())?;
     std::fs::write(session_file, content).map_err(|err| err.to_string())?;
@@ -11326,6 +11697,15 @@ pub fn run() {
                     .api_key
                     .clone(),
             ),
+            subtitle_translation_base_url: Mutex::new(
+                persisted_config.subtitle_translation_llm.base_url.clone(),
+            ),
+            subtitle_translation_api_key: Mutex::new(
+                persisted_config.subtitle_translation_llm.api_key.clone(),
+            ),
+            subtitle_translation_model_id: Mutex::new(
+                persisted_config.subtitle_translation_llm.model_id.clone(),
+            ),
             global_shortcut_look_at_screen_region: Mutex::new("Command+Shift+L".to_string()),
             global_shortcut_look_at_screen_region_hydrated: Mutex::new(false),
             global_shortcut_look_at_screen_region_modified_before_hydration: Mutex::new(false),
@@ -11345,6 +11725,7 @@ pub fn run() {
             is_quitting: Mutex::new(false),
             vad: Mutex::new(None),
             screen_capture_child: Mutex::new(None),
+            ai_subtitle_target_language: Mutex::new("none".to_string()),
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -11392,6 +11773,8 @@ pub fn run() {
             set_global_shortcut_interrupt,
             clear_conversation_context_images,
             sync_conversation_log_has_visible_images,
+            translate_text,
+            set_ai_subtitle_target_language,
             get_gemma_variant,
             set_gemma_variant,
             get_stt_model_variant,
@@ -11415,6 +11798,9 @@ pub fn run() {
             set_openai_compatible_model,
             get_openai_compatible_config,
             set_openai_compatible_config,
+            get_subtitle_translation_llm_config,
+            set_subtitle_translation_llm_config,
+            test_subtitle_translation_connection,
             check_csm_status,
             check_stt_status,
             clear_model_cache,

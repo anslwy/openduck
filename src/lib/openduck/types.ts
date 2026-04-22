@@ -7,6 +7,7 @@ export type CsmAudioStartEvent = {
 export type CsmAudioQueuedEvent = {
     request_id: number;
     text: string;
+    index: number;
 };
 
 export type CsmAudioChunkEvent = {
@@ -63,20 +64,50 @@ export type TranscriptPartialEvent = {
     text: string;
 };
 
+export type AiSubtitleEvent = {
+    text: string;
+};
+
+export type AiSubtitleTargetLanguage =
+    | "none"
+    | "ar"
+    | "bn"
+    | "zh"
+    | "tw"
+    | "en"
+    | "fr"
+    | "de"
+    | "gu"
+    | "hi"
+    | "id"
+    | "it"
+    | "jp"
+    | "ko"
+    | "mr"
+    | "fa"
+    | "pt"
+    | "pa"
+    | "ru"
+    | "es"
+    | "ta"
+    | "te"
+    | "th"
+    | "tr"
+    | "ur"
+    | "vi";
+
 export type AssistantResponseEvent = {
     request_id: number;
     text: string;
     reasoning_text: string;
     is_final: boolean;
-    append_to_assistant_entry_id?: number | null;
+    append_to_assistant_entry_id: number | null;
+    translations: Record<string, string>;
 };
 
-export type OverlayNotificationEvent = {
-    message: string;
-};
-
-export type AiSubtitleEvent = {
-    text: string;
+export type AssistantTranslationsEvent = {
+    request_id: number;
+    translations: Record<number, Record<string, string>>;
 };
 
 export type ScreenCapturePhase =
@@ -168,8 +199,11 @@ export type ConversationLogEntry = {
     id: number;
     role: "user" | "assistant";
     text: string;
+    reasoningText?: string;
     imageUrls: string[];
     contextEntryId: number | null;
+    isContextBacked: boolean;
+    translations: Record<string, string>;
 };
 
 export type StoredContactProfile = {
@@ -266,4 +300,5 @@ export type ConversationTurn = {
     assistant_text: String;
     image_paths: string[];
     user_image_data_urls: string[];
+    translations?: Record<string, string>;
 };

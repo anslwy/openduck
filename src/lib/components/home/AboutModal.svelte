@@ -31,6 +31,7 @@
     import type {
         AppUpdateInfo,
         AppUpdateStatus,
+        AiSubtitleTargetLanguage,
         BuildInfo,
     } from "$lib/openduck/types";
     import ShortcutCapture from "./ShortcutCapture.svelte";
@@ -57,6 +58,8 @@
         showStatEnabled,
         showSubtitleEnabled,
         showAiSubtitleEnabled,
+        aiSubtitleTargetLanguage,
+        subtitleTranslationLlmConfigured,
         showCallTimerEnabled,
         showHiddenWindowOverlayEnabled,
         endOfUtteranceSilenceMs,
@@ -75,6 +78,8 @@
         onUpdateShowStat,
         onUpdateShowSubtitle,
         onUpdateShowAiSubtitle,
+        onUpdateAiSubtitleTargetLanguage,
+        onOpenSubtitleTranslationLlmConfig,
         onUpdateShowCallTimer,
         onUpdateShowHiddenWindowOverlay,
         onUpdateEndOfUtteranceSilenceMs,
@@ -104,6 +109,8 @@
         showStatEnabled: boolean;
         showSubtitleEnabled: boolean;
         showAiSubtitleEnabled: boolean;
+        aiSubtitleTargetLanguage: AiSubtitleTargetLanguage;
+        subtitleTranslationLlmConfigured: boolean;
         showCallTimerEnabled: boolean;
         showHiddenWindowOverlayEnabled: boolean;
         endOfUtteranceSilenceMs: number;
@@ -122,6 +129,10 @@
         onUpdateShowStat: (enabled: boolean) => void;
         onUpdateShowSubtitle: (enabled: boolean) => void;
         onUpdateShowAiSubtitle: (enabled: boolean) => void;
+        onUpdateAiSubtitleTargetLanguage: (
+            targetLanguage: AiSubtitleTargetLanguage,
+        ) => void;
+        onOpenSubtitleTranslationLlmConfig: () => void;
         onUpdateShowCallTimer: (enabled: boolean) => void;
         onUpdateShowHiddenWindowOverlay: (enabled: boolean) => void;
         onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
@@ -485,6 +496,46 @@
             onUpdate: onUpdateShowAiSubtitle,
         },
         {
+            id: "ai-subtitle-translation",
+            type: "select",
+            label: "AI Subtitle Translation",
+            value: aiSubtitleTargetLanguage,
+            options: [
+                { value: "none", label: "Do Not Translate" },
+                { value: "ar", label: "Arabic" },
+                { value: "bn", label: "Bengali" },
+                { value: "zh", label: "Chinese (Simplified)" },
+                { value: "tw", label: "Chinese (Traditional)" },
+                { value: "en", label: "English" },
+                { value: "fr", label: "French" },
+                { value: "de", label: "German" },
+                { value: "gu", label: "Gujarati" },
+                { value: "hi", label: "Hindi" },
+                { value: "id", label: "Indonesian" },
+                { value: "it", label: "Italian" },
+                { value: "jp", label: "Japanese" },
+                { value: "ko", label: "Korean" },
+                { value: "mr", label: "Marathi" },
+                { value: "fa", label: "Persian" },
+                { value: "pt", label: "Portuguese" },
+                { value: "pa", label: "Punjabi" },
+                { value: "ru", label: "Russian" },
+                { value: "es", label: "Spanish" },
+                { value: "ta", label: "Tamil" },
+                { value: "te", label: "Telugu" },
+                { value: "th", label: "Thai" },
+                { value: "tr", label: "Turkish" },
+                { value: "ur", label: "Urdu" },
+                { value: "vi", label: "Vietnamese" },
+            ],
+            actionLabel: subtitleTranslationLlmConfigured
+                ? "Edit translation LLM"
+                : "Configure translation LLM",
+            actionActive: subtitleTranslationLlmConfigured,
+            onAction: onOpenSubtitleTranslationLlmConfig,
+            onUpdate: onUpdateAiSubtitleTargetLanguage,
+        },
+        {
             id: "call-timer",
             type: "toggle",
             label: "Show Call Timer",
@@ -649,8 +700,7 @@
             label: "Interrupt Speech (During Call)",
             value: editedShortcutInterrupt,
             onUpdate: (val: string) => onUpdateGlobalShortcutInterrupt(val),
-            onRemove: () =>
-                onUpdateGlobalShortcutInterrupt(NO_GLOBAL_SHORTCUT),
+            onRemove: () => onUpdateGlobalShortcutInterrupt(NO_GLOBAL_SHORTCUT),
             onDefault: () =>
                 onUpdateGlobalShortcutInterrupt(
                     DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
@@ -797,8 +847,7 @@
                                 type="button"
                                 class="quantize-toggle"
                                 class:active={setting.value}
-                                onclick={() =>
-                                    setting.onUpdate(!setting.value)}
+                                onclick={() => setting.onUpdate(!setting.value)}
                             >
                                 <span class="quantize-dot"></span>
                                 <span
@@ -879,6 +928,62 @@
                                         setting.onDefault();
                                     }}
                                 />
+                            </div>
+                        </div>
+                    {:else if setting.type === "select"}
+                        <div class="about-metadata-row">
+                            <span class="about-metadata-label"
+                                >{setting.label}</span
+                            >
+                            <div class="about-select-row">
+                                <div
+                                    class="about-select-control"
+                                    class:active={setting.value !== "none"}
+                                >
+                                    <select
+                                        class="about-select"
+                                        value={setting.value}
+                                        onchange={(event) =>
+                                            setting.onUpdate(
+                                                (
+                                                    event.currentTarget as HTMLSelectElement
+                                                ).value,
+                                            )}
+                                    >
+                                        {#each setting.options as option}
+                                            <option value={option.value}
+                                                >{option.label}</option
+                                            >
+                                        {/each}
+                                    </select>
+                                </div>
+                                {#if setting.onAction}
+                                    <button
+                                        type="button"
+                                        class="about-select-action-btn"
+                                        class:active={setting.actionActive}
+                                        aria-label={setting.actionLabel}
+                                        title={setting.actionLabel}
+                                        onclick={setting.onAction}
+                                    >
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                        >
+                                            <path
+                                                d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+                                            ></path>
+                                            <circle cx="12" cy="12" r="3"></circle>
+                                        </svg>
+                                    </button>
+                                {/if}
                             </div>
                         </div>
                     {/if}
@@ -1251,6 +1356,122 @@
         font-size: 0.76rem;
         line-height: 1.4;
         max-width: 44ch;
+    }
+
+    .about-select-control {
+        position: relative;
+        width: 100%;
+    }
+
+    .about-select-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+    }
+
+    .about-select-control::before {
+        content: "";
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.35);
+        pointer-events: none;
+        z-index: 1;
+        transition: all 0.2s ease;
+    }
+
+    .about-select-control.active::before {
+        background: #7fe37c;
+        box-shadow: 0 0 0 4px rgba(127, 227, 124, 0.14);
+    }
+
+    .about-select {
+        appearance: none;
+        -webkit-appearance: none;
+        background: rgba(255, 255, 255, 0.06);
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.4)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 12px center;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 999px;
+        color: rgba(255, 255, 255, 0.82);
+        cursor: pointer;
+        display: block;
+        font-size: 0.82rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        padding: 8px 36px 8px 32px;
+        width: 100%;
+        outline: none;
+        position: relative;
+        transition:
+            background-color 0.2s ease,
+            border-color 0.2s ease,
+            color 0.2s ease,
+            box-shadow 0.2s ease;
+    }
+
+    .about-select:hover {
+        background-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .about-select-control.active .about-select {
+        background-color: rgba(127, 227, 124, 0.12);
+        border-color: rgba(127, 227, 124, 0.32);
+        color: #9ae998;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='rgba(127,227,124,0.6)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    }
+
+    .about-select:focus-visible {
+        border-color: rgba(255, 205, 64, 0.3);
+        box-shadow: 0 0 0 4px rgba(255, 205, 64, 0.06);
+    }
+
+    .about-select option {
+        background: #1a1a1a;
+        color: #fff;
+    }
+
+    .about-select-action-btn {
+        width: 36px;
+        height: 36px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        color: rgba(255, 255, 255, 0.56);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        flex-shrink: 0;
+        transition:
+            background-color 0.2s ease,
+            border-color 0.2s ease,
+            color 0.2s ease,
+            box-shadow 0.2s ease;
+    }
+
+    .about-select-action-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: rgba(255, 255, 255, 0.88);
+    }
+
+    .about-select-action-btn.active {
+        background: rgba(127, 227, 124, 0.12);
+        border-color: rgba(127, 227, 124, 0.32);
+        color: #9ae998;
+        box-shadow: 0 0 0 4px rgba(127, 227, 124, 0.08);
+    }
+
+    .about-select-action-btn:focus-visible {
+        outline: none;
+        border-color: rgba(255, 205, 64, 0.3);
+        box-shadow: 0 0 0 4px rgba(255, 205, 64, 0.06);
     }
 
     @media (max-width: 720px) {

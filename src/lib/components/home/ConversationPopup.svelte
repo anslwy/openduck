@@ -13,6 +13,7 @@
         onClose,
         onFork,
         onPreviewImage,
+        aiSubtitleTargetLanguage,
         saveConversationLogEntryEdit,
         deleteConversationLogEntry,
         setConversationLogViewport,
@@ -25,6 +26,7 @@
         onClose: () => void;
         onFork: (entry: ConversationLogEntry) => void;
         onPreviewImage: (url: string) => void;
+        aiSubtitleTargetLanguage: string;
         saveConversationLogEntryEdit: (
             entryId: number,
             text: string,
@@ -52,7 +54,7 @@
             isClearingConversationLogImages,
     );
     const hasClearableConversationImages = $derived(
-        conversationLogEntries.some((entry) => entry.imageUrls.length > 0),
+        conversationLogEntries.some((entry) => (entry.imageUrls?.length ?? 0) > 0),
     );
 
     $effect(() => {
@@ -232,7 +234,7 @@
                     >
                         <div class="conversation-bubble" data-role={entry.role}>
                             {#if editingEntryId === entry.id}
-                                {#if entry.imageUrls.length > 0 && !editingImageRemoved}
+                                {#if (entry.imageUrls?.length ?? 0) > 0 && !editingImageRemoved}
                                     <div class="conversation-attachment-shell">
                                         <div
                                             class="conversation-attachment-images"
@@ -273,7 +275,7 @@
                                     disabled={isBusy}
                                 ></textarea>
                             {:else}
-                                {#if entry.imageUrls.length > 0}
+                                 {#if (entry.imageUrls?.length ?? 0) > 0}
                                     <div class="conversation-attachment-images">
                                         {#each entry.imageUrls as imageUrl}
                                             <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -291,7 +293,22 @@
                                 {/if}
                                 {#if entry.text}
                                     <div class="conversation-entry-text">
-                                        {entry.text}
+                                        {#if entry.role === "assistant" && aiSubtitleTargetLanguage !== "none" && entry.translations?.[aiSubtitleTargetLanguage]}
+                                            <div
+                                                class="conversation-entry-translation"
+                                            >
+                                                {entry.translations[
+                                                    aiSubtitleTargetLanguage
+                                                ]}
+                                            </div>
+                                            <div
+                                                class="conversation-entry-original"
+                                            >
+                                                {entry.text}
+                                            </div>
+                                        {:else}
+                                            {entry.text}
+                                        {/if}
                                     </div>
                                 {/if}
                             {/if}
