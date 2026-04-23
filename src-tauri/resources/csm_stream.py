@@ -68,7 +68,9 @@ COSYVOICE3_MODEL_FILE = "model.safetensors"
 COSYVOICE3_CONFIG_FILE = "config.json"
 COSYVOICE3_TOKENIZER_FILE = "tokenizer.json"
 COSYVOICE3_TOKENIZER_CONFIG_FILE = "tokenizer_config.json"
+CHATTERBOX_CONDITIONS_FILE = "conds.safetensors"
 CHATTERBOX_TURBO_8BIT_MODEL_REPO = "mlx-community/Chatterbox-Turbo-TTS-8bit"
+CHATTERBOX_TURBO_FP16_MODEL_REPO = "mlx-community/Chatterbox-Turbo-TTS-fp16"
 SAMPLE_RATE = 24_000
 CSM_WARMUP_TEXT = "Okay."
 CSM_WARMUP_MAX_AUDIO_LENGTH_MS = 320
@@ -241,32 +243,33 @@ def download_cosyvoice3_assets(repo_id: str) -> list[str]:
     ]
 
 
-def download_chatterbox_assets() -> list[str]:
-    # Chatterbox-Turbo-TTS-8bit seems to follow the same structure as CosyVoice
-    # but let's be sure about which files it needs.
-    # It likely needs the S3Tokenizer too if it's based on similar architecture.
+def download_chatterbox_assets(repo_id: str) -> list[str]:
     return [
         download_hf_file(
-            CHATTERBOX_TURBO_8BIT_MODEL_REPO,
+            repo_id,
             COSYVOICE3_CONFIG_FILE,
             "Chatterbox config",
         ),
         download_hf_file(
-            CHATTERBOX_TURBO_8BIT_MODEL_REPO,
+            repo_id,
             COSYVOICE3_MODEL_FILE,
             "Chatterbox checkpoint",
         ),
         download_hf_file(
-            CHATTERBOX_TURBO_8BIT_MODEL_REPO,
+            repo_id,
             COSYVOICE3_TOKENIZER_FILE,
             "Chatterbox tokenizer",
         ),
         download_hf_file(
-            CHATTERBOX_TURBO_8BIT_MODEL_REPO,
+            repo_id,
             COSYVOICE3_TOKENIZER_CONFIG_FILE,
             "Chatterbox tokenizer config",
         ),
-        # According to the HF doc in the image, it requires S3TokenizerV2
+        download_hf_file(
+            repo_id,
+            CHATTERBOX_CONDITIONS_FILE,
+            "Chatterbox conditioning weights",
+        ),
         download_hf_file(
             COSYVOICE2_S3_TOKENIZER_REPO,
             COSYVOICE2_S3_TOKENIZER_CONFIG_FILE,
@@ -415,15 +418,15 @@ def build_cosyvoice3_model(repo_id: str):
     return model
 
 
-def build_chatterbox_model():
+def build_chatterbox_model(repo_id: str):
     emit_status("Importing MLX-Audio-Plus runtime...")
     from mlx_audio.tts.utils import load_model
 
     emit_status("Resolving Chatterbox MLX assets...")
-    download_chatterbox_assets()
+    download_chatterbox_assets(repo_id)
     emit_status("Initializing Chatterbox model...")
     with redirect_library_stdout():
-        model = load_model(CHATTERBOX_TURBO_8BIT_MODEL_REPO)
+        model = load_model(repo_id)
 
     patch_cosyvoice_tokenizer(model, "Chatterbox")
     return model
@@ -1341,7 +1344,19 @@ def run_server(
         )
     if model_name == "chatterbox_8bit":
         return run_chatterbox_server(
-            quantize, context_audio, default_audio, context_text
+            quantize,
+            CHATTERBOX_TURBO_8BIT_MODEL_REPO,
+            context_audio,
+            default_audio,
+            context_text,
+        )
+    if model_name == "chatterbox_fp16":
+        return run_chatterbox_server(
+            quantize,
+            CHATTERBOX_TURBO_FP16_MODEL_REPO,
+            context_audio,
+            default_audio,
+            context_text,
         )
 
     emit({"type": "error", "message": f"Unsupported speech model: {model_name}"})
@@ -1350,6 +1365,7 @@ def run_server(
 
 def run_chatterbox_server(
     _quantize: bool,
+    repo_id: str,
     context_audio: Path | None = None,
     default_audio: Path | None = None,
     context_text: str = "",
@@ -1370,7 +1386,7 @@ def run_chatterbox_server(
 
     try:
         emit_status("Building Chatterbox worker...")
-        model = build_chatterbox_model()
+        model = build_chatterbox_model(repo_id)
     except Exception as exc:
         emit({"type": "error", "message": f"Failed to load Chatterbox: {exc}"})
         traceback.print_exc(file=sys.stderr)
@@ -1608,7 +1624,10 @@ def main() -> int:
                 paths = download_cosyvoice3_assets(COSYVOICE3_FP16_MODEL_REPO)
                 emit({"type": "downloaded", "paths": paths})
             elif args.model == "chatterbox_8bit":
-                paths = download_chatterbox_assets()
+                paths = download_chatterbox_assets(CHATTERBOX_TURBO_8BIT_MODEL_REPO)
+                emit({"type": "downloaded", "paths": paths})
+            elif args.model == "chatterbox_fp16":
+                paths = download_chatterbox_assets(CHATTERBOX_TURBO_FP16_MODEL_REPO)
                 emit({"type": "downloaded", "paths": paths})
             else:
                 path = download_csm_weights()

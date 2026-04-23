@@ -30,9 +30,13 @@ pub(crate) const COSYVOICE3_MODEL_FILE: &str = "model.safetensors";
 pub(crate) const COSYVOICE3_CONFIG_FILE: &str = "config.json";
 pub(crate) const COSYVOICE3_TOKENIZER_FILE: &str = "tokenizer.json";
 pub(crate) const COSYVOICE3_TOKENIZER_CONFIG_FILE: &str = "tokenizer_config.json";
+pub(crate) const CHATTERBOX_CONDITIONS_FILE: &str = "conds.safetensors";
 pub(crate) const CHATTERBOX_TURBO_8BIT_MODEL_REPO: &str = "mlx-community/Chatterbox-Turbo-TTS-8bit";
 pub(crate) const CHATTERBOX_TURBO_8BIT_CACHE_DIR: &str =
     "models--mlx-community--Chatterbox-Turbo-TTS-8bit";
+pub(crate) const CHATTERBOX_TURBO_FP16_MODEL_REPO: &str = "mlx-community/Chatterbox-Turbo-TTS-fp16";
+pub(crate) const CHATTERBOX_TURBO_FP16_CACHE_DIR: &str =
+    "models--mlx-community--Chatterbox-Turbo-TTS-fp16";
 pub(crate) const COSYVOICE2_S3_TOKENIZER_REPO: &str = "mlx-community/S3TokenizerV2";
 pub(crate) const COSYVOICE2_S3_TOKENIZER_CACHE_DIR: &str = "models--mlx-community--S3TokenizerV2";
 pub(crate) const COSYVOICE2_S3_TOKENIZER_CONFIG_FILE: &str = "config.json";

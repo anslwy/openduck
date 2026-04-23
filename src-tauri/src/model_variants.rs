@@ -124,6 +124,7 @@ pub(crate) enum CsmModelVariant {
     CosyVoice305b4bit,
     CosyVoice305bFp16,
     ChatterboxTurbo8bit,
+    ChatterboxTurboFp16,
 }
 
 impl CsmModelVariant {
@@ -146,6 +147,7 @@ impl CsmModelVariant {
             "chatterbox_turbo_8bit" | "chatterbox-turbo-8bit" | "chatterbox" => {
                 Ok(Self::ChatterboxTurbo8bit)
             }
+            "chatterbox_turbo_fp16" | "chatterbox-turbo-fp16" => Ok(Self::ChatterboxTurboFp16),
             other => Err(format!("Unsupported speech model: {other}")),
         }
     }
@@ -159,6 +161,7 @@ impl CsmModelVariant {
             Self::CosyVoice305b4bit => "cosyvoice3_0_5b_4bit",
             Self::CosyVoice305bFp16 => "cosyvoice3_0_5b_fp16",
             Self::ChatterboxTurbo8bit => "chatterbox_turbo_8bit",
+            Self::ChatterboxTurboFp16 => "chatterbox_turbo_fp16",
         }
     }
 
@@ -171,6 +174,7 @@ impl CsmModelVariant {
             Self::CosyVoice305b4bit => "cosyvoice3_4bit",
             Self::CosyVoice305bFp16 => "cosyvoice3_fp16",
             Self::ChatterboxTurbo8bit => "chatterbox_8bit",
+            Self::ChatterboxTurboFp16 => "chatterbox_fp16",
         }
     }
 
@@ -183,6 +187,7 @@ impl CsmModelVariant {
             Self::CosyVoice305b4bit => "Fun-CosyVoice3-0.5B (4-bit)",
             Self::CosyVoice305bFp16 => "Fun-CosyVoice3-0.5B (fp16)",
             Self::ChatterboxTurbo8bit => "Chatterbox Turbo (8-bit)",
+            Self::ChatterboxTurboFp16 => "Chatterbox Turbo (fp16)",
         }
     }
 
@@ -195,6 +200,7 @@ impl CsmModelVariant {
             Self::CosyVoice305b4bit => COSYVOICE3_4BIT_MODEL_REPO,
             Self::CosyVoice305bFp16 => COSYVOICE3_FP16_MODEL_REPO,
             Self::ChatterboxTurbo8bit => CHATTERBOX_TURBO_8BIT_MODEL_REPO,
+            Self::ChatterboxTurboFp16 => CHATTERBOX_TURBO_FP16_MODEL_REPO,
         }
     }
 
@@ -207,6 +213,7 @@ impl CsmModelVariant {
             Self::CosyVoice305b4bit => COSYVOICE3_4BIT_CACHE_DIR,
             Self::CosyVoice305bFp16 => COSYVOICE3_FP16_CACHE_DIR,
             Self::ChatterboxTurbo8bit => CHATTERBOX_TURBO_8BIT_CACHE_DIR,
+            Self::ChatterboxTurboFp16 => CHATTERBOX_TURBO_FP16_CACHE_DIR,
         }
     }
 
@@ -231,11 +238,12 @@ impl CsmModelVariant {
                 COSYVOICE3_TOKENIZER_FILE,
                 COSYVOICE3_TOKENIZER_CONFIG_FILE,
             ],
-            Self::ChatterboxTurbo8bit => &[
+            Self::ChatterboxTurbo8bit | Self::ChatterboxTurboFp16 => &[
                 COSYVOICE3_CONFIG_FILE,
                 COSYVOICE3_MODEL_FILE,
                 COSYVOICE3_TOKENIZER_FILE,
                 COSYVOICE3_TOKENIZER_CONFIG_FILE,
+                CHATTERBOX_CONDITIONS_FILE,
             ],
         }
     }
@@ -252,6 +260,7 @@ impl CsmModelVariant {
                 | Self::CosyVoice305b4bit
                 | Self::CosyVoice305bFp16
                 | Self::ChatterboxTurbo8bit
+                | Self::ChatterboxTurboFp16
         )
     }
 }

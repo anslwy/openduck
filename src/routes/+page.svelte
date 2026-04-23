@@ -624,6 +624,10 @@
             value: "chatterbox_turbo_8bit",
             label: "Chatterbox Turbo-350M (8-bit)",
         },
+        {
+            value: "chatterbox_turbo_fp16",
+            label: "Chatterbox Turbo-350M (fp16)",
+        },
         { value: "cosyvoice3_0_5b_4bit", label: "Fun-CosyVoice3-0.5B (4-bit)" },
         { value: "cosyvoice3_0_5b_8bit", label: "Fun-CosyVoice3-0.5B (8-bit)" },
         { value: "cosyvoice3_0_5b_fp16", label: "Fun-CosyVoice3-0.5B (fp16)" },
@@ -706,6 +710,8 @@
                     ? "Fun-CosyVoice3-0.5B (fp16) provides the highest possible voice quality."
                     : selectedCsmModel === "chatterbox_turbo_8bit"
                       ? "Chatterbox Turbo (8-bit) provides a fast and realistic voice with lower RAM usage."
+                      : selectedCsmModel === "chatterbox_turbo_fp16"
+                        ? "Chatterbox Turbo (fp16) provides the highest possible voice quality with higher RAM usage."
                       : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM.",
     );
     const selectedSttModelLabel = $derived(
@@ -827,7 +833,8 @@
                 (selectedCsmModel === "cosyvoice3_0_5b_8bit" ||
                     selectedCsmModel === "cosyvoice3_0_5b_4bit" ||
                     selectedCsmModel === "cosyvoice3_0_5b_fp16" ||
-                    selectedCsmModel === "chatterbox_turbo_8bit")
+                    selectedCsmModel === "chatterbox_turbo_8bit" ||
+                    selectedCsmModel === "chatterbox_turbo_fp16")
             ) {
                 void (async () => {
                     try {

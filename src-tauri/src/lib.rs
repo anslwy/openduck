@@ -930,11 +930,11 @@ async fn translate_text_internal(
     }
 
     let server_port = *state.server_port.lock().unwrap();
-    let loaded_variant = loaded_gemma_variant(state)
-        .unwrap_or_else(|| selected_gemma_variant(state));
+    let loaded_variant =
+        loaded_gemma_variant(state).unwrap_or_else(|| selected_gemma_variant(state));
 
-    let model_name = selected_external_llm_model(state, loaded_variant)
-        .unwrap_or_else(|| "gemma".to_string());
+    let model_name =
+        selected_external_llm_model(state, loaded_variant).unwrap_or_else(|| "gemma".to_string());
 
     let (base_url, api_key) = if loaded_variant.is_external() {
         (
@@ -1889,10 +1889,7 @@ fn update_conversation_context_entry(
 }
 
 #[tauri::command]
-fn clear_conversation_context_images(
-    app_handle: AppHandle,
-    state: State<'_, AppState>,
-) -> usize {
+fn clear_conversation_context_images(app_handle: AppHandle, state: State<'_, AppState>) -> usize {
     let removed_count = clear_conversation_context_images_inner(state.inner());
     if removed_count > 0 {
         emit_conversation_image_history_cleared(&app_handle);
@@ -2052,9 +2049,7 @@ fn external_llm_api_key(state: &AppState, variant: GemmaVariant) -> Option<Strin
     }
 }
 
-fn subtitle_translation_llm_config(
-    state: &AppState,
-) -> Option<(String, Option<String>, String)> {
+fn subtitle_translation_llm_config(state: &AppState) -> Option<(String, Option<String>, String)> {
     let base_url = state.subtitle_translation_base_url.lock().unwrap().clone();
     let model_id = state.subtitle_translation_model_id.lock().unwrap().clone();
 
@@ -3180,9 +3175,7 @@ async fn start_csm_server_inner(
         CsmVoice::Female | CsmVoice::Custom => CsmVoice::Female,
     };
 
-    if let Ok(default_audio) =
-        resolve_csm_context_audio_file(app_handle, state, default_voice)
-    {
+    if let Ok(default_audio) = resolve_csm_context_audio_file(app_handle, state, default_voice) {
         command.arg("--default-audio").arg(default_audio);
     }
 
@@ -3516,10 +3509,7 @@ fn set_call_muted(app_handle: AppHandle, state: State<'_, AppState>, muted: bool
         emit_overlay_notification(
             &app_handle,
             OverlayNotificationEvent {
-                message: format!(
-                    "OpenDuck: {}",
-                    if muted { "Muted" } else { "Unmuted" }
-                ),
+                message: format!("OpenDuck: {}", if muted { "Muted" } else { "Unmuted" }),
             },
         );
     }
@@ -7757,22 +7747,24 @@ fn refresh_tray_menu(app_handle: &AppHandle) {
     }
 
     if call_in_progress {
-        let mute_label = if toggle_mute_shortcut_str.is_empty() || toggle_mute_shortcut_str == "None" {
-            if call_muted {
-                "Unmute".to_string()
+        let mute_label =
+            if toggle_mute_shortcut_str.is_empty() || toggle_mute_shortcut_str == "None" {
+                if call_muted {
+                    "Unmute".to_string()
+                } else {
+                    "Mute".to_string()
+                }
+            } else if call_muted {
+                format!("Unmute ({})", toggle_mute_shortcut_str)
             } else {
-                "Mute".to_string()
-            }
-        } else if call_muted {
-            format!("Unmute ({})", toggle_mute_shortcut_str)
-        } else {
-            format!("Mute ({})", toggle_mute_shortcut_str)
-        };
-        let interrupt_label = if interrupt_shortcut_str.is_empty() || interrupt_shortcut_str == "None" {
-            "Interrupt".to_string()
-        } else {
-            format!("Interrupt ({})", interrupt_shortcut_str)
-        };
+                format!("Mute ({})", toggle_mute_shortcut_str)
+            };
+        let interrupt_label =
+            if interrupt_shortcut_str.is_empty() || interrupt_shortcut_str == "None" {
+                "Interrupt".to_string()
+            } else {
+                format!("Interrupt ({})", interrupt_shortcut_str)
+            };
         let clear_image_history_item =
             match MenuItemBuilder::with_id(TRAY_CLEAR_IMAGE_HISTORY_MENU_ID, "Clear Image History")
                 .enabled(has_conversation_image_history)
@@ -8742,7 +8734,6 @@ fn append_conversation_turn(
         image_path: None,
         user_image_data_url: None,
     });
-
 
     while turns.len() > MAX_CONVERSATION_TURNS {
         if let Some(removed_turn) = turns.pop_front() {
@@ -9811,6 +9802,8 @@ fn clear_csm_model_cache(variant: CsmModelVariant) -> Result<(), String> {
         || variant == CsmModelVariant::CosyVoice305b8bit
         || variant == CsmModelVariant::CosyVoice305b4bit
         || variant == CsmModelVariant::CosyVoice305bFp16
+        || variant == CsmModelVariant::ChatterboxTurbo8bit
+        || variant == CsmModelVariant::ChatterboxTurboFp16
     {
         clear_huggingface_cache(COSYVOICE2_S3_TOKENIZER_CACHE_DIR)?;
     }
@@ -9930,6 +9923,8 @@ fn csm_model_cache_exists(variant: CsmModelVariant) -> bool {
         || variant == CsmModelVariant::CosyVoice305b8bit
         || variant == CsmModelVariant::CosyVoice305b4bit
         || variant == CsmModelVariant::CosyVoice305bFp16
+        || variant == CsmModelVariant::ChatterboxTurbo8bit
+        || variant == CsmModelVariant::ChatterboxTurboFp16
     {
         return huggingface_cached_files_exist(
             COSYVOICE2_S3_TOKENIZER_CACHE_DIR,
@@ -10533,7 +10528,10 @@ fn search_sessions(app_handle: AppHandle, query: String) -> Result<Vec<SearchRes
                                     session_matches.push(SearchResult {
                                         session_id: data.metadata.id.clone(),
                                         session_title: data.metadata.title.clone(),
-                                        matched_text: extract_snippet(&turn.user_text, query_trimmed),
+                                        matched_text: extract_snippet(
+                                            &turn.user_text,
+                                            query_trimmed,
+                                        ),
                                         updated_at: data.metadata.updated_at,
                                     });
                                 }
@@ -10541,7 +10539,10 @@ fn search_sessions(app_handle: AppHandle, query: String) -> Result<Vec<SearchRes
                                     session_matches.push(SearchResult {
                                         session_id: data.metadata.id.clone(),
                                         session_title: data.metadata.title.clone(),
-                                        matched_text: extract_snippet(&turn.assistant_text, query_trimmed),
+                                        matched_text: extract_snippet(
+                                            &turn.assistant_text,
+                                            query_trimmed,
+                                        ),
                                         updated_at: data.metadata.updated_at,
                                     });
                                 }
@@ -10775,7 +10776,8 @@ fn resolve_speech_site_packages(
         | CsmModelVariant::CosyVoice305b8bit
         | CsmModelVariant::CosyVoice305b4bit
         | CsmModelVariant::CosyVoice305bFp16
-        | CsmModelVariant::ChatterboxTurbo8bit => resolve_cosyvoice_site_packages(app_handle),
+        | CsmModelVariant::ChatterboxTurbo8bit
+        | CsmModelVariant::ChatterboxTurboFp16 => resolve_cosyvoice_site_packages(app_handle),
     }
 }
 
@@ -10914,7 +10916,9 @@ fn load_csm_context_transcript(
     }
 
     let path = resolve_csm_context_transcript_file(app_handle, state, voice).ok()?;
-    std::fs::read_to_string(path).ok().map(|s| s.trim().to_string())
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 fn reap_stale_model_processes(app_handle: &tauri::AppHandle) {
@@ -11136,6 +11140,8 @@ async fn download_csm_model(
         || selected_variant == CsmModelVariant::CosyVoice305b8bit
         || selected_variant == CsmModelVariant::CosyVoice305b4bit
         || selected_variant == CsmModelVariant::CosyVoice305bFp16
+        || selected_variant == CsmModelVariant::ChatterboxTurbo8bit
+        || selected_variant == CsmModelVariant::ChatterboxTurboFp16
     {
         run_hf_download(
             &app_handle,

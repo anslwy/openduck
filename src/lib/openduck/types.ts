@@ -192,7 +192,8 @@ export type CsmModelVariant =
     | "cosyvoice3_0_5b_8bit"
     | "cosyvoice3_0_5b_4bit"
     | "cosyvoice3_0_5b_fp16"
-    | "chatterbox_turbo_8bit";
+    | "chatterbox_turbo_8bit"
+    | "chatterbox_turbo_fp16";
 export type SttModelVariant = "gemma" | "distil_whisper_large_v3" | "whisper_large_v3_turbo";
 
 export type ConversationLogEntry = {
