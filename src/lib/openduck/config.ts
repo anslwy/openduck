@@ -16,6 +16,8 @@ export const CONTACT_ICONS_DB_NAME = "openduck.contacts";
 export const CONTACT_ICONS_STORE_NAME = "contact-icons";
 export const DEFAULT_CONTACT_ID = "contact-openduck";
 export const MODEL_PREFERENCES_STORAGE_KEY = "openduck.model-preferences.v1";
+export const APP_UPDATE_PREFERENCES_STORAGE_KEY =
+  "openduck.app-update-preferences.v1";
 export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
 export const SELECT_LAST_SESSION_STORAGE_KEY = "openduck.select-last-session.v1";
 export const AUTO_LOAD_MODELS_ON_STARTUP_STORAGE_KEY = "openduck.auto-load-models-on-startup.v1";
@@ -87,6 +89,7 @@ export const DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE = "none";
 export const DEFAULT_SHOW_CALL_TIMER = true;
 export const DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY = true;
 export const DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP = true;
+export const DEFAULT_AUTO_CHECK_APP_UPDATES = true;
 
 export const MODEL_PRESETS: Record<
   Exclude<ModelPreset, "custom">,

@@ -174,6 +174,28 @@ Add release notes to the updater manifest:
 GITHUB_RELEASE_TAG=v1.2.3 RELEASE_NOTES_FILE=release-notes.md ./scripts/release.sh openduck-1.2.3
 ```
 
+## Debugging DMG Failures
+
+If Tauri only prints a generic `failed to run ... bundle_dmg.sh` error, use the local verbose helpers:
+
+```bash
+npm run tauri:build:verbose -- --target aarch64-apple-darwin --bundles dmg,app
+```
+
+If the DMG error is still opaque, replay the generated DMG command directly with verbose `hdiutil` output:
+
+```bash
+npm run tauri:dmg:debug
+```
+
+That helper writes a timestamped log under:
+
+```text
+src-tauri/target/<target>/release/bundle/dmg/bundle_dmg_debug_<timestamp>.log
+```
+
+It requires a prior Tauri build attempt so the generated `bundle_dmg.sh` and `.app` bundle already exist.
+
 ## Notes
 
 - Run the script on macOS on an Apple Silicon machine.

@@ -36,6 +36,9 @@
     } from "$lib/openduck/types";
     import ShortcutCapture from "./ShortcutCapture.svelte";
 
+    const DEFAULT_RELEASE_NOTES_URL =
+        "https://github.com/anslwy/openduck/releases/latest";
+
     let {
         calling,
         buildInfo,
@@ -53,6 +56,7 @@
         globalShortcutInterrupt,
         pongPlaybackEnabled,
         autoUnmuteOnPastedScreenshotEnabled,
+        autoCheckAppUpdatesEnabled,
         selectLastSessionEnabled,
         autoLoadModelsOnStartupEnabled,
         showStatEnabled,
@@ -73,6 +77,7 @@
         onUpdateGlobalShortcutInterrupt,
         onUpdatePongPlayback,
         onUpdateAutoUnmuteOnPastedScreenshot,
+        onUpdateAutoCheckAppUpdates,
         onUpdateSelectLastSession,
         onUpdateAutoLoadModelsOnStartup,
         onUpdateShowStat,
@@ -104,6 +109,7 @@
         globalShortcutInterrupt: string;
         pongPlaybackEnabled: boolean;
         autoUnmuteOnPastedScreenshotEnabled: boolean;
+        autoCheckAppUpdatesEnabled: boolean;
         selectLastSessionEnabled: boolean;
         autoLoadModelsOnStartupEnabled: boolean;
         showStatEnabled: boolean;
@@ -124,6 +130,7 @@
         onUpdateGlobalShortcutInterrupt: (shortcut: string) => void;
         onUpdatePongPlayback: (enabled: boolean) => void;
         onUpdateAutoUnmuteOnPastedScreenshot: (enabled: boolean) => void;
+        onUpdateAutoCheckAppUpdates: (enabled: boolean) => void;
         onUpdateSelectLastSession: (enabled: boolean) => void;
         onUpdateAutoLoadModelsOnStartup: (enabled: boolean) => void;
         onUpdateShowStat: (enabled: boolean) => void;
@@ -193,9 +200,12 @@
     }
 
     async function handleDownloadFromGithub() {
+        const releaseNotesUrl =
+            availableAppUpdate?.releaseNotesUrl?.trim() ||
+            DEFAULT_RELEASE_NOTES_URL;
         try {
             await invoke("plugin:shell|open", {
-                path: "https://github.com/anslwy/openduck/releases",
+                path: releaseNotesUrl,
             });
         } catch (error) {
             console.error("Failed to open GitHub releases:", error);
@@ -466,6 +476,13 @@
             label: "Select Last Session When Startup",
             value: selectLastSessionEnabled,
             onUpdate: onUpdateSelectLastSession,
+        },
+        {
+            id: "auto-update-check",
+            type: "toggle",
+            label: "Automatically check for app updates when online",
+            value: autoCheckAppUpdatesEnabled,
+            onUpdate: onUpdateAutoCheckAppUpdates,
         },
         {
             id: "auto-load",
@@ -1105,6 +1122,13 @@
                         {/if}
 
                         <div class="about-update-actions">
+                            <button
+                                type="button"
+                                class="utility-btn about-update-install-btn"
+                                onclick={handleDownloadFromGithub}
+                            >
+                                Full Release Notes
+                            </button>
                             {#if appUpdateStatus === "available"}
                                 <button
                                     type="button"

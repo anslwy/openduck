@@ -1208,6 +1208,7 @@ main.idle-layout {
     font-size: 0.88rem;
     line-height: 1.45;
     letter-spacing: -0.01em;
+    white-space: pre-wrap;
 }
 
 .contacts-popup-header {

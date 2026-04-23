@@ -262,6 +262,7 @@ export type AppUpdateInfo = {
     notes?: string | null;
     publishedAt?: string | null;
     target: string;
+    releaseNotesUrl?: string | null;
 };
 
 export type StoredModelPreferences = {

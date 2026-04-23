@@ -15,6 +15,7 @@
     import ContactsModal from "$lib/components/home/ContactsModal.svelte";
     import ConversationPopup from "$lib/components/home/ConversationPopup.svelte";
     import SessionsPopup from "$lib/components/home/SessionsPopup.svelte";
+    import UpdatePromptModal from "$lib/components/home/UpdatePromptModal.svelte";
     import AppHeader from "$lib/components/home/AppHeader.svelte";
     import SearchModal from "$lib/components/home/SearchModal.svelte";
     import ExternalLlmConfigModal from "$lib/components/home/ExternalLlmConfigModal.svelte";
@@ -39,6 +40,7 @@
         AUTO_CONTINUE_MAX_COUNT_STORAGE_KEY,
         AUTO_CONTINUE_SILENCE_STEP_MS,
         AUTO_CONTINUE_SILENCE_STORAGE_KEY,
+        APP_UPDATE_PREFERENCES_STORAGE_KEY,
         DEFAULT_CONTACT_PROMPT,
         CONTACTS_STORAGE_KEY,
         DEFAULT_AUTO_CONTINUE_MAX_COUNT,
@@ -89,12 +91,15 @@
         DEFAULT_SHOW_CALL_TIMER,
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
         DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP,
+        DEFAULT_AUTO_CHECK_APP_UPDATES,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
         DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
         DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
     } from "$lib/openduck/config";
     import {
+        createReleaseNotesPreview,
+        formatAppUpdateInstallError,
         formatDownloadPercent,
         formatMemoryUsage,
         normalizeDownloadErrorMessage,
@@ -161,6 +166,12 @@
         enabled: boolean;
     };
 
+    type StoredAppUpdatePreference = {
+        version: 1;
+        skippedVersion: string | null;
+        autoCheckEnabled?: boolean;
+    };
+
     type StoredShowStatPreference = {
         version: 1;
         enabled: boolean;
@@ -220,6 +231,15 @@
     const OVERLAY_WINDOW_ROUTE = "/overlay";
     const AI_SUBTITLE_EVENT = "ai-subtitle";
     const LIVE_TRANSCRIPT_SUBTITLE_DURATION_MS = 5_000;
+    const GITHUB_LATEST_RELEASE_API_URL =
+        "https://api.github.com/repos/anslwy/openduck/releases/latest";
+    const RELEASE_NOTES_URL =
+        "https://github.com/anslwy/openduck/releases/latest";
+
+    type GithubLatestReleasePayload = {
+        body?: unknown;
+        html_url?: unknown;
+    };
 
     let calling = $state(false);
     let micMuted = $state(false);
@@ -377,6 +397,7 @@
     let currentSessionTitle = $state<string | null>(null);
     let currentSessionId = $state<string | null>(null);
     let showAboutPopup = $state(false);
+    let showUpdatePrompt = $state(false);
     let showSearchModal = $state(false);
     let conversationLogEntries = $state<ConversationLogEntry[]>([]);
     let buildInfo = $state<BuildInfo | null>(null);
@@ -384,6 +405,10 @@
     let availableAppUpdate = $state<AppUpdateInfo | null>(null);
     let appUpdateStatus = $state<AppUpdateStatus>("idle");
     let appUpdateError = $state<string | null>(null);
+    let skippedAppUpdateVersion = $state<string | null>(null);
+    let autoCheckAppUpdatesEnabled = $state(DEFAULT_AUTO_CHECK_APP_UPDATES);
+    let suppressAutoUpdatePromptUntilNextCheck = $state(false);
+    let pendingAutomaticUpdatePromptVersion = $state<string | null>(null);
     let updateObject: Update | null = null;
     let nextConversationEntryId = 1;
     let pendingConversationUserLogEntryId: number | null = null;
@@ -396,6 +421,26 @@
     const popupActionsBusy = $derived(
         isSavingConversationLogEntryEdit || isClearingConversationLogImages,
     );
+
+    $effect(() => {
+        const pendingVersion = pendingAutomaticUpdatePromptVersion;
+        if (!pendingVersion) {
+            return;
+        }
+
+        if (calling || showAboutPopup) {
+            return;
+        }
+
+        if (availableAppUpdate?.version !== pendingVersion) {
+            pendingAutomaticUpdatePromptVersion = null;
+            return;
+        }
+
+        showUpdatePrompt = true;
+        pendingAutomaticUpdatePromptVersion = null;
+    });
+
     let callStagePhase = $state<CallStagePhase>("idle");
     let callStageMessage = $state("");
     let reasoningText = $state("");
@@ -1383,6 +1428,25 @@
         );
     }
 
+    function persistAppUpdatePreference(options: {
+        skippedVersion: string | null;
+        autoCheckEnabled: boolean;
+    }) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredAppUpdatePreference = {
+            version: 1,
+            skippedVersion: options.skippedVersion,
+            autoCheckEnabled: options.autoCheckEnabled,
+        };
+        window.localStorage.setItem(
+            APP_UPDATE_PREFERENCES_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function persistPongPlaybackPreference(enabled: boolean) {
         if (typeof window === "undefined") {
             return;
@@ -1691,6 +1755,57 @@
         } catch (err) {
             console.error("Failed to restore pong playback preference:", err);
             return true;
+        }
+    }
+
+    function loadAppUpdatePreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return {
+                skippedVersion: null,
+                autoCheckEnabled: DEFAULT_AUTO_CHECK_APP_UPDATES,
+            };
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            APP_UPDATE_PREFERENCES_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return {
+                skippedVersion: null,
+                autoCheckEnabled: DEFAULT_AUTO_CHECK_APP_UPDATES,
+            };
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                skippedVersion?: unknown;
+                autoCheckEnabled?: unknown;
+            };
+            if (
+                parsed.version !== 1 ||
+                (parsed.skippedVersion !== null &&
+                    typeof parsed.skippedVersion !== "string") ||
+                (parsed.autoCheckEnabled !== undefined &&
+                    typeof parsed.autoCheckEnabled !== "boolean")
+            ) {
+                return {
+                    skippedVersion: null,
+                    autoCheckEnabled: DEFAULT_AUTO_CHECK_APP_UPDATES,
+                };
+            }
+
+            return {
+                skippedVersion: parsed.skippedVersion ?? null,
+                autoCheckEnabled:
+                    parsed.autoCheckEnabled ?? DEFAULT_AUTO_CHECK_APP_UPDATES,
+            };
+        } catch (err) {
+            console.error("Failed to restore app update preference:", err);
+            return {
+                skippedVersion: null,
+                autoCheckEnabled: DEFAULT_AUTO_CHECK_APP_UPDATES,
+            };
         }
     }
 
@@ -2109,6 +2224,14 @@
         persistAutoUnmuteOnPastedScreenshotPreference(enabled);
     }
 
+    function applyAutoCheckAppUpdatesPreference(enabled: boolean) {
+        autoCheckAppUpdatesEnabled = enabled;
+        persistAppUpdatePreference({
+            skippedVersion: skippedAppUpdateVersion,
+            autoCheckEnabled: enabled,
+        });
+    }
+
     function applySelectLastSessionPreference(enabled: boolean) {
         selectLastSessionEnabled = enabled;
         window.localStorage.setItem(
@@ -2254,6 +2377,12 @@
         }
 
         applyPongPlaybackPreference(effectiveEnabled);
+    }
+
+    async function initializeAppUpdatePreference() {
+        const storedPreference = loadAppUpdatePreferenceFromStorage();
+        skippedAppUpdateVersion = storedPreference.skippedVersion;
+        autoCheckAppUpdatesEnabled = storedPreference.autoCheckEnabled;
     }
 
     async function initializeAutoUnmuteOnPastedScreenshotPreference() {
@@ -3094,13 +3223,90 @@
         showAboutPopup = false;
     }
 
-    async function checkForAppUpdates() {
+    function closeUpdatePrompt() {
+        showUpdatePrompt = false;
+        pendingAutomaticUpdatePromptVersion = null;
+    }
+
+    function queueAutomaticUpdatePrompt(version: string) {
+        if (calling || showAboutPopup) {
+            pendingAutomaticUpdatePromptVersion = version;
+            return;
+        }
+
+        showUpdatePrompt = true;
+        pendingAutomaticUpdatePromptVersion = null;
+    }
+
+    function shouldPromptForAutomaticUpdate(
+        version: string,
+        suppressPrompt: boolean,
+    ) {
+        return !suppressPrompt && version !== skippedAppUpdateVersion;
+    }
+
+    function skipAvailableAppUpdateVersion() {
+        const version = availableAppUpdate?.version?.trim();
+        if (version) {
+            skippedAppUpdateVersion = version;
+            persistAppUpdatePreference({
+                skippedVersion: version,
+                autoCheckEnabled: autoCheckAppUpdatesEnabled,
+            });
+        }
+
+        suppressAutoUpdatePromptUntilNextCheck = false;
+        closeUpdatePrompt();
+    }
+
+    function remindAboutAppUpdateLater() {
+        suppressAutoUpdatePromptUntilNextCheck = true;
+        closeUpdatePrompt();
+    }
+
+    async function triggerAutomaticAppUpdateCheck() {
+        if (
+            typeof navigator === "undefined" ||
+            !navigator.onLine ||
+            !autoCheckAppUpdatesEnabled
+        ) {
+            return;
+        }
+
+        if (
+            appUpdateStatus === "checking" ||
+            appUpdateStatus === "installing" ||
+            appUpdateStatus === "installed"
+        ) {
+            return;
+        }
+
+        const suppressPrompt = suppressAutoUpdatePromptUntilNextCheck;
+        suppressAutoUpdatePromptUntilNextCheck = false;
+
+        await checkForAppUpdates({
+            source: "automatic",
+            suppressAutoPrompt: suppressPrompt,
+        });
+    }
+
+    async function checkForAppUpdates(options: {
+        source?: "manual" | "automatic";
+        suppressAutoPrompt?: boolean;
+    } = {}) {
+        const source = options.source ?? "manual";
+        const suppressAutoPrompt = options.suppressAutoPrompt ?? false;
         if (
             appUpdateStatus === "checking" ||
             appUpdateStatus === "installing"
         ) {
             return;
         }
+
+        const previousAvailableAppUpdate = availableAppUpdate;
+        const previousAppUpdateStatus = appUpdateStatus;
+        const previousAppUpdateError = appUpdateError;
+        const previousUpdateObject = updateObject;
 
         appUpdateStatus = "checking";
         appUpdateError = null;
@@ -3110,19 +3316,46 @@
         try {
             updateObject = await check();
             if (updateObject) {
+                const rawTarget = updateObject.rawJson.target;
+                const releaseNotes = await resolveAppUpdateReleaseNotes(
+                    updateObject,
+                );
                 availableAppUpdate = {
                     version: updateObject.version,
-                    currentVersion: buildInfo?.version || "",
-                    notes: updateObject.body,
+                    currentVersion:
+                        updateObject.currentVersion || buildInfo?.version || "",
+                    notes: releaseNotes.notesPreview,
                     publishedAt: updateObject.date,
-                    target: "",
+                    target: typeof rawTarget === "string" ? rawTarget : "",
+                    releaseNotesUrl: releaseNotes.releaseNotesUrl,
                 };
                 appUpdateStatus = "available";
+
+                if (
+                    source === "automatic" &&
+                    shouldPromptForAutomaticUpdate(
+                        updateObject.version,
+                        suppressAutoPrompt,
+                    )
+                ) {
+                    queueAutomaticUpdatePrompt(updateObject.version);
+                } else if (source === "automatic") {
+                    closeUpdatePrompt();
+                }
             } else {
                 appUpdateStatus = "up_to_date";
+                closeUpdatePrompt();
             }
         } catch (err) {
             console.error("Failed to check for app updates:", err);
+            if (source === "automatic") {
+                availableAppUpdate = previousAvailableAppUpdate;
+                appUpdateStatus = previousAppUpdateStatus;
+                appUpdateError = previousAppUpdateError;
+                updateObject = previousUpdateObject;
+                return;
+            }
+
             availableAppUpdate = null;
             updateObject = null;
             appUpdateStatus = "error";
@@ -3166,7 +3399,7 @@
         } catch (err) {
             console.error("Failed to install app update:", err);
             appUpdateStatus = "error";
-            appUpdateError = normalizeErrorMessage(err);
+            appUpdateError = formatAppUpdateInstallError(err);
         }
     }
 
@@ -3200,6 +3433,47 @@
 
         if (options.checkForUpdates) {
             void checkForAppUpdates();
+        }
+    }
+
+    async function fetchGithubReleaseNotesMetadata() {
+        const response = await fetch(GITHUB_LATEST_RELEASE_API_URL, {
+            headers: {
+                Accept: "application/vnd.github+json",
+            },
+        });
+
+        if (!response.ok) {
+            throw new Error(
+                `GitHub release notes request failed with status ${response.status}.`,
+            );
+        }
+
+        const payload = (await response.json()) as GithubLatestReleasePayload;
+        const notes =
+            typeof payload.body === "string" ? payload.body : undefined;
+        const releaseNotesUrl =
+            typeof payload.html_url === "string" && payload.html_url.trim()
+                ? payload.html_url
+                : RELEASE_NOTES_URL;
+
+        return {
+            notesPreview: createReleaseNotesPreview(notes, 150),
+            releaseNotesUrl,
+        };
+    }
+
+    async function resolveAppUpdateReleaseNotes(update: Update) {
+        const fallbackNotesPreview = createReleaseNotesPreview(update.body, 150);
+
+        try {
+            return await fetchGithubReleaseNotesMetadata();
+        } catch (err) {
+            console.warn("Failed to fetch GitHub release notes preview:", err);
+            return {
+                notesPreview: fallbackNotesPreview,
+                releaseNotesUrl: RELEASE_NOTES_URL,
+            };
         }
     }
 
@@ -3853,6 +4127,15 @@
 
         if (previewImageUrl) {
             previewImageUrl = null;
+            return;
+        }
+
+        if (showUpdatePrompt) {
+            if (appUpdateStatus === "installing") {
+                return;
+            }
+
+            remindAboutAppUpdateLater();
             return;
         }
 
@@ -6275,6 +6558,7 @@
             }
 
             await loadBuildInfo();
+            await initializeAppUpdatePreference();
             const restoredContacts = await loadContactsFromStorage();
             contacts = restoredContacts.contacts;
             selectedContactId = restoredContacts.selectedContactId;
@@ -6305,6 +6589,11 @@
             await initializeGlobalShortcutEntireScreenPreference();
             await initializeGlobalShortcutToggleMutePreference();
             await initializeGlobalShortcutInterruptPreference();
+
+            if (navigator.onLine) {
+                void triggerAutomaticAppUpdateCheck();
+            }
+
             await loadSessions();
             if (
                 !currentSessionId &&
@@ -6335,6 +6624,10 @@
             void syncModelStatus();
         }, 5000);
 
+        const handleWindowOnline = () => {
+            void triggerAutomaticAppUpdateCheck();
+        };
+
         const handleClickOutside = (event: MouseEvent) => {
             const target = event.target as HTMLElement;
             const isInsideSubtitleTranslationModal =
@@ -6343,6 +6636,10 @@
 
             // If the image preview is open, don't close other popups
             if (previewImageUrl) {
+                return;
+            }
+
+            if (showUpdatePrompt) {
                 return;
             }
 
@@ -6404,9 +6701,11 @@
             }
         };
 
+        window.addEventListener("online", handleWindowOnline);
         window.addEventListener("mousedown", handleClickOutside);
 
         return () => {
+            window.removeEventListener("online", handleWindowOnline);
             window.removeEventListener("mousedown", handleClickOutside);
         };
     });
@@ -6445,7 +6744,7 @@
 <div class="app-container" class:contacts-open={showContactsPopup}>
     <div class="background" style={selectedContactImageStyle}></div>
 
-    {#if !isPreparingRuntime && !showContactsPopup && !showAboutPopup && !showConversationPopup}
+    {#if !isPreparingRuntime && !showContactsPopup && !showAboutPopup && !showConversationPopup && !showUpdatePrompt}
         <AppHeader
             {currentSessionTitle}
             {showSessionsPopup}
@@ -6457,7 +6756,7 @@
     {#if !calling}
         <div
             class="model-tags"
-            class:dimmed={showContactsPopup || showAboutPopup}
+            class:dimmed={showContactsPopup || showAboutPopup || showUpdatePrompt}
         >
             {#if showRuntimeSetupBanner}
                 <div
@@ -6937,6 +7236,7 @@
                     {globalShortcutInterrupt}
                     {pongPlaybackEnabled}
                     {autoUnmuteOnPastedScreenshotEnabled}
+                    {autoCheckAppUpdatesEnabled}
                     {selectLastSessionEnabled}
                     {autoLoadModelsOnStartupEnabled}
                     {showStatEnabled}
@@ -6957,6 +7257,7 @@
                     onUpdateGlobalShortcutInterrupt={applyGlobalShortcutInterruptPreference}
                     onUpdatePongPlayback={applyPongPlaybackPreference}
                     onUpdateAutoUnmuteOnPastedScreenshot={applyAutoUnmuteOnPastedScreenshotPreference}
+                    onUpdateAutoCheckAppUpdates={applyAutoCheckAppUpdatesPreference}
                     onUpdateSelectLastSession={applySelectLastSessionPreference}
                     onUpdateAutoLoadModelsOnStartup={applyAutoLoadModelsOnStartupPreference}
                     onUpdateShowStat={applyShowStatPreference}
@@ -6975,6 +7276,19 @@
             </div>
         {/if}
 
+        {#if showUpdatePrompt && availableAppUpdate}
+            <UpdatePromptModal
+                {availableAppUpdate}
+                {appUpdateStatus}
+                {appUpdateError}
+                onInstall={appUpdateStatus === "installed"
+                    ? restartToApplyUpdate
+                    : installAppUpdate}
+                onSkipVersion={skipAvailableAppUpdateVersion}
+                onRemindLater={remindAboutAppUpdateLater}
+            />
+        {/if}
+
         {#if showSubtitleTranslationLlmConfig}
             <SubtitleTranslationLlmConfigModal
                 baseUrl={subtitleTranslationBaseUrl}
@@ -6988,7 +7302,7 @@
 
         <div
             class="control-bar"
-            class:dimmed={showContactsPopup || showAboutPopup}
+            class:dimmed={showContactsPopup || showAboutPopup || showUpdatePrompt}
         >
             <div class="info">
                 <span class="username"

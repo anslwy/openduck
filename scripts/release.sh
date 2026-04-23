@@ -301,9 +301,21 @@ EOF
     if [ -n "$BUILD_ARGS" ]; then
         # shellcheck disable=SC2206
         local build_args_array=($BUILD_ARGS)
-        (cd "$ROOT_DIR" && env "${build_env[@]}" npm run tauri build -- --target "$TARGET_TRIPLE" --bundles dmg,app "${config_args[@]}" "${build_args_array[@]}")
+        if ! (cd "$ROOT_DIR" && env "${build_env[@]}" npm run tauri build -- --target "$TARGET_TRIPLE" --bundles dmg,app "${config_args[@]}" "${build_args_array[@]}"); then
+            echo
+            echo "Tauri bundling failed."
+            echo "For a verbose DMG replay, run:"
+            echo "  npm run tauri:dmg:debug"
+            die "tauri build failed"
+        fi
     else
-        (cd "$ROOT_DIR" && env "${build_env[@]}" npm run tauri build -- --target "$TARGET_TRIPLE" --bundles dmg,app "${config_args[@]}")
+        if ! (cd "$ROOT_DIR" && env "${build_env[@]}" npm run tauri build -- --target "$TARGET_TRIPLE" --bundles dmg,app "${config_args[@]}"); then
+            echo
+            echo "Tauri bundling failed."
+            echo "For a verbose DMG replay, run:"
+            echo "  npm run tauri:dmg:debug"
+            die "tauri build failed"
+        fi
     fi
 
     source_dmg="$(find_latest_matching "$dmg_bundle_dir" "*.dmg")" || die "No DMG was produced in $dmg_bundle_dir"
