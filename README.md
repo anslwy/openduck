@@ -21,6 +21,11 @@ https://github.com/user-attachments/assets/052aa02c-7be8-411e-9bb1-8f5a13515c47
 
 https://github.com/user-attachments/assets/4603ce80-9b74-4b0e-8f8c-ff242f7bdc37
 
+|![Dual Subtitles](/screenshots/dual-subtitles.png) | ![Settings](/screenshots/settings.png) |
+|:---:|:---:|
+| Dual Subtitles | Settings |
+|![Screen-Aware Vision](/screenshots/screen-aware.png) | ![Characters](/screenshots/characters.png) |
+| Screen-Aware Vision | Characters |
 
 ## Features
 
