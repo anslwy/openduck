@@ -29,6 +29,8 @@
         deleteStoredContactIcon,
         getContactDisplayName,
         loadContactsFromStorage,
+        normalizeContactGender,
+        normalizeContactPrompt,
         readFileAsDataUrl,
         saveStoredContactIcon,
         slugifyContactName,
@@ -37,6 +39,7 @@
         AUTO_CONTINUE_MAX_COUNT_STORAGE_KEY,
         AUTO_CONTINUE_SILENCE_STEP_MS,
         AUTO_CONTINUE_SILENCE_STORAGE_KEY,
+        DEFAULT_CONTACT_PROMPT,
         CONTACTS_STORAGE_KEY,
         DEFAULT_AUTO_CONTINUE_MAX_COUNT,
         DEFAULT_AUTO_CONTINUE_SILENCE_MS,
@@ -50,7 +53,6 @@
         DEFAULT_OPENAI_COMPATIBLE_MODEL,
         DEFAULT_OLLAMA_MODEL,
         DEFAULT_STT_MODEL,
-        DEFAULT_VOICE_SYSTEM_PROMPT,
         END_OF_UTTERANCE_SILENCE_STEP_MS,
         END_OF_UTTERANCE_SILENCE_STORAGE_KEY,
         LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY,
@@ -113,6 +115,7 @@
         BuildInfo,
         CallStageEvent,
         CallStagePhase,
+        ContactGender,
         ContactExportResult,
         ContactProfile,
         ConversationContextCommittedEvent,
@@ -810,7 +813,7 @@
         getContactDisplayName(selectedContact),
     );
     const selectedContactPrompt = $derived(
-        selectedContact?.prompt.trim() || DEFAULT_VOICE_SYSTEM_PROMPT,
+        selectedContact?.prompt.trim() || DEFAULT_CONTACT_PROMPT,
     );
 
     $effect(() => {
@@ -2993,10 +2996,27 @@
         }, 160);
     }
 
+    function resolveContactVoicePreset(
+        contact: Pick<ContactProfile, "gender"> | null | undefined,
+    ): ContactGender {
+        return contact?.gender === "male" ? "male" : "female";
+    }
+
     async function syncSelectedContactVoiceReference() {
+        const voicePreset = resolveContactVoicePreset(selectedContact);
+
+        if (selectedCsmModel === "kokoro_82m") {
+            try {
+                await invoke("set_csm_voice", { voice: voicePreset });
+            } catch (err) {
+                console.error("Failed to sync the Kokoro voice:", err);
+            }
+            return;
+        }
+
         if (!selectedContact?.refAudio) {
             try {
-                await invoke("set_csm_voice", { voice: "female" });
+                await invoke("set_csm_voice", { voice: voicePreset });
             } catch (err) {
                 console.error("Failed to reset the voice reference:", err);
             }
@@ -3410,9 +3430,10 @@
         const nextContact: ContactProfile = {
             id: createContactId(),
             name: `Contact ${contacts.length + 1}`,
-            prompt: selectedContact?.prompt ?? DEFAULT_VOICE_SYSTEM_PROMPT,
+            prompt: selectedContact?.prompt ?? DEFAULT_CONTACT_PROMPT,
             hasCustomIcon: false,
             iconDataUrl: null,
+            gender: selectedContact?.gender ?? null,
             refAudio: null,
             refText: null,
         };
@@ -3422,6 +3443,7 @@
         persistContactsMetadata();
         showContactsPopup = true;
         queueSelectedContactPromptSync();
+        queueSelectedContactVoiceReferenceSync();
     }
 
     async function handleDeleteSelectedContact() {
@@ -3443,6 +3465,7 @@
         selectedContactId = remainingContacts[0]?.id ?? DEFAULT_CONTACT_ID;
         persistContactsMetadata();
         queueSelectedContactPromptSync();
+        queueSelectedContactVoiceReferenceSync();
     }
 
     function handleSelectedContactNameInput(event: Event) {
@@ -3470,6 +3493,20 @@
         queueSelectedContactPromptSync();
     }
 
+    function handleSelectedContactGenderInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextGender = (event.currentTarget as HTMLSelectElement)
+            .value as ContactGender;
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            gender: nextGender,
+        }));
+        queueSelectedContactVoiceReferenceSync();
+    }
+
     function triggerContactImport() {
         contactsImportInput?.click();
     }
@@ -3491,8 +3528,7 @@
             const rawText = await file.text();
             const parsed = JSON.parse(rawText) as Record<string, unknown>;
             const nextName = typeof parsed.name === "string" ? parsed.name : "";
-            const nextPrompt =
-                typeof parsed.prompt === "string" ? parsed.prompt : "";
+            const nextPrompt = normalizeContactPrompt(parsed.prompt);
             const iconDataUrl =
                 typeof parsed.iconDataUrl === "string" &&
                 parsed.iconDataUrl.startsWith("data:image/")
@@ -3503,7 +3539,7 @@
                 throw new Error("The imported contact is missing a name.");
             }
 
-            if (!nextPrompt.trim()) {
+            if (!nextPrompt) {
                 throw new Error("The imported contact is missing a prompt.");
             }
 
@@ -3513,6 +3549,7 @@
                 prompt: nextPrompt,
                 hasCustomIcon: Boolean(iconDataUrl),
                 iconDataUrl,
+                gender: normalizeContactGender(parsed.gender),
                 refAudio:
                     typeof parsed.refAudio === "string"
                         ? parsed.refAudio
@@ -3530,6 +3567,7 @@
             persistContactsMetadata();
             showContactsPopup = true;
             queueSelectedContactPromptSync();
+            queueSelectedContactVoiceReferenceSync();
         } catch (err) {
             console.error("Failed to import contact:", err);
             alert(`Failed to import contact.\n${normalizeErrorMessage(err)}`);
@@ -3628,13 +3666,7 @@
             refAudio: null,
         }));
         persistContactsMetadata();
-
-        void invoke("set_csm_voice", { voice: "female" }).catch((err) => {
-            console.error(
-                "Failed to reset CSM voice after clearing reference:",
-                err,
-            );
-        });
+        queueSelectedContactVoiceReferenceSync();
     }
 
     function handlePlaySelectedContactRefAudio() {
@@ -3712,8 +3744,11 @@
                 {
                     payload: {
                         name: getContactDisplayName(selectedContact),
-                        prompt: selectedContact.prompt,
+                        prompt:
+                            selectedContact.prompt.trim() ||
+                            DEFAULT_CONTACT_PROMPT,
                         iconDataUrl: selectedContact.iconDataUrl,
+                        gender: selectedContact.gender,
                         refAudio: selectedContact.refAudio,
                         refText: selectedContact.refText,
                         outputPath,
@@ -4139,6 +4174,7 @@
         try {
             await setCsmModelSelection(nextVariant);
             await syncModelStatus();
+            queueSelectedContactVoiceReferenceSync();
         } catch (err) {
             selectedCsmModel = previousVariant;
             console.error("Failed to update speech model:", err);
@@ -6776,6 +6812,7 @@
                     {handlePlaySelectedContactRefAudio}
                     {handleSelectedContactNameInput}
                     {handleSelectedContactPromptInput}
+                    {handleSelectedContactGenderInput}
                     {handleSelectedContactRefTextInput}
                     {handleDeleteSelectedContact}
                     {handleExportSelectedContact}

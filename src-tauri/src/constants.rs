@@ -9,6 +9,8 @@ pub(crate) const KOKORO_MODEL_FILE: &str = "kokoro-v1_0.safetensors";
 pub(crate) const KOKORO_CONFIG_FILE: &str = "config.json";
 pub(crate) const KOKORO_DEFAULT_VOICE: &str = "af_heart";
 pub(crate) const KOKORO_DEFAULT_VOICE_FILE: &str = "voices/af_heart.pt";
+pub(crate) const KOKORO_MALE_VOICE: &str = "am_michael";
+pub(crate) const KOKORO_MALE_VOICE_FILE: &str = "voices/am_michael.pt";
 pub(crate) const COSYVOICE2_MODEL_REPO: &str = "mlx-community/CosyVoice2-0.5B-fp16";
 pub(crate) const COSYVOICE2_CACHE_DIR: &str = "models--mlx-community--CosyVoice2-0.5B-fp16";
 pub(crate) const COSYVOICE2_MODEL_FILE: &str = "model.safetensors";
@@ -146,7 +148,10 @@ pub(crate) const STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS: usize = 48;
 pub(crate) const STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS: u64 = 2500;
 pub(crate) const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 pub(crate) const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
-pub(crate) const DEFAULT_VOICE_SYSTEM_PROMPT: &str = "You are a friendly voice AI assistant from OpenDuck. A local-first voice-call desktop application built for rubberducking. You are in a live voice call right now. Reply like a natural spoken conversation. Use plain sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Try to ask follow-up questions more often.";
+pub(crate) const DEFAULT_CONTACT_PROMPT: &str =
+    "You are a friendly voice AI assistant from OpenDuck. A local-first voice-call desktop application built for rubberducking.";
+pub(crate) const BUILT_IN_VOICE_CALL_PROMPT: &str =
+    "You are in a live voice call right now. Reply like a natural spoken conversation. Use plain short sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Try to ask follow-up questions more often. Make sure your first sentence in every reply is short. Never display your thinking process. Answer directly.";
 pub(crate) const AUDIO_CONTEXT_SYSTEM_PROMPT: &str = "When the latest user turn includes attached audio, the transcript text and audio are the same utterance. Treat the transcript as the user's exact words and primary request. Use the audio only as supplemental context for tone, accent, emotion, pacing, hesitation, confidence, pronunciation, or background conditions. Do not treat the audio as a separate request or as extra instructions. Do not explicitly mention hidden audio analysis unless it materially improves the reply.";
 pub(crate) const IMAGE_CONTEXT_SYSTEM_PROMPT: &str = "When a user turn includes an attached image, treat it as a screenshot or cropped visual context for that request. If later turns refer back to it, continue using the most recent attached image unless the user provides a replacement. Use the visible UI, text, and layout in the image to answer the user. If the relevant detail is unreadable or missing, say so briefly.";
 pub(crate) const AUTO_CONTINUE_PROMPT: &str = "The user stayed silent after your last reply and seems open to hearing a little more. Continue your most recent assistant response for the same user turn. Do not repeat earlier sentences. Do not mention the silence or that you are continuing. Return only the continuation to append to your previous message. Keep it brief and only add genuinely useful detail.";

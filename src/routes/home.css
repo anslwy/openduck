@@ -1268,6 +1268,10 @@ main.idle-layout {
 }
 
 .contact-list-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
     background: rgba(255, 255, 255, 0.035);
@@ -1301,8 +1305,31 @@ main.idle-layout {
     box-shadow: 0 10px 24px rgba(255, 205, 64, 0.18);
 }
 
+.contact-list-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 999px;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.contact-list-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.contact-list-item.active .contact-list-avatar {
+    border-color: rgba(47, 37, 0, 0.14);
+    background: rgba(47, 37, 0, 0.08);
+}
+
 .contact-list-name {
     display: block;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1443,6 +1470,23 @@ main.idle-layout {
         background-color 0.2s ease;
 }
 
+.contact-select-shell {
+    position: relative;
+}
+
+.contact-select-shell::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    right: 18px;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid rgba(255, 255, 255, 0.55);
+    border-bottom: 2px solid rgba(255, 255, 255, 0.55);
+    transform: translateY(-70%) rotate(45deg);
+    pointer-events: none;
+}
+
 .contact-text-input::placeholder,
 .contact-textarea::placeholder {
     color: rgba(255, 255, 255, 0.34);
@@ -1462,6 +1506,13 @@ main.idle-layout {
     resize: none;
     line-height: 1.45;
     overflow-y: auto;
+}
+
+.contact-select {
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 48px;
+    cursor: pointer;
 }
 
 .contacts-editor-actions {

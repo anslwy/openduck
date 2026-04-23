@@ -211,9 +211,12 @@ export type StoredContactProfile = {
     name: string;
     prompt: string;
     hasCustomIcon: boolean;
+    gender?: ContactGender | null;
     refAudio?: string | null;
     refText?: string | null;
 };
+
+export type ContactGender = "male" | "female";
 
 export type ContactProfile = StoredContactProfile & {
     iconDataUrl: string | null;

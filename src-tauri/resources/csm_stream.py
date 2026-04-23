@@ -51,6 +51,8 @@ KOKORO_CONFIG_FILE = "config.json"
 KOKORO_LANG_CODE = "a"
 KOKORO_DEFAULT_VOICE = "af_heart"
 KOKORO_DEFAULT_VOICE_FILE = f"voices/{KOKORO_DEFAULT_VOICE}.pt"
+KOKORO_MALE_VOICE = "am_michael"
+KOKORO_MALE_VOICE_FILE = f"voices/{KOKORO_MALE_VOICE}.pt"
 COSYVOICE2_MODEL_REPO = "mlx-community/CosyVoice2-0.5B-fp16"
 COSYVOICE2_MODEL_FILE = "model.safetensors"
 COSYVOICE2_CONFIG_FILE = "config.json"
@@ -177,6 +179,11 @@ def download_kokoro_assets() -> list[str]:
             KOKORO_MODEL_REPO,
             KOKORO_DEFAULT_VOICE_FILE,
             f"Kokoro voice {KOKORO_DEFAULT_VOICE}",
+        ),
+        download_hf_file(
+            KOKORO_MODEL_REPO,
+            KOKORO_MALE_VOICE_FILE,
+            f"Kokoro voice {KOKORO_MALE_VOICE}",
         ),
     ]
 

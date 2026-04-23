@@ -583,6 +583,7 @@ struct ContactExportPayload {
     name: String,
     prompt: String,
     icon_data_url: Option<String>,
+    gender: Option<String>,
     ref_audio: Option<String>,
     ref_text: Option<String>,
     output_path: String,
@@ -1532,23 +1533,35 @@ fn attach_pasted_screen_capture(
 #[tauri::command]
 fn set_voice_system_prompt(state: State<'_, AppState>, prompt: String) {
     let trimmed_prompt = prompt.trim();
-    let next_prompt = if trimmed_prompt.is_empty() {
-        DEFAULT_VOICE_SYSTEM_PROMPT.to_string()
-    } else {
-        trimmed_prompt.to_string()
-    };
+    let next_prompt = build_voice_system_prompt(trimmed_prompt);
 
     *state.voice_system_prompt.lock().unwrap() = next_prompt;
+}
+
+fn build_voice_system_prompt(prompt: &str) -> String {
+    let scenario_prompt = if prompt.trim().is_empty() {
+        DEFAULT_CONTACT_PROMPT
+    } else {
+        prompt.trim()
+    };
+
+    format!("{scenario_prompt}\n\n{BUILT_IN_VOICE_CALL_PROMPT}")
 }
 
 #[tauri::command]
 fn export_contact_profile(payload: ContactExportPayload) -> Result<ContactExportResult, String> {
     let export_path = normalize_contact_export_path(&payload.output_path)?;
+    let gender = payload
+        .gender
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let export_json = serde_json::json!({
         "version": 1,
         "name": payload.name.trim(),
         "prompt": payload.prompt,
         "iconDataUrl": payload.icon_data_url,
+        "gender": gender,
         "refAudio": payload.ref_audio,
         "refText": payload.ref_text,
     });
@@ -3162,7 +3175,14 @@ async fn start_csm_server_inner(
         command.arg("--context-text").arg(context_text);
     }
 
-    if let Ok(default_audio) = resolve_csm_context_audio_file(app_handle, state, CsmVoice::Female) {
+    let default_voice = match selected_voice {
+        CsmVoice::Male => CsmVoice::Male,
+        CsmVoice::Female | CsmVoice::Custom => CsmVoice::Female,
+    };
+
+    if let Ok(default_audio) =
+        resolve_csm_context_audio_file(app_handle, state, default_voice)
+    {
         command.arg("--default-audio").arg(default_audio);
     }
 
@@ -5368,13 +5388,14 @@ async fn send_csm_synthesis_request(
             .clone()
             .ok_or_else(|| "CSM worker is unavailable".to_string())?
     };
+    let selected_voice = *state.selected_csm_voice.lock().unwrap();
 
     let request = serde_json::json!({
         "type": "synthesize",
         "request_id": request_id,
         "text": text,
         "speaker": CSM_EXPRESSIVA_SPEAKER_ID,
-        "voice": KOKORO_DEFAULT_VOICE,
+        "voice": selected_voice.kokoro_voice(),
         "max_audio_length_ms": CSM_MAX_AUDIO_LENGTH_MS,
         "temperature": CSM_TEMPERATURE,
         "top_k": CSM_TOP_K,
@@ -10852,7 +10873,7 @@ fn resolve_csm_context_audio_file(
 
 fn resolve_csm_context_transcript_file(
     app_handle: &tauri::AppHandle,
-    state: &AppState,
+    _state: &AppState,
     voice: CsmVoice,
 ) -> Result<PathBuf, String> {
     if voice == CsmVoice::Custom {
@@ -11629,7 +11650,7 @@ pub fn run() {
             transient_tray_title: Mutex::new(None),
             transient_tray_icon: Mutex::new(None),
             call_stage_phase: Mutex::new("idle".to_string()),
-            voice_system_prompt: Mutex::new(DEFAULT_VOICE_SYSTEM_PROMPT.to_string()),
+            voice_system_prompt: Mutex::new(build_voice_system_prompt(DEFAULT_CONTACT_PROMPT)),
             conversation_session_id: AtomicU64::new(1),
             current_session_id: Mutex::new(None),
             current_session_title: Mutex::new(None),

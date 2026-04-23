@@ -106,6 +106,13 @@ impl CsmVoice {
             Self::Custom => None,
         }
     }
+
+    pub(crate) fn kokoro_voice(self) -> &'static str {
+        match self {
+            Self::Male => KOKORO_MALE_VOICE,
+            Self::Female | Self::Custom => KOKORO_DEFAULT_VOICE,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -210,6 +217,7 @@ impl CsmModelVariant {
                 KOKORO_CONFIG_FILE,
                 KOKORO_MODEL_FILE,
                 KOKORO_DEFAULT_VOICE_FILE,
+                KOKORO_MALE_VOICE_FILE,
             ],
             Self::CosyVoice205b => &[
                 COSYVOICE2_CONFIG_FILE,

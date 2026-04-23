@@ -34,7 +34,9 @@
       "resources/silero_vad.onnx",
       "../scripts/setup_python_env.sh",
       "../sample-male.mp3",
-      "../sample-female.mp3"
+      "../sample-male-transcript.txt",
+      "../sample-female.mp3",
+      "../sample-female-transcript.txt"
     ],
     "externalBin": ["bin/mlx-handler"],
     "macOS": {

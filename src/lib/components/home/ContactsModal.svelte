@@ -19,6 +19,7 @@
         handlePlaySelectedContactRefAudio,
         handleSelectedContactNameInput,
         handleSelectedContactPromptInput,
+        handleSelectedContactGenderInput,
         handleSelectedContactRefTextInput,
         handleDeleteSelectedContact,
         handleExportSelectedContact,
@@ -42,6 +43,7 @@
         handlePlaySelectedContactRefAudio: () => void;
         handleSelectedContactNameInput: (event: Event) => void;
         handleSelectedContactPromptInput: (event: Event) => void;
+        handleSelectedContactGenderInput: (event: Event) => void;
         handleSelectedContactRefTextInput: (event: Event) => void;
         handleDeleteSelectedContact: () => Promise<void>;
         handleExportSelectedContact: () => Promise<void>;
@@ -105,6 +107,12 @@
                         class:active={contact.id === selectedContact?.id}
                         onclick={() => selectContact(contact.id)}
                     >
+                        <span class="contact-list-avatar" aria-hidden="true">
+                            <img
+                                src={contact.iconDataUrl ?? "/icon.png"}
+                                alt=""
+                            />
+                        </span>
                         <span class="contact-list-name"
                             >{getContactDisplayName(contact)}</span
                         >
@@ -173,12 +181,26 @@
                     />
                 </label>
 
+                <label class="contact-field">
+                    <span class="contact-field-label">Gender</span>
+                    <div class="contact-select-shell">
+                        <select
+                            class="contact-text-input contact-select"
+                            value={selectedContact?.gender ?? "female"}
+                            onchange={handleSelectedContactGenderInput}
+                        >
+                            <option value="female">Female</option>
+                            <option value="male">Male</option>
+                        </select>
+                    </div>
+                </label>
+
                 <label class="contact-field contact-field-grow">
-                    <span class="contact-field-label">Prompt</span>
+                    <span class="contact-field-label">Scenario</span>
                     <textarea
                         class="contact-textarea"
                         rows="6"
-                        placeholder="Describe how this contact should respond."
+                        placeholder="Describe the character, roleplay, or scenario."
                         value={selectedContact?.prompt ?? ""}
                         oninput={handleSelectedContactPromptInput}
                     ></textarea>
@@ -253,7 +275,7 @@
                     </div>
                     <span class="contacts-editor-hint"
                         >Experimental. Currently only supported by CosyVoice3
-                        models for voice cloning</span
+                        and Chatterbox models for voice cloning</span
                     >
                 </div>
                 <label class="contact-field">
