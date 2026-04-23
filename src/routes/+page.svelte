@@ -175,7 +175,7 @@
         version: 1;
         enabled: boolean;
     };
-    
+
     type StoredAiSubtitleTargetLanguagePreference = {
         version: 1;
         targetLanguage: AiSubtitleTargetLanguage;
@@ -303,7 +303,10 @@
     let playbackIdleTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let eventUnlisteners: UnlistenFn[] = [];
     let activeTtsRequestId: number | null = null;
-    let ttsSegmentTextMap = new Map<number, { text: string; index: number }[]>();
+    let ttsSegmentTextMap = new Map<
+        number,
+        { text: string; index: number }[]
+    >();
     let assistantSegmentTranslationsMap = new Map<
         number,
         Map<number, Record<string, string>>
@@ -712,7 +715,7 @@
                       ? "Chatterbox Turbo (8-bit) provides a fast and realistic voice with lower RAM usage."
                       : selectedCsmModel === "chatterbox_turbo_fp16"
                         ? "Chatterbox Turbo (fp16) provides the highest possible voice quality with higher RAM usage."
-                      : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM.",
+                        : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM.",
     );
     const selectedSttModelLabel = $derived(
         sttModelOptions.find((option) => option.value === selectedSttModel)
@@ -828,26 +831,27 @@
         } else if (contactIdOnPopupOpen !== null) {
             contactIdOnPopupOpen = null;
 
-            if (
-                isCsmLoaded &&
-                (selectedCsmModel === "cosyvoice3_0_5b_8bit" ||
-                    selectedCsmModel === "cosyvoice3_0_5b_4bit" ||
-                    selectedCsmModel === "cosyvoice3_0_5b_fp16" ||
-                    selectedCsmModel === "chatterbox_turbo_8bit" ||
-                    selectedCsmModel === "chatterbox_turbo_fp16")
-            ) {
-                void (async () => {
-                    try {
-                        await handleUnloadCsm({ suppressAlert: true });
-                        await handleLoadCsm();
-                    } catch (err) {
-                        console.error(
-                            "Failed to automatically reload the speech model:",
-                            err,
-                        );
-                    }
-                })();
-            }
+            // Do not unload / reload voice clone models for now, seems no difference for the quality
+            // if (
+            //     isCsmLoaded &&
+            //     (selectedCsmModel === "cosyvoice3_0_5b_8bit" ||
+            //         selectedCsmModel === "cosyvoice3_0_5b_4bit" ||
+            //         selectedCsmModel === "cosyvoice3_0_5b_fp16" ||
+            //         selectedCsmModel === "chatterbox_turbo_8bit" ||
+            //         selectedCsmModel === "chatterbox_turbo_fp16")
+            // ) {
+            //     void (async () => {
+            //         try {
+            //             await handleUnloadCsm({ suppressAlert: true });
+            //             await handleLoadCsm();
+            //         } catch (err) {
+            //             console.error(
+            //                 "Failed to automatically reload the speech model:",
+            //                 err,
+            //             );
+            //         }
+            //     })();
+            // }
         }
     });
     const selectedContactIconUrl = $derived(
@@ -953,7 +957,8 @@
             let translated: string | undefined;
 
             if (requestId != null && segmentIndex != null) {
-                const requestMap = assistantSegmentTranslationsMap.get(requestId);
+                const requestMap =
+                    assistantSegmentTranslationsMap.get(requestId);
                 if (requestMap) {
                     const translations = requestMap.get(segmentIndex);
                     if (translations) {
@@ -2293,8 +2298,11 @@
         );
         const storedTargetLanguage =
             stored !== null
-                ? (JSON.parse(stored) as StoredAiSubtitleTargetLanguagePreference)
-                      .targetLanguage
+                ? (
+                      JSON.parse(
+                          stored,
+                      ) as StoredAiSubtitleTargetLanguagePreference
+                  ).targetLanguage
                 : DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE;
         applyAiSubtitleTargetLanguagePreference(storedTargetLanguage);
     }
@@ -2738,7 +2746,7 @@
         }
 
         const normalizedText = nextText.trim();
-        const nextImageUrls = clearImage ? [] : (entry.imageUrls || []);
+        const nextImageUrls = clearImage ? [] : entry.imageUrls || [];
         const nextTranslations = { ...(entry.translations || {}) };
 
         if (
@@ -4630,10 +4638,7 @@
         }
     }
 
-    async function testSubtitleTranslationConnection(
-        url: string,
-        key: string,
-    ) {
+    async function testSubtitleTranslationConnection(url: string, key: string) {
         return await invoke<string[]>("test_subtitle_translation_connection", {
             url,
             key: key || null,
@@ -4653,7 +4658,10 @@
             });
             await syncSubtitleTranslationLlmConfig();
         } catch (err) {
-            console.error("Failed to save subtitle translation LLM config:", err);
+            console.error(
+                "Failed to save subtitle translation LLM config:",
+                err,
+            );
             throw err;
         }
     }
@@ -5921,10 +5929,14 @@
                                 );
                             }
 
-                            for (const [indexStr, translations] of Object.entries(
-                                payload.translations,
-                            )) {
-                                requestMap.set(parseInt(indexStr), translations);
+                            for (const [
+                                indexStr,
+                                translations,
+                            ] of Object.entries(payload.translations)) {
+                                requestMap.set(
+                                    parseInt(indexStr),
+                                    translations,
+                                );
                             }
                         },
                     ),
@@ -6024,12 +6036,12 @@
                                 reasoningText = payload.reasoning_text;
                             }
 
-                             upsertAssistantConversationLogEntry(
-                                 payload.request_id,
-                                 payload.text,
-                                 payload.append_to_assistant_entry_id ?? null,
-                                 payload.translations,
-                             );
+                            upsertAssistantConversationLogEntry(
+                                payload.request_id,
+                                payload.text,
+                                payload.append_to_assistant_entry_id ?? null,
+                                payload.translations,
+                            );
                         },
                     ),
                     listen<ConversationContextCommittedEvent>(
