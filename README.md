@@ -18,8 +18,9 @@ https://github.com/user-attachments/assets/052aa02c-7be8-411e-9bb1-8f5a13515c47
 
 ## Demo (Screen-aware assistance)
 
-## Screenshots
 https://github.com/user-attachments/assets/4603ce80-9b74-4b0e-8f8c-ff242f7bdc37
+
+## Screenshots
 
 |![Dual Subtitles](/screenshots/dual-subtitles.png) | ![Settings](/screenshots/settings.png) |
 |:---:|:---:|
