@@ -2,22 +2,32 @@
 <script lang="ts">
     let {
         baseUrl,
-        apiKey,
+        hasApiKey,
         modelId,
         onSave,
         onTestConnection,
         onClose,
     } = $props<{
         baseUrl: string;
-        apiKey: string;
+        hasApiKey: boolean;
         modelId: string;
-        onSave: (url: string, key: string, modelId: string) => Promise<void>;
-        onTestConnection: (url: string, key: string) => Promise<string[]>;
+        onSave: (
+            url: string,
+            key: string,
+            clearKey: boolean,
+            modelId: string,
+        ) => Promise<void>;
+        onTestConnection: (
+            url: string,
+            key: string,
+            useSavedKey: boolean,
+        ) => Promise<string[]>;
         onClose: () => void;
     }>();
 
     let url = $state("");
     let key = $state("");
+    let clearSavedKey = $state(false);
     let selectedModelId = $state("");
     let availableModels = $state<string[]>([]);
     let connectionState = $state<"idle" | "success" | "error">("idle");
@@ -27,7 +37,8 @@
 
     $effect(() => {
         url = baseUrl;
-        key = apiKey;
+        key = "";
+        clearSavedKey = false;
         selectedModelId = modelId;
         availableModels = modelId ? [modelId] : [];
         connectionState = "idle";
@@ -60,6 +71,8 @@
     async function handleTestConnection() {
         const normalizedUrl = url.trim();
         const normalizedKey = key.trim();
+        const useSavedKey =
+            normalizedKey === "" && hasApiKey && !clearSavedKey;
 
         if (!normalizedUrl) {
             connectionState = "error";
@@ -72,7 +85,11 @@
         connectionMessage = "";
 
         try {
-            const models = await onTestConnection(normalizedUrl, normalizedKey);
+            const models = await onTestConnection(
+                normalizedUrl,
+                normalizedKey,
+                useSavedKey,
+            );
             availableModels = models;
 
             if (models.length === 0) {
@@ -110,9 +127,20 @@
             return;
         }
 
+        const normalizedKey = key.trim();
+        const shouldClearKey =
+            normalizedKey === "" &&
+            (clearSavedKey ||
+                (url.trim() === "" && selectedModelId.trim() === ""));
+
         isSaving = true;
         try {
-            await onSave(url.trim(), key.trim(), selectedModelId.trim());
+            await onSave(
+                url.trim(),
+                normalizedKey,
+                shouldClearKey,
+                selectedModelId.trim(),
+            );
             onClose();
         } catch (error) {
             connectionState = "error";
@@ -196,13 +224,33 @@
                 id="subtitle-translation-key"
                 type="password"
                 bind:value={key}
+                oninput={() => {
+                    if (key.trim() !== "") {
+                        clearSavedKey = false;
+                    }
+                }}
                 placeholder="Enter API key if required"
                 class="config-input"
             />
             <p class="field-help">
-                Required for providers like OpenAI. Optional for local servers or
-                unauthenticated proxies.
+                {#if hasApiKey}
+                    A key is already saved in your system credential store. Leave
+                    this blank to keep it, or enter a new key to replace it.
+                {:else}
+                    Required for providers like OpenAI. Optional for local
+                    servers or unauthenticated proxies.
+                {/if}
             </p>
+            {#if hasApiKey}
+                <label class="checkbox-row">
+                    <input
+                        type="checkbox"
+                        bind:checked={clearSavedKey}
+                        disabled={key.trim() !== ""}
+                    />
+                    <span>Clear saved API key</span>
+                </label>
+            {/if}
         </div>
 
         <div class="form-group">
@@ -321,6 +369,18 @@
 
     .field-help {
         color: rgba(255, 255, 255, 0.5);
+    }
+
+    .checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.78rem;
+        color: rgba(255, 255, 255, 0.72);
+    }
+
+    .checkbox-row input {
+        margin: 0;
     }
 
     .connection-status[data-state="success"] {

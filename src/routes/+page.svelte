@@ -217,6 +217,15 @@
         count: number | null;
     };
 
+    type ProviderConfig = {
+        baseUrl: string;
+        hasApiKey: boolean;
+    };
+
+    type SubtitleTranslationLlmConfig = ProviderConfig & {
+        modelId: string;
+    };
+
     type StoredLlmContextTurnLimitPreference = {
         version: 1;
         limit: number | null;
@@ -381,14 +390,14 @@
     let contactIdOnPopupOpen = $state<string | null>(null);
     let showExternalLlmConfig = $state(false);
     let ollamaBaseUrl = $state("http://127.0.0.1:11434");
-    let ollamaApiKey = $state("");
+    let ollamaHasApiKey = $state(false);
     let lmstudioBaseUrl = $state("http://127.0.0.1:1234");
-    let lmstudioApiKey = $state("");
+    let lmstudioHasApiKey = $state(false);
     let openAiCompatibleBaseUrl = $state("");
-    let openAiCompatibleApiKey = $state("");
+    let openAiCompatibleHasApiKey = $state(false);
     let showSubtitleTranslationLlmConfig = $state(false);
     let subtitleTranslationBaseUrl = $state("");
-    let subtitleTranslationApiKey = $state("");
+    let subtitleTranslationHasApiKey = $state(false);
     let subtitleTranslationModelId = $state("");
     let showConversationPopup = $state(false);
     let showSessionsPopup = $state(false);
@@ -613,16 +622,16 @@
         return ollamaBaseUrl;
     }
 
-    function getExternalProviderApiKey(variant: GemmaVariant) {
+    function getExternalProviderHasApiKey(variant: GemmaVariant) {
         if (variant === "lmstudio") {
-            return lmstudioApiKey;
+            return lmstudioHasApiKey;
         }
 
         if (variant === "openai_compatible") {
-            return openAiCompatibleApiKey;
+            return openAiCompatibleHasApiKey;
         }
 
-        return ollamaApiKey;
+        return ollamaHasApiKey;
     }
 
     const subtitleTranslationLlmConfigured = $derived(
@@ -4834,10 +4843,10 @@
 
     async function syncOllamaConfig() {
         try {
-            const [url, key] =
-                await invoke<[string, string | null]>("get_ollama_config");
-            ollamaBaseUrl = url;
-            ollamaApiKey = key ?? "";
+            const { baseUrl, hasApiKey } =
+                await invoke<ProviderConfig>("get_ollama_config");
+            ollamaBaseUrl = baseUrl;
+            ollamaHasApiKey = hasApiKey;
         } catch (err) {
             console.error("Failed to sync Ollama config:", err);
         }
@@ -4845,11 +4854,10 @@
 
     async function syncLmStudioConfig() {
         try {
-            const [url, key] = await invoke<[string, string | null]>(
-                "get_lmstudio_config",
-            );
-            lmstudioBaseUrl = url;
-            lmstudioApiKey = key ?? "";
+            const { baseUrl, hasApiKey } =
+                await invoke<ProviderConfig>("get_lmstudio_config");
+            lmstudioBaseUrl = baseUrl;
+            lmstudioHasApiKey = hasApiKey;
         } catch (err) {
             console.error("Failed to sync LM Studio config:", err);
         }
@@ -4857,11 +4865,11 @@
 
     async function syncOpenAiCompatibleConfig() {
         try {
-            const [url, key] = await invoke<[string, string | null]>(
+            const { baseUrl, hasApiKey } = await invoke<ProviderConfig>(
                 "get_openai_compatible_config",
             );
-            openAiCompatibleBaseUrl = url;
-            openAiCompatibleApiKey = key ?? "";
+            openAiCompatibleBaseUrl = baseUrl;
+            openAiCompatibleHasApiKey = hasApiKey;
         } catch (err) {
             console.error("Failed to sync OpenAI-compatible config:", err);
         }
@@ -4869,11 +4877,12 @@
 
     async function syncSubtitleTranslationLlmConfig() {
         try {
-            const [url, key, modelId] = await invoke<
-                [string, string | null, string]
-            >("get_subtitle_translation_llm_config");
-            subtitleTranslationBaseUrl = url;
-            subtitleTranslationApiKey = key ?? "";
+            const { baseUrl, hasApiKey, modelId } =
+                await invoke<SubtitleTranslationLlmConfig>(
+                    "get_subtitle_translation_llm_config",
+                );
+            subtitleTranslationBaseUrl = baseUrl;
+            subtitleTranslationHasApiKey = hasApiKey;
             subtitleTranslationModelId = modelId;
         } catch (err) {
             console.error(
@@ -4883,32 +4892,44 @@
         }
     }
 
-    async function saveExternalLlmConfig(url: string, key: string) {
+    async function saveExternalLlmConfig(
+        url: string,
+        key: string,
+        clearKey: boolean,
+    ) {
         const normalizedUrl = url.trim();
         const normalizedKey = key.trim();
+        const nextHasApiKey = clearKey
+            ? false
+            : normalizedKey !== ""
+              ? true
+              : getExternalProviderHasApiKey(selectedGemmaVariant);
 
         try {
             if (selectedGemmaVariant === "lmstudio") {
                 await invoke("set_lmstudio_config", {
                     url: normalizedUrl,
                     key: normalizedKey || null,
+                    clearKey,
                 });
                 lmstudioBaseUrl = normalizedUrl;
-                lmstudioApiKey = normalizedKey;
+                lmstudioHasApiKey = nextHasApiKey;
             } else if (selectedGemmaVariant === "openai_compatible") {
                 await invoke("set_openai_compatible_config", {
                     url: normalizedUrl,
                     key: normalizedKey || null,
+                    clearKey,
                 });
                 openAiCompatibleBaseUrl = normalizedUrl;
-                openAiCompatibleApiKey = normalizedKey;
+                openAiCompatibleHasApiKey = nextHasApiKey;
             } else {
                 await invoke("set_ollama_config", {
                     url: normalizedUrl,
                     key: normalizedKey || null,
+                    clearKey,
                 });
                 ollamaBaseUrl = normalizedUrl;
-                ollamaApiKey = normalizedKey;
+                ollamaHasApiKey = nextHasApiKey;
             }
 
             await syncModelStatus();
@@ -4921,22 +4942,29 @@
         }
     }
 
-    async function testSubtitleTranslationConnection(url: string, key: string) {
+    async function testSubtitleTranslationConnection(
+        url: string,
+        key: string,
+        useSavedKey: boolean,
+    ) {
         return await invoke<string[]>("test_subtitle_translation_connection", {
             url,
             key: key || null,
+            useSavedKey,
         });
     }
 
     async function saveSubtitleTranslationLlmConfig(
         url: string,
         key: string,
+        clearKey: boolean,
         modelId: string,
     ) {
         try {
             await invoke("set_subtitle_translation_llm_config", {
                 url,
                 key: key || null,
+                clearKey,
                 modelId,
             });
             await syncSubtitleTranslationLlmConfig();
@@ -7143,7 +7171,7 @@
             <ExternalLlmConfigModal
                 providerName={selectedExternalProviderLabel}
                 baseUrl={getExternalProviderBaseUrl(selectedGemmaVariant)}
-                apiKey={getExternalProviderApiKey(selectedGemmaVariant)}
+                hasApiKey={getExternalProviderHasApiKey(selectedGemmaVariant)}
                 urlPlaceholder={getExternalProviderUrlPlaceholder(
                     selectedGemmaVariant,
                 )}
@@ -7292,7 +7320,7 @@
         {#if showSubtitleTranslationLlmConfig}
             <SubtitleTranslationLlmConfigModal
                 baseUrl={subtitleTranslationBaseUrl}
-                apiKey={subtitleTranslationApiKey}
+                hasApiKey={subtitleTranslationHasApiKey}
                 modelId={subtitleTranslationModelId}
                 onSave={saveSubtitleTranslationLlmConfig}
                 onTestConnection={testSubtitleTranslationConnection}

@@ -1,27 +1,39 @@
 <!-- Modal for configuring external LLM connection details like URL and API key. -->
 <script lang="ts">
-    let { providerName, baseUrl, apiKey, urlPlaceholder, onSave, onClose } = $props<{
+    let {
+        providerName,
+        baseUrl,
+        hasApiKey,
+        urlPlaceholder,
+        onSave,
+        onClose,
+    } = $props<{
         providerName: string;
         baseUrl: string;
-        apiKey: string;
+        hasApiKey: boolean;
         urlPlaceholder: string;
-        onSave: (url: string, key: string) => Promise<void>;
+        onSave: (url: string, key: string, clearKey: boolean) => Promise<void>;
         onClose: () => void;
     }>();
 
     let url = $state("");
     let key = $state("");
+    let clearSavedKey = $state(false);
     let isSaving = $state(false);
 
     $effect(() => {
         url = baseUrl;
-        key = apiKey;
+        key = "";
+        clearSavedKey = false;
     });
 
     async function handleSave() {
+        const normalizedKey = key.trim();
+        const shouldClearKey = normalizedKey === "" && clearSavedKey;
+
         isSaving = true;
         try {
-            await onSave(url, key);
+            await onSave(url, normalizedKey, shouldClearKey);
             onClose();
         } catch (error) {
             console.error(`Failed to save ${providerName} config:`, error);
@@ -99,13 +111,33 @@
                 id="external-llm-key"
                 type="password"
                 bind:value={key}
+                oninput={() => {
+                    if (key.trim() !== "") {
+                        clearSavedKey = false;
+                    }
+                }}
                 placeholder="Enter API key if required"
                 class="config-input"
             />
             <p class="field-help">
-                Required for providers like OpenAI. Optional for local servers or
-                unauthenticated proxies.
+                {#if hasApiKey}
+                    A key is already saved in your system credential store. Leave
+                    this blank to keep it, or enter a new key to replace it.
+                {:else}
+                    Required for providers like OpenAI. Optional for local
+                    servers or unauthenticated proxies.
+                {/if}
             </p>
+            {#if hasApiKey}
+                <label class="checkbox-row">
+                    <input
+                        type="checkbox"
+                        bind:checked={clearSavedKey}
+                        disabled={key.trim() !== ""}
+                    />
+                    <span>Clear saved API key</span>
+                </label>
+            {/if}
         </div>
     </div>
 
@@ -162,6 +194,18 @@
     .field-help {
         font-size: 0.75rem;
         color: rgba(255, 255, 255, 0.5);
+        margin: 0;
+    }
+
+    .checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 0.78rem;
+        color: rgba(255, 255, 255, 0.72);
+    }
+
+    .checkbox-row input {
         margin: 0;
     }
 

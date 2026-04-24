@@ -7,11 +7,14 @@ mod vad;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use constants::*;
 use frontend_events::*;
+use keyring::{Entry as KeyringEntry, Error as KeyringError};
 use model_variants::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::net::TcpListener;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -304,7 +307,7 @@ struct OpenAiModel {
 struct PersistedExternalLlmProviderConfig {
     #[serde(default)]
     base_url: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     api_key: Option<String>,
 }
 
@@ -312,7 +315,7 @@ struct PersistedExternalLlmProviderConfig {
 struct PersistedSubtitleTranslationLlmConfig {
     #[serde(default)]
     base_url: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     api_key: Option<String>,
     #[serde(default)]
     model_id: String,
@@ -336,6 +339,49 @@ struct PersistedAppConfig {
     external_llm_providers: PersistedExternalLlmProvidersConfig,
     #[serde(default)]
     subtitle_translation_llm: PersistedSubtitleTranslationLlmConfig,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderConfigPayload {
+    base_url: String,
+    has_api_key: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubtitleTranslationLlmConfigPayload {
+    base_url: String,
+    has_api_key: bool,
+    model_id: String,
+}
+
+#[derive(Clone, Copy)]
+enum StoredApiKey {
+    Ollama,
+    LmStudio,
+    OpenAiCompatible,
+    SubtitleTranslation,
+}
+
+impl StoredApiKey {
+    fn account_name(self) -> &'static str {
+        match self {
+            Self::Ollama => "external-llm/ollama/api-key",
+            Self::LmStudio => "external-llm/lmstudio/api-key",
+            Self::OpenAiCompatible => "external-llm/openai-compatible/api-key",
+            Self::SubtitleTranslation => "subtitle-translation/api-key",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ollama => "Ollama API key",
+            Self::LmStudio => "LM Studio API key",
+            Self::OpenAiCompatible => "OpenAI-compatible API key",
+            Self::SubtitleTranslation => "subtitle translation API key",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -666,9 +712,10 @@ const BUILD_GIT_DIRTY_FILES: Option<&str> = option_env!("OPEN_DUCK_GIT_DIRTY_FIL
 const BUILD_UPDATER_PUBLIC_KEY: &str = env!("OPEN_DUCK_UPDATER_PUBLIC_KEY");
 const BUILD_UPDATER_ENDPOINT: &str = env!("OPEN_DUCK_UPDATER_ENDPOINT");
 const OPENDUCK_CONFIG_FILE_NAME: &str = "config.json";
+const OPENDUCK_KEYRING_SERVICE: &str = "OpenDuck";
 
 fn default_persisted_app_config_version() -> u32 {
-    1
+    2
 }
 
 fn default_ollama_base_url() -> String {
@@ -2251,35 +2298,59 @@ fn set_openai_compatible_model(state: State<'_, AppState>, model: String) {
     *model_guard = model;
 }
 
-#[tauri::command]
-fn get_ollama_config(state: State<'_, AppState>) -> (String, Option<String>) {
-    let url = state.ollama_base_url.lock().unwrap().clone();
-    let key = state.ollama_api_key.lock().unwrap().clone();
-    (url, key)
+fn update_runtime_api_key(
+    secret: StoredApiKey,
+    current_key: &mut Option<String>,
+    key: Option<String>,
+    clear_key: bool,
+) -> Result<(), String> {
+    if clear_key {
+        clear_stored_api_key(secret)?;
+        *current_key = None;
+        return Ok(());
+    }
+
+    if let Some(normalized_key) = normalize_optional_api_key(key) {
+        set_stored_api_key(secret, &normalized_key)?;
+        *current_key = Some(normalized_key);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
-fn get_lmstudio_config(state: State<'_, AppState>) -> (String, Option<String>) {
-    let url = state.lmstudio_base_url.lock().unwrap().clone();
-    let key = state.lmstudio_api_key.lock().unwrap().clone();
-    (url, key)
+fn get_ollama_config(state: State<'_, AppState>) -> ProviderConfigPayload {
+    ProviderConfigPayload {
+        base_url: state.ollama_base_url.lock().unwrap().clone(),
+        has_api_key: state.ollama_api_key.lock().unwrap().is_some(),
+    }
 }
 
 #[tauri::command]
-fn get_openai_compatible_config(state: State<'_, AppState>) -> (String, Option<String>) {
-    let url = state.openai_compatible_base_url.lock().unwrap().clone();
-    let key = state.openai_compatible_api_key.lock().unwrap().clone();
-    (url, key)
+fn get_lmstudio_config(state: State<'_, AppState>) -> ProviderConfigPayload {
+    ProviderConfigPayload {
+        base_url: state.lmstudio_base_url.lock().unwrap().clone(),
+        has_api_key: state.lmstudio_api_key.lock().unwrap().is_some(),
+    }
+}
+
+#[tauri::command]
+fn get_openai_compatible_config(state: State<'_, AppState>) -> ProviderConfigPayload {
+    ProviderConfigPayload {
+        base_url: state.openai_compatible_base_url.lock().unwrap().clone(),
+        has_api_key: state.openai_compatible_api_key.lock().unwrap().is_some(),
+    }
 }
 
 #[tauri::command]
 fn get_subtitle_translation_llm_config(
     state: State<'_, AppState>,
-) -> (String, Option<String>, String) {
-    let url = state.subtitle_translation_base_url.lock().unwrap().clone();
-    let key = state.subtitle_translation_api_key.lock().unwrap().clone();
-    let model_id = state.subtitle_translation_model_id.lock().unwrap().clone();
-    (url, key, model_id)
+) -> SubtitleTranslationLlmConfigPayload {
+    SubtitleTranslationLlmConfigPayload {
+        base_url: state.subtitle_translation_base_url.lock().unwrap().clone(),
+        has_api_key: state.subtitle_translation_api_key.lock().unwrap().is_some(),
+        model_id: state.subtitle_translation_model_id.lock().unwrap().clone(),
+    }
 }
 
 #[tauri::command]
@@ -2287,6 +2358,7 @@ fn set_ollama_config(
     state: State<'_, AppState>,
     url: String,
     key: Option<String>,
+    clear_key: bool,
 ) -> Result<(), String> {
     {
         let mut url_guard = state.ollama_base_url.lock().unwrap();
@@ -2294,7 +2366,7 @@ fn set_ollama_config(
     }
     {
         let mut key_guard = state.ollama_api_key.lock().unwrap();
-        *key_guard = normalize_optional_api_key(key);
+        update_runtime_api_key(StoredApiKey::Ollama, &mut key_guard, key, clear_key)?;
     }
     persist_external_llm_provider_configs(state.inner())
 }
@@ -2304,6 +2376,7 @@ fn set_lmstudio_config(
     state: State<'_, AppState>,
     url: String,
     key: Option<String>,
+    clear_key: bool,
 ) -> Result<(), String> {
     {
         let mut url_guard = state.lmstudio_base_url.lock().unwrap();
@@ -2311,7 +2384,7 @@ fn set_lmstudio_config(
     }
     {
         let mut key_guard = state.lmstudio_api_key.lock().unwrap();
-        *key_guard = normalize_optional_api_key(key);
+        update_runtime_api_key(StoredApiKey::LmStudio, &mut key_guard, key, clear_key)?;
     }
     persist_external_llm_provider_configs(state.inner())
 }
@@ -2321,6 +2394,7 @@ fn set_openai_compatible_config(
     state: State<'_, AppState>,
     url: String,
     key: Option<String>,
+    clear_key: bool,
 ) -> Result<(), String> {
     {
         let mut url_guard = state.openai_compatible_base_url.lock().unwrap();
@@ -2328,7 +2402,12 @@ fn set_openai_compatible_config(
     }
     {
         let mut key_guard = state.openai_compatible_api_key.lock().unwrap();
-        *key_guard = normalize_optional_api_key(key);
+        update_runtime_api_key(
+            StoredApiKey::OpenAiCompatible,
+            &mut key_guard,
+            key,
+            clear_key,
+        )?;
     }
     persist_external_llm_provider_configs(state.inner())
 }
@@ -2338,15 +2417,13 @@ fn set_subtitle_translation_llm_config(
     state: State<'_, AppState>,
     url: String,
     key: Option<String>,
+    clear_key: bool,
     model_id: String,
 ) -> Result<(), String> {
     let normalized_url = normalize_base_url(url);
     let normalized_model_id = normalize_model_id(model_id);
-    let normalized_key = if normalized_url.is_empty() && normalized_model_id.is_empty() {
-        None
-    } else {
-        normalize_optional_api_key(key)
-    };
+    let should_clear_key =
+        clear_key || (normalized_url.is_empty() && normalized_model_id.is_empty());
 
     {
         let mut url_guard = state.subtitle_translation_base_url.lock().unwrap();
@@ -2354,7 +2431,12 @@ fn set_subtitle_translation_llm_config(
     }
     {
         let mut key_guard = state.subtitle_translation_api_key.lock().unwrap();
-        *key_guard = normalized_key;
+        update_runtime_api_key(
+            StoredApiKey::SubtitleTranslation,
+            &mut key_guard,
+            key,
+            should_clear_key,
+        )?;
     }
     {
         let mut model_guard = state.subtitle_translation_model_id.lock().unwrap();
@@ -2365,15 +2447,21 @@ fn set_subtitle_translation_llm_config(
 
 #[tauri::command]
 async fn test_subtitle_translation_connection(
+    state: State<'_, AppState>,
     url: String,
     key: Option<String>,
+    use_saved_key: bool,
 ) -> Result<Vec<String>, String> {
-    fetch_openai_compatible_models(
-        normalize_base_url(url),
-        normalize_optional_api_key(key),
-        "subtitle translation LLM",
-    )
-    .await
+    let api_key = normalize_optional_api_key(key).or_else(|| {
+        if use_saved_key {
+            state.subtitle_translation_api_key.lock().unwrap().clone()
+        } else {
+            None
+        }
+    });
+
+    fetch_openai_compatible_models(normalize_base_url(url), api_key, "subtitle translation LLM")
+        .await
 }
 
 #[tauri::command]
@@ -10161,8 +10249,148 @@ fn resolve_openduck_config_path() -> PathBuf {
     resolve_openduck_root().join(OPENDUCK_CONFIG_FILE_NAME)
 }
 
+fn keyring_entry(secret: StoredApiKey) -> Result<KeyringEntry, String> {
+    KeyringEntry::new(OPENDUCK_KEYRING_SERVICE, secret.account_name()).map_err(|err| {
+        format!(
+            "Failed to access the system credential store for {}: {err}",
+            secret.label()
+        )
+    })
+}
+
+fn get_stored_api_key(secret: StoredApiKey) -> Result<Option<String>, String> {
+    let entry = keyring_entry(secret)?;
+    match entry.get_password() {
+        Ok(key) => Ok(normalize_optional_api_key(Some(key))),
+        Err(KeyringError::NoEntry) => Ok(None),
+        Err(err) => Err(format!(
+            "Failed to read {} from the system credential store: {err}",
+            secret.label()
+        )),
+    }
+}
+
+fn set_stored_api_key(secret: StoredApiKey, value: &str) -> Result<(), String> {
+    keyring_entry(secret)?.set_password(value).map_err(|err| {
+        format!(
+            "Failed to save {} to the system credential store: {err}",
+            secret.label()
+        )
+    })
+}
+
+fn clear_stored_api_key(secret: StoredApiKey) -> Result<(), String> {
+    let entry = keyring_entry(secret)?;
+    match entry.delete_credential() {
+        Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
+        Err(err) => Err(format!(
+            "Failed to remove {} from the system credential store: {err}",
+            secret.label()
+        )),
+    }
+}
+
+fn load_runtime_api_key(secret: StoredApiKey, legacy_key: &Option<String>) -> Option<String> {
+    match get_stored_api_key(secret) {
+        Ok(key) => key,
+        Err(err) => {
+            warn!("{err}");
+            normalize_optional_api_key(legacy_key.clone())
+        }
+    }
+}
+
+fn migrate_legacy_api_key(secret: StoredApiKey, legacy_key: &mut Option<String>) -> bool {
+    let Some(key) = normalize_optional_api_key(legacy_key.clone()) else {
+        return false;
+    };
+
+    match get_stored_api_key(secret) {
+        Ok(Some(_)) => {
+            *legacy_key = None;
+            true
+        }
+        Ok(None) => match set_stored_api_key(secret, &key) {
+            Ok(()) => {
+                info!(
+                    "Migrated {} from plaintext config into the system credential store.",
+                    secret.label()
+                );
+                *legacy_key = None;
+                true
+            }
+            Err(err) => {
+                warn!("Failed to migrate {}: {err}", secret.label());
+                false
+            }
+        },
+        Err(err) => {
+            warn!(
+                "Failed to inspect {} during migration: {err}",
+                secret.label()
+            );
+            false
+        }
+    }
+}
+
+fn migrate_legacy_api_keys_to_keyring(config: &mut PersistedAppConfig) {
+    let mut migrated_any = false;
+    migrated_any |= migrate_legacy_api_key(
+        StoredApiKey::Ollama,
+        &mut config.external_llm_providers.ollama.api_key,
+    );
+    migrated_any |= migrate_legacy_api_key(
+        StoredApiKey::LmStudio,
+        &mut config.external_llm_providers.lmstudio.api_key,
+    );
+    migrated_any |= migrate_legacy_api_key(
+        StoredApiKey::OpenAiCompatible,
+        &mut config.external_llm_providers.openai_compatible.api_key,
+    );
+    migrated_any |= migrate_legacy_api_key(
+        StoredApiKey::SubtitleTranslation,
+        &mut config.subtitle_translation_llm.api_key,
+    );
+
+    if migrated_any {
+        config.version = default_persisted_app_config_version();
+        if let Err(err) = save_persisted_app_config(config) {
+            warn!("Failed to rewrite OpenDuck config after API key migration: {err}");
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_owner_only_permissions(path: &Path, mode: u32) -> Result<(), String> {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        .map_err(|err| format!("Failed to set permissions on {}: {err}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_owner_only_permissions(_path: &Path, _mode: u32) -> Result<(), String> {
+    Ok(())
+}
+
+fn harden_openduck_permissions() -> Result<(), String> {
+    let root = resolve_openduck_root();
+    if root.exists() {
+        set_owner_only_permissions(&root, 0o700)?;
+    }
+
+    let config_path = resolve_openduck_config_path();
+    if config_path.exists() {
+        set_owner_only_permissions(&config_path, 0o600)?;
+    }
+
+    Ok(())
+}
+
 fn load_persisted_app_config() -> PersistedAppConfig {
     let config_path = resolve_openduck_config_path();
+    if let Err(err) = harden_openduck_permissions() {
+        warn!("{err}");
+    }
     let Ok(raw) = std::fs::read_to_string(&config_path) else {
         return PersistedAppConfig::default();
     };
@@ -10184,6 +10412,7 @@ fn save_persisted_app_config(config: &PersistedAppConfig) -> Result<(), String> 
     let root = resolve_openduck_root();
     std::fs::create_dir_all(&root)
         .map_err(|err| format!("Failed to create OpenDuck config directory: {err}"))?;
+    set_owner_only_permissions(&root, 0o700)?;
 
     let config_path = root.join(OPENDUCK_CONFIG_FILE_NAME);
     let payload = serde_json::to_string_pretty(config)
@@ -10194,22 +10423,23 @@ fn save_persisted_app_config(config: &PersistedAppConfig) -> Result<(), String> 
             "Failed to write OpenDuck config to {}: {err}",
             config_path.display()
         )
-    })
+    })?;
+    set_owner_only_permissions(&config_path, 0o600)
 }
 
 fn snapshot_external_llm_provider_configs(state: &AppState) -> PersistedExternalLlmProvidersConfig {
     PersistedExternalLlmProvidersConfig {
         ollama: PersistedExternalLlmProviderConfig {
             base_url: state.ollama_base_url.lock().unwrap().clone(),
-            api_key: state.ollama_api_key.lock().unwrap().clone(),
+            api_key: None,
         },
         lmstudio: PersistedExternalLlmProviderConfig {
             base_url: state.lmstudio_base_url.lock().unwrap().clone(),
-            api_key: state.lmstudio_api_key.lock().unwrap().clone(),
+            api_key: None,
         },
         openai_compatible: PersistedExternalLlmProviderConfig {
             base_url: state.openai_compatible_base_url.lock().unwrap().clone(),
-            api_key: state.openai_compatible_api_key.lock().unwrap().clone(),
+            api_key: None,
         },
     }
 }
@@ -10219,7 +10449,7 @@ fn snapshot_subtitle_translation_llm_config(
 ) -> PersistedSubtitleTranslationLlmConfig {
     PersistedSubtitleTranslationLlmConfig {
         base_url: state.subtitle_translation_base_url.lock().unwrap().clone(),
-        api_key: state.subtitle_translation_api_key.lock().unwrap().clone(),
+        api_key: None,
         model_id: state.subtitle_translation_model_id.lock().unwrap().clone(),
     }
 }
@@ -11505,7 +11735,27 @@ pub fn run() {
             )
         })
         .unwrap_or(true);
-    let persisted_config = load_persisted_app_config();
+    let mut persisted_config = load_persisted_app_config();
+    migrate_legacy_api_keys_to_keyring(&mut persisted_config);
+    let persisted_ollama_api_key = load_runtime_api_key(
+        StoredApiKey::Ollama,
+        &persisted_config.external_llm_providers.ollama.api_key,
+    );
+    let persisted_lmstudio_api_key = load_runtime_api_key(
+        StoredApiKey::LmStudio,
+        &persisted_config.external_llm_providers.lmstudio.api_key,
+    );
+    let persisted_openai_compatible_api_key = load_runtime_api_key(
+        StoredApiKey::OpenAiCompatible,
+        &persisted_config
+            .external_llm_providers
+            .openai_compatible
+            .api_key,
+    );
+    let persisted_subtitle_translation_api_key = load_runtime_api_key(
+        StoredApiKey::SubtitleTranslation,
+        &persisted_config.subtitle_translation_llm.api_key,
+    );
 
     tauri::Builder::default()
         .menu(build_app_menu)
@@ -11698,13 +11948,7 @@ pub fn run() {
                     .base_url
                     .clone(),
             ),
-            ollama_api_key: Mutex::new(
-                persisted_config
-                    .external_llm_providers
-                    .ollama
-                    .api_key
-                    .clone(),
-            ),
+            ollama_api_key: Mutex::new(persisted_ollama_api_key),
             selected_lmstudio_model: Mutex::new(String::new()),
             lmstudio_base_url: Mutex::new(
                 persisted_config
@@ -11713,13 +11957,7 @@ pub fn run() {
                     .base_url
                     .clone(),
             ),
-            lmstudio_api_key: Mutex::new(
-                persisted_config
-                    .external_llm_providers
-                    .lmstudio
-                    .api_key
-                    .clone(),
-            ),
+            lmstudio_api_key: Mutex::new(persisted_lmstudio_api_key),
             selected_openai_compatible_model: Mutex::new(String::new()),
             openai_compatible_base_url: Mutex::new(
                 persisted_config
@@ -11728,19 +11966,11 @@ pub fn run() {
                     .base_url
                     .clone(),
             ),
-            openai_compatible_api_key: Mutex::new(
-                persisted_config
-                    .external_llm_providers
-                    .openai_compatible
-                    .api_key
-                    .clone(),
-            ),
+            openai_compatible_api_key: Mutex::new(persisted_openai_compatible_api_key),
             subtitle_translation_base_url: Mutex::new(
                 persisted_config.subtitle_translation_llm.base_url.clone(),
             ),
-            subtitle_translation_api_key: Mutex::new(
-                persisted_config.subtitle_translation_llm.api_key.clone(),
-            ),
+            subtitle_translation_api_key: Mutex::new(persisted_subtitle_translation_api_key),
             subtitle_translation_model_id: Mutex::new(
                 persisted_config.subtitle_translation_llm.model_id.clone(),
             ),
