@@ -288,6 +288,10 @@ EOF
         build_env+=("OPEN_DUCK_BUILD_LABEL=$VERSION_LABEL_OVERRIDE")
     fi
 
+    if [ -n "$VERSION_LABEL_OVERRIDE" ] && [ -z "$BUILD_CHANNEL_OVERRIDE" ]; then
+        echo "Note: VERSION_LABEL only sets buildInfo.version_label. Set BUILD_CHANNEL if you want buildInfo.build_channel populated."
+    fi
+
     if [ -n "$BUILD_CHANNEL_OVERRIDE" ]; then
         echo "Using build channel for this build: $BUILD_CHANNEL_OVERRIDE"
         build_env+=("OPEN_DUCK_BUILD_CHANNEL=$BUILD_CHANNEL_OVERRIDE")

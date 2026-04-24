@@ -98,7 +98,7 @@ GITHUB_RELEASE_TAG=v1.2.3 VERSION=1.2.3 VERSION_LABEL="Beta" ./scripts/release.s
 You can also attach channel/build metadata that gets folded into the custom About dialog and build id:
 
 ```bash
-GITHUB_RELEASE_TAG=v0.0.2 VERSION=0.0.2 VERSION_LABEL="Beta" ./scripts/release.sh openduck-beta-v0.0.2
+GITHUB_RELEASE_TAG=v0.0.2 VERSION=0.0.2 VERSION_LABEL="Beta" BUILD_CHANNEL=beta BUILD_NUMBER=221 ./scripts/release.sh openduck-beta-v0.0.2
 ```
 
 Typical build id shape:
@@ -112,6 +112,7 @@ Notes:
 - `VERSION_LABEL` is display text for the custom About dialog, for example `Beta`.
 - `BUILD_CHANNEL` is a machine-readable identifier used in the build id, for example `beta` or `stable`.
 - `BUILD_NUMBER` is an optional sequence/build number.
+- Direct `tauri build` runs can set `VERSION_LABEL`, `BUILD_CHANNEL`, and `BUILD_NUMBER` directly; `release.sh` forwards them to the embedded `OPEN_DUCK_*` build metadata env vars.
 - Human labels do not rewrite the bundle version field shown by Finder metadata; they are shown in OpenDuck's custom About dialog and copyable build info.
 
 If you want to permanently bump the checked-in app version, keep these files in sync:

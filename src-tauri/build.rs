@@ -11,6 +11,9 @@ fn main() {
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_BUILD_LABEL");
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_BUILD_CHANNEL");
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_BUILD_NUMBER");
+    println!("cargo:rerun-if-env-changed=VERSION_LABEL");
+    println!("cargo:rerun-if-env-changed=BUILD_CHANNEL");
+    println!("cargo:rerun-if-env-changed=BUILD_NUMBER");
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_BUILD_ID");
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_GIT_SHA");
     println!("cargo:rerun-if-env-changed=OPEN_DUCK_GIT_DIRTY");
@@ -33,9 +36,9 @@ fn main() {
 
     let version =
         read_env_override("OPEN_DUCK_BUILD_VERSION").unwrap_or_else(|| cargo_package_version());
-    let build_channel = read_env_override("OPEN_DUCK_BUILD_CHANNEL");
-    let build_number = read_env_override("OPEN_DUCK_BUILD_NUMBER");
-    let version_label = read_env_override("OPEN_DUCK_BUILD_LABEL")
+    let build_channel = read_env_override_aliases(&["OPEN_DUCK_BUILD_CHANNEL", "BUILD_CHANNEL"]);
+    let build_number = read_env_override_aliases(&["OPEN_DUCK_BUILD_NUMBER", "BUILD_NUMBER"]);
+    let version_label = read_env_override_aliases(&["OPEN_DUCK_BUILD_LABEL", "VERSION_LABEL"])
         .or_else(|| default_label_for_channel(build_channel.as_deref()));
     let has_git = resolve_git_dir(&repo_root).is_some();
 
@@ -105,6 +108,10 @@ fn read_env_override(key: &str) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+fn read_env_override_aliases(keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| read_env_override(key))
 }
 
 fn emit_build_env(key: &str, value: Option<&str>) {

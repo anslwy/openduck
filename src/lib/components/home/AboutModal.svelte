@@ -793,7 +793,8 @@
                         {/if}
                     </div>
                     <span class="about-version-number"
-                        >v{buildInfo.version}</span
+                        >v{buildInfo.version}
+                        {buildInfo.build_channel || "Beta"}</span
                     >
                 </div>
             </div>
