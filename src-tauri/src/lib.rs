@@ -32,7 +32,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as AsyncMutex;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 #[derive(Clone, Deserialize)]
@@ -958,7 +958,7 @@ fn set_ai_subtitle_target_language(state: State<'_, AppState>, target_lang: Stri
 
 #[tauri::command]
 async fn translate_text(
-    app_handle: AppHandle,
+    _app_handle: AppHandle,
     state: State<'_, AppState>,
     text: String,
     target_lang: String,
@@ -5010,9 +5010,6 @@ async fn stream_gemma_response_to_csm(
         }
     }
 
-    // Hide the logs for now
-    // log_chat_request_debug(0, &request);
-
     let request_body = if is_external {
         serialize_external_chat_request(&request)
     } else {
@@ -5828,6 +5825,7 @@ fn build_input_audio_content(audio_wav_base64: &str) -> ChatContent {
     }
 }
 
+#[cfg(test)]
 fn build_user_turn_message(
     user_text: &str,
     image_paths: &[PathBuf],
@@ -5910,6 +5908,7 @@ fn build_llm_system_prompt(
     sections.join("\n\n")
 }
 
+#[cfg(test)]
 fn build_latest_user_turn_message(
     user_text: &str,
     latest_audio_wav_base64: Option<&str>,
@@ -6041,41 +6040,6 @@ fn parse_gemma_stream_event(event_block: &str) -> Result<ParsedGemmaStreamEvent,
 fn drain_next_sse_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
     let separator = buffer.windows(2).position(|window| window == b"\n\n")?;
     Some(buffer.drain(..separator + 2).take(separator).collect())
-}
-
-fn log_chat_request_debug(conversation_session_id: u64, request: &ChatRequest) {
-    let mut messages_summary = Vec::new();
-    for msg in &request.messages {
-        let content_text = msg
-            .content
-            .iter()
-            .find_map(|c| {
-                if let ChatContent::Text { text } = c {
-                    Some(text.clone())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default();
-        messages_summary.push(serde_json::json!({
-            "role": msg.role,
-            "text": content_text.chars().take(50).collect::<String>(),
-            "content_count": msg.content.len(),
-        }));
-    }
-
-    match serde_json::to_string_pretty(&messages_summary) {
-        Ok(messages_json) => debug!(
-            "Sending chat request for conversation session {} with {} messages:\n{}",
-            conversation_session_id,
-            request.messages.len(),
-            messages_json
-        ),
-        Err(err) => warn!(
-            "Failed to serialize conversation log for session {}: {}",
-            conversation_session_id, err
-        ),
-    }
 }
 
 fn encode_audio_samples_as_wav_base64(samples: &[f32], sample_rate: u32) -> Result<String, String> {
@@ -6660,9 +6624,10 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_llm_image_history_limit, build_latest_user_turn_message, build_llm_system_prompt,
-        build_user_turn_message, clamp_end_of_utterance_silence_ms, clamp_llm_context_turn_limit,
-        clamp_llm_image_history_limit, parse_gemma_stream_event,
+        append_assistant_message_text, apply_llm_image_history_limit,
+        build_latest_user_turn_message, build_llm_system_prompt, build_user_turn_message,
+        clamp_auto_continue_silence_ms, clamp_end_of_utterance_silence_ms,
+        clamp_llm_context_turn_limit, clamp_llm_image_history_limit, parse_gemma_stream_event,
         pending_streamed_segment_is_in_first_sentence,
         prepare_completed_spoken_response_segments_for_csm,
         prepare_spoken_response_segments_for_csm, required_silence_chunks,
@@ -6674,12 +6639,13 @@ mod tests {
         MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
     use crate::constants::{
-        DEFAULT_LLM_CONTEXT_TURN_LIMIT, END_OF_UTTERANCE_SILENCE_MS,
+        DEFAULT_LLM_CONTEXT_TURN_LIMIT, END_OF_UTTERANCE_SILENCE_MS, MAX_AUTO_CONTINUE_SILENCE_MS,
         MAX_END_OF_UTTERANCE_SILENCE_MS, MAX_LLM_CONTEXT_TURN_LIMIT, MAX_LLM_IMAGE_HISTORY_LIMIT,
-        MIN_END_OF_UTTERANCE_SILENCE_MS, MIN_LLM_CONTEXT_TURN_LIMIT, MIN_LLM_IMAGE_HISTORY_LIMIT,
-        STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS, STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS,
+        MIN_AUTO_CONTINUE_SILENCE_MS, MIN_END_OF_UTTERANCE_SILENCE_MS, MIN_LLM_CONTEXT_TURN_LIMIT,
+        MIN_LLM_IMAGE_HISTORY_LIMIT, STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
+        STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS,
     };
-    use std::{fs, path::Path, time::Duration};
+    use std::{collections::HashMap, fs, path::Path, time::Duration};
 
     const TEST_IMAGE_DATA_URL: &str =
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9sXv2t8AAAAASUVORK5CYII=";
@@ -6930,6 +6896,7 @@ mod tests {
                 user_image_data_urls: Vec::new(),
                 image_path: None,
                 user_image_data_url: None,
+                translations: HashMap::new(),
             })
             .collect::<Vec<_>>();
 
@@ -6960,6 +6927,7 @@ mod tests {
                 user_image_data_urls: Vec::new(),
                 image_path: None,
                 user_image_data_url: None,
+                translations: HashMap::new(),
             })
             .collect::<Vec<_>>();
 
@@ -8218,16 +8186,8 @@ async fn csm_stdout_task(
 async fn csm_stderr_task(app_handle: tauri::AppHandle, stderr: ChildStderr) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let preview = if line.chars().count() > 512 {
-            let truncated = line.chars().take(512).collect::<String>();
-            format!(
-                "{truncated}...[truncated {} chars]",
-                line.chars().count() - 512
-            )
-        } else {
-            line.clone()
-        };
-        error!("CSM worker stderr: {}", preview);
+        let preview = preview_worker_stderr_line(&line);
+        log_worker_stderr_line("CSM worker", &preview, &line);
         push_csm_stderr_line(app_handle.state::<AppState>().inner(), line);
     }
 }
@@ -8367,16 +8327,8 @@ async fn stt_stdout_task(
 async fn stt_stderr_task(app_handle: tauri::AppHandle, stderr: ChildStderr) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let preview = if line.chars().count() > 512 {
-            let truncated = line.chars().take(512).collect::<String>();
-            format!(
-                "{truncated}...[truncated {} chars]",
-                line.chars().count() - 512
-            )
-        } else {
-            line.clone()
-        };
-        error!("STT worker stderr: {}", preview);
+        let preview = preview_worker_stderr_line(&line);
+        log_worker_stderr_line("STT worker", &preview, &line);
         push_stt_stderr_line(app_handle.state::<AppState>().inner(), line);
     }
 }
@@ -9676,6 +9628,65 @@ fn stt_startup_failure_message(state: &AppState, base: &str) -> String {
     }
 
     message
+}
+
+fn preview_worker_stderr_line(line: &str) -> String {
+    if line.chars().count() > 512 {
+        let truncated = line.chars().take(512).collect::<String>();
+        format!(
+            "{truncated}...[truncated {} chars]",
+            line.chars().count() - 512
+        )
+    } else {
+        line.to_string()
+    }
+}
+
+fn log_worker_stderr_line(worker_label: &str, preview: &str, line: &str) {
+    match classify_worker_stderr(line) {
+        WorkerStderrSeverity::Error => error!("{worker_label} stderr: {preview}"),
+        WorkerStderrSeverity::Warn => warn!("{worker_label} stderr: {preview}"),
+        WorkerStderrSeverity::Trace => trace!("{worker_label} stderr: {preview}"),
+    }
+}
+
+fn classify_worker_stderr(line: &str) -> WorkerStderrSeverity {
+    let normalized = line.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return WorkerStderrSeverity::Trace;
+    }
+
+    if [
+        "traceback",
+        "error",
+        "exception",
+        "failed",
+        "fatal",
+        "panic",
+        "abort",
+        "killed",
+        "segmentation fault",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+    {
+        return WorkerStderrSeverity::Error;
+    }
+
+    if ["warning", "warn", "deprecated"]
+        .iter()
+        .any(|needle| normalized.contains(needle))
+    {
+        return WorkerStderrSeverity::Warn;
+    }
+
+    WorkerStderrSeverity::Trace
+}
+
+enum WorkerStderrSeverity {
+    Error,
+    Warn,
+    Trace,
 }
 
 fn emit_audio_turn_processing_error(app_handle: &tauri::AppHandle, message: String) {
