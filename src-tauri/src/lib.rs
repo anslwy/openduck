@@ -6479,7 +6479,26 @@ fn normalize_punctuation_spacing(text: &str) -> String {
 }
 
 fn is_tight_trailing_punctuation(ch: char) -> bool {
-    matches!(ch, '.' | ',' | '!' | '?' | ':' | ';' | ')' | ']' | '}')
+    matches!(
+        ch,
+        '.' | ','
+            | '!'
+            | '?'
+            | ':'
+            | ';'
+            | '。'
+            | '，'
+            | '、'
+            | '！'
+            | '？'
+            | '：'
+            | '；'
+            | '।'
+            | '॥'
+            | ')'
+            | ']'
+            | '}'
+    )
 }
 
 fn prepare_spoken_response_segments_for_csm(text: &str) -> Vec<String> {
@@ -6559,7 +6578,7 @@ fn collect_spoken_response_segments(
 fn is_spoken_sentence_boundary(text: &str, idx: usize, ch: char) -> bool {
     match ch {
         '.' => is_spoken_period_boundary(text, idx),
-        '!' | '?' | '\n' => true,
+        '!' | '?' | '。' | '！' | '？' | '｡' | '।' | '॥' | '\n' => true,
         _ => false,
     }
 }
@@ -6583,6 +6602,10 @@ fn split_long_spoken_segment_for_csm(segment: &str) -> Vec<String> {
     let trimmed = normalized.trim();
     if trimmed.is_empty() {
         return Vec::new();
+    }
+
+    if should_split_spoken_segment_by_cjk_chars(trimmed) {
+        return split_long_cjk_spoken_segment_for_csm(trimmed);
     }
 
     let words = trimmed.split_whitespace().collect::<Vec<_>>();
@@ -6631,7 +6654,7 @@ fn find_preferred_spoken_chunk_end(words: &[&str], start: usize, limit: usize) -
             continue;
         };
 
-        if matches!(last_char, ',' | ';' | ':' | '.' | '!' | '?') {
+        if is_spoken_soft_punctuation(last_char) || is_spoken_terminal_punctuation(last_char) {
             return Some(candidate);
         }
     }
@@ -6655,8 +6678,8 @@ fn find_spoken_chunk_end_with_punctuation(
             continue;
         };
 
-        if matches!(last_char, '.' | '!' | '?')
-            || (!strong_only && matches!(last_char, ',' | ';' | ':'))
+        if is_spoken_terminal_punctuation(last_char)
+            || (!strong_only && is_spoken_soft_punctuation(last_char))
         {
             return Some(candidate);
         }
@@ -6666,7 +6689,7 @@ fn find_spoken_chunk_end_with_punctuation(
 }
 
 fn trailing_spoken_word_punctuation(word: &str) -> Option<char> {
-    word.trim_end_matches(|ch: char| matches!(ch, '"' | '\'' | ')' | ']' | '}'))
+    word.trim_end_matches(is_spoken_closing_punctuation)
         .chars()
         .last()
 }
@@ -6685,7 +6708,11 @@ fn normalize_spoken_chunk_for_csm(chunk: &str, is_last: bool) -> Option<String> 
         return None;
     }
 
-    while matches!(cleaned.chars().last(), Some(',' | ';' | ':' | '-' | '—')) {
+    while cleaned
+        .chars()
+        .last()
+        .is_some_and(|ch| is_spoken_soft_punctuation(ch) || matches!(ch, '-' | '—'))
+    {
         cleaned.pop();
         cleaned = cleaned.trim_end().to_string();
     }
@@ -6694,12 +6721,189 @@ fn normalize_spoken_chunk_for_csm(chunk: &str, is_last: bool) -> Option<String> 
         return None;
     }
 
-    let has_terminal_punctuation = matches!(cleaned.chars().last(), Some('.' | '!' | '?'));
+    let has_terminal_punctuation = cleaned
+        .chars()
+        .last()
+        .is_some_and(is_spoken_terminal_punctuation);
     if !has_terminal_punctuation && !is_last {
-        cleaned.push('.');
+        cleaned.push(if contains_cjk_spoken_char(&cleaned) {
+            '。'
+        } else {
+            '.'
+        });
     }
 
     Some(cleaned)
+}
+
+fn should_split_spoken_segment_by_cjk_chars(text: &str) -> bool {
+    contains_cjk_spoken_char(text)
+        && text.chars().filter(|ch| !ch.is_whitespace()).count() > MAX_SPOKEN_CJK_CHARS_PER_SEGMENT
+}
+
+fn split_long_cjk_spoken_segment_for_csm(segment: &str) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+
+    while start < segment.len() {
+        start = skip_leading_whitespace(segment, start);
+        if start >= segment.len() {
+            break;
+        }
+
+        let remaining_chars = segment[start..]
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .count();
+        if remaining_chars <= MAX_SPOKEN_CJK_CHARS_PER_SEGMENT {
+            chunks.push((segment[start..].trim().to_string(), true));
+            break;
+        }
+
+        let target_end =
+            byte_index_after_non_whitespace_chars(segment, start, MAX_SPOKEN_CJK_CHARS_PER_SEGMENT);
+        let hard_end = byte_index_after_non_whitespace_chars(
+            segment,
+            start,
+            MAX_SPOKEN_CJK_CHARS_PER_SEGMENT_HARD_LIMIT,
+        );
+        let end = choose_cjk_spoken_chunk_end(segment, start, target_end, hard_end);
+
+        if end <= start {
+            break;
+        }
+
+        chunks.push((segment[start..end].trim().to_string(), end >= segment.len()));
+        start = end;
+    }
+
+    normalize_spoken_chunks_for_csm(chunks)
+}
+
+fn skip_leading_whitespace(text: &str, mut start: usize) -> usize {
+    while start < text.len() {
+        let Some(ch) = text[start..].chars().next() else {
+            break;
+        };
+
+        if !ch.is_whitespace() {
+            break;
+        }
+
+        start += ch.len_utf8();
+    }
+
+    start
+}
+
+fn byte_index_after_non_whitespace_chars(text: &str, start: usize, count: usize) -> usize {
+    let mut seen = 0;
+
+    for (offset, ch) in text[start..].char_indices() {
+        if ch.is_whitespace() {
+            continue;
+        }
+
+        seen += 1;
+        if seen >= count {
+            return start + offset + ch.len_utf8();
+        }
+    }
+
+    text.len()
+}
+
+fn choose_cjk_spoken_chunk_end(
+    text: &str,
+    start: usize,
+    target_end: usize,
+    hard_end: usize,
+) -> usize {
+    if hard_end >= text.len() {
+        return text.len();
+    }
+
+    find_cjk_spoken_chunk_end_with_punctuation(text, start, target_end, false, true)
+        .or_else(|| {
+            find_cjk_spoken_chunk_end_with_punctuation(text, target_end, hard_end, true, false)
+        })
+        .or_else(|| {
+            find_cjk_spoken_chunk_end_with_punctuation(text, target_end, hard_end, false, false)
+        })
+        .unwrap_or(target_end)
+}
+
+fn find_cjk_spoken_chunk_end_with_punctuation(
+    text: &str,
+    start: usize,
+    limit: usize,
+    strong_only: bool,
+    prefer_latest: bool,
+) -> Option<usize> {
+    let mut best_end = None;
+    let limit = limit.min(text.len());
+
+    for (offset, ch) in text[start..limit].char_indices() {
+        if is_spoken_terminal_punctuation(ch) || (!strong_only && is_spoken_soft_punctuation(ch)) {
+            let boundary_end = expand_speech_boundary(text, start + offset + ch.len_utf8());
+            if prefer_latest {
+                best_end = Some(boundary_end);
+            } else {
+                return Some(boundary_end);
+            }
+        }
+    }
+
+    best_end
+}
+
+fn is_spoken_terminal_punctuation(ch: char) -> bool {
+    matches!(ch, '.' | '!' | '?' | '。' | '！' | '？' | '｡' | '।' | '॥')
+}
+
+fn is_spoken_soft_punctuation(ch: char) -> bool {
+    matches!(ch, ',' | ';' | ':' | '，' | '、' | '；' | '：' | '､')
+}
+
+fn is_spoken_closing_punctuation(ch: char) -> bool {
+    matches!(
+        ch,
+        '"' | '\''
+            | ')'
+            | ']'
+            | '}'
+            | '”'
+            | '’'
+            | '」'
+            | '』'
+            | '»'
+            | '›'
+            | '）'
+            | '】'
+            | '》'
+            | '〉'
+            | '］'
+            | '｝'
+            | '〕'
+            | '〗'
+            | '〙'
+            | '〛'
+    )
+}
+
+fn contains_cjk_spoken_char(text: &str) -> bool {
+    text.chars().any(is_cjk_spoken_char)
+}
+
+fn is_cjk_spoken_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3040..=0x30FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xAC00..=0xD7AF
+            | 0xF900..=0xFAFF
+    )
 }
 
 fn contains_spoken_content(text: &str) -> bool {
@@ -6744,7 +6948,7 @@ fn expand_speech_boundary(text: &str, mut end: usize) -> usize {
             break;
         };
 
-        if ch.is_whitespace() || matches!(ch, '"' | '\'' | ')' | ']' | '}') {
+        if ch.is_whitespace() || is_spoken_closing_punctuation(ch) {
             end += ch.len_utf8();
             continue;
         }
@@ -6770,7 +6974,7 @@ mod tests {
         should_flush_incomplete_streamed_response_segment, suppress_playback_echo,
         write_data_url_to_temp_file, AudioPayload, ConversationTurn, ParsedGemmaStreamEvent,
         AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT,
-        MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
+        MAX_SPOKEN_CJK_CHARS_PER_SEGMENT_HARD_LIMIT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
     use crate::constants::{
         DEFAULT_LLM_CONTEXT_TURN_LIMIT, END_OF_UTTERANCE_SILENCE_MS, MAX_AUTO_CONTINUE_SILENCE_MS,
@@ -6986,6 +7190,168 @@ mod tests {
                 "Are you asking about a specific AI model?".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn completed_spoken_segments_split_latin_language_sentence_boundaries() {
+        for (response_text, expected_segment, expected_tail) in [
+            (
+                "Entendido. Seguimos con una prueba corta",
+                "Entendido.",
+                "Seguimos con una prueba corta",
+            ),
+            (
+                "D'accord ! On continue avec un test court",
+                "D'accord !",
+                "On continue avec un test court",
+            ),
+            (
+                "Capito. Continuiamo con un test breve",
+                "Capito.",
+                "Continuiamo con un test breve",
+            ),
+            (
+                "Entendido. Vamos continuar com um teste curto",
+                "Entendido.",
+                "Vamos continuar com um teste curto",
+            ),
+        ] {
+            let (segments, consumed_len) =
+                prepare_completed_spoken_response_segments_for_csm(response_text);
+
+            assert_eq!(segments, vec![expected_segment.to_string()]);
+            assert_eq!(&response_text[consumed_len..], expected_tail);
+        }
+    }
+
+    #[test]
+    fn completed_spoken_segments_keep_french_closing_guillemet() {
+        let response_text = "« D'accord ! » On continue";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(segments, vec!["« D'accord ! »".to_string()]);
+        assert_eq!(&response_text[consumed_len..], "On continue");
+    }
+
+    #[test]
+    fn completed_spoken_segments_split_hindi_danda_boundaries() {
+        let response_text = "समझ गया। आगे छोटा परीक्षण करते हैं";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(segments, vec!["समझ गया।".to_string()]);
+        assert_eq!(&response_text[consumed_len..], "आगे छोटा परीक्षण करते हैं");
+    }
+
+    #[test]
+    fn spoken_segments_split_hindi_double_danda_boundaries() {
+        let response_text = "पहला भाग॥ दूसरा भाग।";
+        let segments = prepare_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(
+            segments,
+            vec!["पहला भाग॥".to_string(), "दूसरा भाग।".to_string()]
+        );
+    }
+
+    #[test]
+    fn completed_spoken_segments_split_chinese_sentence_boundaries() {
+        let response_text = "第一句完成了。第二句还没说完";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(segments, vec!["第一句完成了。".to_string()]);
+        assert_eq!(&response_text[consumed_len..], "第二句还没说完");
+    }
+
+    #[test]
+    fn spoken_segments_split_chinese_terminal_punctuation() {
+        let response_text = "可以。这样更稳定！你觉得呢？";
+        let segments = prepare_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(
+            segments,
+            vec![
+                "可以。".to_string(),
+                "这样更稳定！".to_string(),
+                "你觉得呢？".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn completed_spoken_segments_keep_chinese_closing_punctuation() {
+        let response_text = "他说“可以。”下一句还没说完";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(segments, vec!["他说“可以。”".to_string()]);
+        assert_eq!(&response_text[consumed_len..], "下一句还没说完");
+    }
+
+    #[test]
+    fn long_chinese_sentence_is_split_into_shorter_spoken_segments() {
+        let response_text = "这是一段没有明显停顿的中文回复它会连续说明实现方式延迟影响和用户体验然后继续补充自动显示与点击翻译的差异以及下一步应该怎样验证效果";
+        let segments = prepare_spoken_response_segments_for_csm(response_text);
+
+        assert!(segments.len() > 1);
+        assert!(segments.iter().all(|segment| {
+            segment.chars().filter(|ch| !ch.is_whitespace()).count()
+                <= MAX_SPOKEN_CJK_CHARS_PER_SEGMENT_HARD_LIMIT
+        }));
+        assert!(segments
+            .iter()
+            .take(segments.len().saturating_sub(1))
+            .all(|segment| segment.ends_with('。')));
+    }
+
+    #[test]
+    fn incomplete_streamed_segments_recognize_chinese_sentence_boundary() {
+        let response_text = "第一句已经完成。第二句还在继续生成";
+        let queued_response_bytes = "第一句已经完成。".len();
+
+        assert!(!pending_streamed_segment_is_in_first_sentence(
+            response_text,
+            queued_response_bytes
+        ));
+    }
+
+    #[test]
+    fn completed_spoken_segments_split_japanese_sentence_boundaries() {
+        let response_text = "承知しました。日本語だけで話します";
+        let (segments, consumed_len) =
+            prepare_completed_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(segments, vec!["承知しました。".to_string()]);
+        assert_eq!(&response_text[consumed_len..], "日本語だけで話します");
+    }
+
+    #[test]
+    fn spoken_segments_split_japanese_terminal_punctuation() {
+        let response_text = "承知しました。短く進めます！何をしましょうか？";
+        let segments = prepare_spoken_response_segments_for_csm(response_text);
+
+        assert_eq!(
+            segments,
+            vec![
+                "承知しました。".to_string(),
+                "短く進めます！".to_string(),
+                "何をしましょうか？".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn long_japanese_sentence_is_split_into_shorter_spoken_segments() {
+        let response_text = "これは句点が少ない長い日本語の返答で字幕と音声合成のために短い単位へ分ける必要がありますそして表示が一度に長くなりすぎないように続きも自然な位置で区切ります";
+        let segments = prepare_spoken_response_segments_for_csm(response_text);
+
+        assert!(segments.len() > 1);
+        assert!(segments.iter().all(|segment| {
+            segment.chars().filter(|ch| !ch.is_whitespace()).count()
+                <= MAX_SPOKEN_CJK_CHARS_PER_SEGMENT_HARD_LIMIT
+        }));
     }
 
     #[test]
@@ -10393,6 +10759,9 @@ fn keyring_entry(secret: StoredApiKey) -> Result<KeyringEntry, String> {
 }
 
 fn get_stored_api_key(secret: StoredApiKey) -> Result<Option<String>, String> {
+    if cfg!(debug_assertions) {
+        return Ok(None);
+    }
     let entry = keyring_entry(secret)?;
     match entry.get_password() {
         Ok(key) => Ok(normalize_optional_api_key(Some(key))),
@@ -10405,6 +10774,9 @@ fn get_stored_api_key(secret: StoredApiKey) -> Result<Option<String>, String> {
 }
 
 fn set_stored_api_key(secret: StoredApiKey, value: &str) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
     keyring_entry(secret)?.set_password(value).map_err(|err| {
         format!(
             "Failed to save {} to the system credential store: {err}",
@@ -10414,6 +10786,9 @@ fn set_stored_api_key(secret: StoredApiKey, value: &str) -> Result<(), String> {
 }
 
 fn clear_stored_api_key(secret: StoredApiKey) -> Result<(), String> {
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
     let entry = keyring_entry(secret)?;
     match entry.delete_credential() {
         Ok(()) | Err(KeyringError::NoEntry) => Ok(()),
@@ -10425,6 +10800,9 @@ fn clear_stored_api_key(secret: StoredApiKey) -> Result<(), String> {
 }
 
 fn load_runtime_api_key(secret: StoredApiKey, legacy_key: &Option<String>) -> Option<String> {
+    if cfg!(debug_assertions) {
+        return None;
+    }
     match get_stored_api_key(secret) {
         Ok(key) => key,
         Err(err) => {
@@ -10469,6 +10847,9 @@ fn migrate_legacy_api_key(secret: StoredApiKey, legacy_key: &mut Option<String>)
 }
 
 fn migrate_legacy_api_keys_to_keyring(config: &mut PersistedAppConfig) {
+    if cfg!(debug_assertions) {
+        return;
+    }
     let mut migrated_any = false;
     migrated_any |= migrate_legacy_api_key(
         StoredApiKey::Ollama,
