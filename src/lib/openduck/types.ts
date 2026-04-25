@@ -134,6 +134,11 @@ export type TrayPongPlaybackEvent = {
 };
 export type ShowAboutModalEvent = Record<string, never>;
 export type TriggerAppUpdateCheckEvent = Record<string, never>;
+export type OpenDuckContactImportEvent = {
+    sourcePath: string;
+    rawText?: string | null;
+    error?: string | null;
+};
 export type ConversationContextCommittedEvent = {
     requestId: number;
     userEntryId: number;

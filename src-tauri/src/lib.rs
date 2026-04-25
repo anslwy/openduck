@@ -453,6 +453,8 @@ struct AppState {
     conversation_turns: Mutex<VecDeque<ConversationTurn>>,
     conversation_image_paths: Mutex<Vec<PathBuf>>,
     pending_screen_captures: Mutex<Vec<PathBuf>>,
+    pending_openduck_contact_import_events: Mutex<Vec<OpenDuckContactImportEvent>>,
+    openduck_contact_import_frontend_ready: Mutex<bool>,
     screen_capture_in_progress: Mutex<bool>,
     transient_tray_title: Mutex<Option<String>>,
     transient_tray_icon: Mutex<Option<TrayIconVariant>>,
@@ -1052,6 +1054,17 @@ fn ping() {
 #[tauri::command]
 fn get_build_info() -> BuildInfo {
     current_build_info()
+}
+
+#[tauri::command]
+fn initialize_openduck_contact_imports(state: State<'_, AppState>) -> Vec<OpenDuckContactImportEvent> {
+    {
+        let mut ready = state.openduck_contact_import_frontend_ready.lock().unwrap();
+        *ready = true;
+    }
+
+    let mut pending_events = state.pending_openduck_contact_import_events.lock().unwrap();
+    std::mem::take(&mut *pending_events)
 }
 
 #[tauri::command]
@@ -9304,6 +9317,94 @@ fn show_main_window(app_handle: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn queue_or_emit_openduck_contact_import_event(
+    app_handle: &AppHandle,
+    payload: OpenDuckContactImportEvent,
+) {
+    let state = app_handle.state::<AppState>();
+    let frontend_ready = *state.openduck_contact_import_frontend_ready.lock().unwrap();
+
+    if frontend_ready {
+        emit_openduck_contact_import(app_handle, payload);
+        return;
+    }
+
+    state
+        .pending_openduck_contact_import_events
+        .lock()
+        .unwrap()
+        .push(payload);
+}
+
+#[cfg(target_os = "macos")]
+fn is_openduck_contact_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("openduck"))
+}
+
+#[cfg(target_os = "macos")]
+fn handle_macos_opened_urls(app_handle: &AppHandle, urls: &[tauri::Url]) {
+    let mut handled_any = false;
+
+    for url in urls {
+        let source_path = match url.to_file_path() {
+            Ok(path) => path,
+            Err(_) => {
+                warn!("Ignoring non-file URL opened by macOS: {}", url);
+                continue;
+            }
+        };
+
+        if !is_openduck_contact_file(&source_path) {
+            debug!(
+                "Ignoring opened file that does not use the .openduck extension: {}",
+                source_path.display()
+            );
+            continue;
+        }
+
+        if !handled_any {
+            if let Err(err) = show_main_window(app_handle) {
+                error!("Failed to show the main window for OpenDuck file import: {}", err);
+            }
+            handled_any = true;
+        }
+
+        match std::fs::read_to_string(&source_path) {
+            Ok(raw_text) => {
+                info!(
+                    "Received macOS open-file request for OpenDuck contact: {}",
+                    source_path.display()
+                );
+                queue_or_emit_openduck_contact_import_event(
+                    app_handle,
+                    OpenDuckContactImportEvent {
+                        source_path: source_path.display().to_string(),
+                        raw_text: Some(raw_text),
+                        error: None,
+                    },
+                );
+            }
+            Err(err) => {
+                error!(
+                    "Failed to read OpenDuck contact file {}: {}",
+                    source_path.display(),
+                    err
+                );
+                queue_or_emit_openduck_contact_import_event(
+                    app_handle,
+                    OpenDuckContactImportEvent {
+                        source_path: source_path.display().to_string(),
+                        raw_text: None,
+                        error: Some(format!("Failed to read the file. {}", err)),
+                    },
+                );
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn webview_window_is_visible_to_user(window: &tauri::WebviewWindow) -> Result<bool, String> {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -11913,6 +12014,8 @@ pub fn run() {
             conversation_turns: Mutex::new(VecDeque::new()),
             conversation_image_paths: Mutex::new(Vec::new()),
             pending_screen_captures: Mutex::new(Vec::new()),
+            pending_openduck_contact_import_events: Mutex::new(Vec::new()),
+            openduck_contact_import_frontend_ready: Mutex::new(false),
             screen_capture_in_progress: Mutex::new(false),
             transient_tray_title: Mutex::new(None),
             transient_tray_icon: Mutex::new(None),
@@ -12006,6 +12109,7 @@ pub fn run() {
             receive_audio_chunk,
             ping,
             get_build_info,
+            initialize_openduck_contact_imports,
             check_for_app_update,
             install_app_update,
             restart_app,
@@ -12121,11 +12225,18 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                let state = app_handle.state::<AppState>();
-                let mut quitting_guard = state.is_quitting.lock().unwrap();
-                *quitting_guard = true;
-                cleanup_before_app_exit(app_handle);
+            match event {
+                tauri::RunEvent::ExitRequested { .. } => {
+                    let state = app_handle.state::<AppState>();
+                    let mut quitting_guard = state.is_quitting.lock().unwrap();
+                    *quitting_guard = true;
+                    cleanup_before_app_exit(app_handle);
+                }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Opened { urls } => {
+                    handle_macos_opened_urls(app_handle, &urls);
+                }
+                _ => {}
             }
         });
 }

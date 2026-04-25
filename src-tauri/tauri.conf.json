@@ -38,6 +38,20 @@
       "../sample-female.mp3",
       "../sample-female-transcript.txt"
     ],
+    "fileAssociations": [
+      {
+        "ext": ["openduck"],
+        "name": "OpenDuck Contact",
+        "description": "OpenDuck contact profile",
+        "role": "Editor",
+        "rank": "Owner",
+        "mimeType": "application/json",
+        "exportedType": {
+          "identifier": "com.openduck.contact",
+          "conformsTo": ["public.json"]
+        }
+      }
+    ],
     "externalBin": ["bin/mlx-handler"],
     "macOS": {
       "infoPlist": "Info.plist"

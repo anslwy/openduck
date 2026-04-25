@@ -169,6 +169,14 @@ pub(crate) struct ShowAboutModalEvent {}
 #[derive(Clone, Serialize)]
 pub(crate) struct TriggerAppUpdateCheckEvent {}
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OpenDuckContactImportEvent {
+    pub(crate) source_path: String,
+    pub(crate) raw_text: Option<String>,
+    pub(crate) error: Option<String>,
+}
+
 pub(crate) fn emit_csm_error(app_handle: &AppHandle, payload: CsmErrorEvent) {
     if let Err(err) = app_handle.emit(CSM_ERROR_EVENT, payload) {
         error!("Failed to emit CSM error event: {}", err);
@@ -360,5 +368,14 @@ pub(crate) fn emit_trigger_app_update_check(app_handle: &AppHandle) {
         TriggerAppUpdateCheckEvent {},
     ) {
         error!("Failed to emit trigger-app-update-check event: {}", err);
+    }
+}
+
+pub(crate) fn emit_openduck_contact_import(
+    app_handle: &AppHandle,
+    payload: OpenDuckContactImportEvent,
+) {
+    if let Err(err) = app_handle.emit(OPENDUCK_CONTACT_IMPORT_EVENT, payload) {
+        error!("Failed to emit OpenDuck contact import event: {}", err);
     }
 }

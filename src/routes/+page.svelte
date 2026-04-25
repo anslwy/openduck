@@ -24,14 +24,13 @@
     import SpeechBanner from "$lib/components/home/SpeechBanner.svelte";
     import SttBanner from "$lib/components/home/SttBanner.svelte";
     import {
+        createImportedContactFromRawText,
         createContactId,
         createDefaultContact,
         createStoredContactsPayload,
         deleteStoredContactIcon,
         getContactDisplayName,
         loadContactsFromStorage,
-        normalizeContactGender,
-        normalizeContactPrompt,
         readFileAsDataUrl,
         saveStoredContactIcon,
         slugifyContactName,
@@ -144,6 +143,7 @@
         RuntimeSetupStatusEvent,
         ScreenCaptureEvent,
         SelectOption,
+        OpenDuckContactImportEvent,
         ShowAboutModalEvent,
         StoredModelPreferences,
         TriggerAppUpdateCheckEvent,
@@ -3813,6 +3813,77 @@
         contactIconInput?.click();
     }
 
+    async function importContactFromRawText(
+        rawText: string,
+        sourceLabel?: string | null,
+    ) {
+        try {
+            const nextContact = createImportedContactFromRawText(rawText);
+
+            if (nextContact.iconDataUrl) {
+                await saveStoredContactIcon(nextContact.id, nextContact.iconDataUrl);
+            }
+
+            contacts = [...contacts, nextContact];
+            persistContactsMetadata();
+
+            if (calling) {
+                alert(
+                    `${nextContact.name} has been added. Please check contacts page after finishing the current conversation`,
+                );
+                return;
+            }
+
+            selectedContactId = nextContact.id;
+            showContactsPopup = true;
+            queueSelectedContactPromptSync();
+            queueSelectedContactVoiceReferenceSync();
+        } catch (err) {
+            console.error("Failed to import contact:", err);
+            const message = sourceLabel
+                ? `Failed to import contact from ${sourceLabel}.\n${normalizeErrorMessage(err)}`
+                : `Failed to import contact.\n${normalizeErrorMessage(err)}`;
+            alert(message);
+        }
+    }
+
+    async function handleOpenDuckContactImportEvent(
+        payload: OpenDuckContactImportEvent,
+    ) {
+        if (payload.error) {
+            alert(
+                `Failed to import contact from ${payload.sourcePath}.\n${payload.error}`,
+            );
+            return;
+        }
+
+        if (!payload.rawText) {
+            alert(
+                `Failed to import contact from ${payload.sourcePath}.\nThe file did not contain any import data.`,
+            );
+            return;
+        }
+
+        await importContactFromRawText(payload.rawText, payload.sourcePath);
+    }
+
+    async function initializeOpenDuckContactImports() {
+        try {
+            const pendingImports = await invoke<OpenDuckContactImportEvent[]>(
+                "initialize_openduck_contact_imports",
+            );
+
+            for (const pendingImport of pendingImports) {
+                await handleOpenDuckContactImportEvent(pendingImport);
+            }
+        } catch (err) {
+            console.error(
+                "Failed to initialize OpenDuck contact imports:",
+                err,
+            );
+        }
+    }
+
     async function handleContactImportChange(event: Event) {
         const input = event.currentTarget as HTMLInputElement;
         const file = input.files?.[0];
@@ -3822,54 +3893,7 @@
             return;
         }
 
-        try {
-            const rawText = await file.text();
-            const parsed = JSON.parse(rawText) as Record<string, unknown>;
-            const nextName = typeof parsed.name === "string" ? parsed.name : "";
-            const nextPrompt = normalizeContactPrompt(parsed.prompt);
-            const iconDataUrl =
-                typeof parsed.iconDataUrl === "string" &&
-                parsed.iconDataUrl.startsWith("data:image/")
-                    ? parsed.iconDataUrl
-                    : null;
-
-            if (!nextName.trim()) {
-                throw new Error("The imported contact is missing a name.");
-            }
-
-            if (!nextPrompt) {
-                throw new Error("The imported contact is missing a prompt.");
-            }
-
-            const nextContact: ContactProfile = {
-                id: createContactId(),
-                name: nextName,
-                prompt: nextPrompt,
-                hasCustomIcon: Boolean(iconDataUrl),
-                iconDataUrl,
-                gender: normalizeContactGender(parsed.gender),
-                refAudio:
-                    typeof parsed.refAudio === "string"
-                        ? parsed.refAudio
-                        : null,
-                refText:
-                    typeof parsed.refText === "string" ? parsed.refText : null,
-            };
-
-            if (iconDataUrl) {
-                await saveStoredContactIcon(nextContact.id, iconDataUrl);
-            }
-
-            contacts = [...contacts, nextContact];
-            selectedContactId = nextContact.id;
-            persistContactsMetadata();
-            showContactsPopup = true;
-            queueSelectedContactPromptSync();
-            queueSelectedContactVoiceReferenceSync();
-        } catch (err) {
-            console.error("Failed to import contact:", err);
-            alert(`Failed to import contact.\n${normalizeErrorMessage(err)}`);
-        }
+        await importContactFromRawText(await file.text(), file.name);
     }
 
     async function handleContactIconChange(event: Event) {
@@ -6560,6 +6584,12 @@
                             openAboutPopup({ checkForUpdates: true });
                         },
                     ),
+                    listen<OpenDuckContactImportEvent>(
+                        "openduck-contact-import",
+                        ({ payload }) => {
+                            void handleOpenDuckContactImportEvent(payload);
+                        },
+                    ),
                     listen("play-tray-pong", () => {
                         void playTrayPong();
                     }),
@@ -6591,6 +6621,7 @@
             contacts = restoredContacts.contacts;
             selectedContactId = restoredContacts.selectedContactId;
             persistContactsMetadata();
+            await initializeOpenDuckContactImports();
             await syncSelectedContactPrompt();
             await syncSelectedContactVoiceReference();
             await restoreModelPreferences();
@@ -7658,7 +7689,7 @@
     <input
         class="hidden-file-input"
         type="file"
-        accept="application/json,.json"
+        accept=".openduck,application/json,.json"
         bind:this={contactsImportInput}
         onchange={handleContactImportChange}
     />

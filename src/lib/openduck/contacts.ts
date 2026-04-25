@@ -125,6 +125,36 @@ function normalizeImportedContactProfile(
   };
 }
 
+export function createImportedContactFromRawText(rawText: string): ContactProfile {
+  const parsed = JSON.parse(rawText);
+  const importedContact = normalizeImportedContactProfile(parsed);
+
+  if (!importedContact) {
+    const record =
+      parsed && typeof parsed === "object"
+        ? (parsed as Record<string, unknown>)
+        : {};
+    const nextName = typeof record.name === "string" ? record.name : "";
+    const nextPrompt = normalizeContactPrompt(record.prompt);
+
+    if (!nextName.trim()) {
+      throw new Error("The imported contact is missing a name.");
+    }
+
+    if (!nextPrompt) {
+      throw new Error("The imported contact is missing a prompt.");
+    }
+
+    throw new Error("The imported contact could not be parsed.");
+  }
+
+  return {
+    id: createContactId(),
+    ...importedContact,
+    hasCustomIcon: Boolean(importedContact.iconDataUrl),
+  };
+}
+
 function createDefaultContactList(): ContactProfile[] {
   const builtInContacts = Object.entries(builtInContactModules)
     .sort(([leftPath], [rightPath]) => {

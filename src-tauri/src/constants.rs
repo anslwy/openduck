@@ -131,6 +131,7 @@ pub(crate) const TRAY_PONG_PLAYBACK_EVENT: &str = "tray-pong-playback";
 pub(crate) const PLAY_TRAY_PONG_EVENT: &str = "play-tray-pong";
 pub(crate) const SHOW_ABOUT_MODAL_EVENT: &str = "show-about-modal";
 pub(crate) const TRIGGER_APP_UPDATE_CHECK_EVENT: &str = "trigger-app-update-check";
+pub(crate) const OPENDUCK_CONTACT_IMPORT_EVENT: &str = "openduck-contact-import";
 pub(crate) const CONVERSATION_CONTEXT_COMMITTED_EVENT: &str = "conversation-context-committed";
 pub(crate) const CONVERSATION_IMAGE_HISTORY_CLEARED_EVENT: &str =
     "conversation-image-history-cleared";
