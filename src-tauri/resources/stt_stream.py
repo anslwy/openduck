@@ -143,14 +143,18 @@ def run_server(repo_id: str) -> int:
 
         try:
             audio_input, audio_label = resolve_audio_input(request)
+            language = request.get("language")
+            generate_options = {
+                "audio": audio_input,
+                "verbose": False,
+                "condition_on_previous_text": False,
+                "temperature": 0.0,
+            }
+            if isinstance(language, str) and language.strip():
+                generate_options["language"] = language.strip()
             emit_status(f"Transcribing {audio_label}...")
             with redirect_library_stdout():
-                result = model.generate(
-                    audio=audio_input,
-                    verbose=False,
-                    condition_on_previous_text=False,
-                    temperature=0.0,
-                )
+                result = model.generate(**generate_options)
             emit(
                 {
                     "type": "transcription",

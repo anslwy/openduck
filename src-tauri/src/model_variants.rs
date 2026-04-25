@@ -180,6 +180,19 @@ impl KokoroLanguage {
         }
     }
 
+    pub(crate) fn whisper_language_code(self) -> &'static str {
+        match self {
+            Self::AmericanEnglish | Self::BritishEnglish => "en",
+            Self::Japanese => "ja",
+            Self::MandarinChinese => "zh",
+            Self::Spanish => "es",
+            Self::French => "fr",
+            Self::Hindi => "hi",
+            Self::Italian => "it",
+            Self::BrazilianPortuguese => "pt",
+        }
+    }
+
     pub(crate) fn female_voice(self) -> &'static str {
         match self {
             Self::AmericanEnglish => KOKORO_AMERICAN_ENGLISH_FEMALE_VOICE,

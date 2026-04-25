@@ -6,6 +6,7 @@ import {
     DEFAULT_LMSTUDIO_MODEL,
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
     DEFAULT_STT_MODEL,
+    DEFAULT_STT_LANGUAGE,
     DEFAULT_OLLAMA_MODEL,
     MODEL_PREFERENCES_STORAGE_KEY,
     MODEL_PRESETS,
@@ -18,6 +19,7 @@ import type {
     ModelSelection,
     StoredModelPreferences,
     SttModelVariant,
+    SttLanguage,
 } from "./types";
 
 export function createDefaultModelPreferences(): StoredModelPreferences {
@@ -27,6 +29,7 @@ export function createDefaultModelPreferences(): StoredModelPreferences {
         csmModel: DEFAULT_CSM_MODEL,
         kokoroLanguage: DEFAULT_KOKORO_LANGUAGE,
         sttModel: DEFAULT_STT_MODEL,
+        sttLanguage: DEFAULT_STT_LANGUAGE,
         ollamaModel: DEFAULT_OLLAMA_MODEL,
         lmstudioModel: DEFAULT_LMSTUDIO_MODEL,
         openaiCompatibleModel: DEFAULT_OPENAI_COMPATIBLE_MODEL,
@@ -76,6 +79,10 @@ export function isSttModelVariant(value: unknown): value is SttModelVariant {
         value === "distil_whisper_large_v3" ||
         value === "whisper_large_v3_turbo"
     );
+}
+
+export function isSttLanguage(value: unknown): value is SttLanguage {
+    return value === "auto" || isKokoroLanguage(value);
 }
 
 export function selectionsMatch(
@@ -151,6 +158,7 @@ export function loadModelPreferencesFromStorage(): StoredModelPreferences {
             csmModel?: unknown;
             kokoroLanguage?: unknown;
             sttModel?: unknown;
+            sttLanguage?: unknown;
             ollamaModel?: unknown;
             lmstudioModel?: unknown;
             openaiCompatibleModel?: unknown;
@@ -174,6 +182,9 @@ export function loadModelPreferencesFromStorage(): StoredModelPreferences {
             sttModel: isSttModelVariant(parsed.sttModel)
                 ? parsed.sttModel
                 : DEFAULT_STT_MODEL,
+            sttLanguage: isSttLanguage(parsed.sttLanguage)
+                ? parsed.sttLanguage
+                : DEFAULT_STT_LANGUAGE,
             ollamaModel:
                 typeof parsed.ollamaModel === "string"
                     ? parsed.ollamaModel

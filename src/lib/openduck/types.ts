@@ -209,6 +209,7 @@ export type KokoroLanguage =
     | "hindi"
     | "italian"
     | "brazilian_portuguese";
+export type SttLanguage = "auto" | KokoroLanguage;
 export type SttModelVariant = "gemma" | "distil_whisper_large_v3" | "whisper_large_v3_turbo";
 
 export type ConversationLogEntry = {
@@ -286,6 +287,7 @@ export type StoredModelPreferences = {
     csmModel: CsmModelVariant;
     kokoroLanguage?: KokoroLanguage | null;
     sttModel: SttModelVariant;
+    sttLanguage?: SttLanguage | null;
     ollamaModel?: string | null;
     lmstudioModel?: string | null;
     openaiCompatibleModel?: string | null;

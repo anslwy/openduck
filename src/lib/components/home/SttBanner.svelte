@@ -1,6 +1,10 @@
 <!-- STT model banner for choosing between Gemma-based transcription and a separate Whisper worker. -->
 <script lang="ts">
-    import type { SelectOption, SttModelVariant } from "$lib/openduck/types";
+    import type {
+        SelectOption,
+        SttLanguage,
+        SttModelVariant,
+    } from "$lib/openduck/types";
 
     let {
         selectedGemmaVariant,
@@ -14,6 +18,11 @@
         sttVariantDisabled,
         sttModelTooltip,
         selectedSttModelLabel,
+        selectedSttLanguage,
+        sttLanguageOptions,
+        sttLanguageTooltip,
+        selectedSttLanguageLabel,
+        sttNotificationMessage,
         sttDownloadError,
         sttDownloadMessage,
         sttDownloadProgress,
@@ -25,6 +34,7 @@
         isClearingSttCache,
         formatDownloadPercent,
         handleSttModelChange,
+        handleSttLanguageChange,
         handleCancelSttDownload,
         handleUnloadStt,
         handleClearSttCache,
@@ -43,6 +53,11 @@
         sttVariantDisabled: boolean;
         sttModelTooltip: string;
         selectedSttModelLabel: string;
+        selectedSttLanguage: SttLanguage;
+        sttLanguageOptions: Array<SelectOption<SttLanguage>>;
+        sttLanguageTooltip: string;
+        selectedSttLanguageLabel: string;
+        sttNotificationMessage: string | null;
         sttDownloadError: string | null;
         sttDownloadMessage: string;
         sttDownloadProgress: number | null;
@@ -55,6 +70,7 @@
         isClearingSttCache: boolean;
         formatDownloadPercent: (progress: number) => string;
         handleSttModelChange: (event: Event) => Promise<void>;
+        handleSttLanguageChange: (event: Event) => Promise<void>;
         handleCancelSttDownload: () => Promise<void>;
         handleUnloadStt: () => Promise<void>;
         handleClearSttCache: () => Promise<void>;
@@ -63,6 +79,10 @@
         isExternalGemmaVariant: boolean;
         externalProviderLabel: string;
     }>();
+
+    const showSttLanguageSelect = $derived(
+        selectedSttModel === "whisper_large_v3_turbo",
+    );
 </script>
 
 <div
@@ -92,6 +112,28 @@
                             {sttModelTooltip}
                         </div>
                     </div>
+                    {#if showSttLanguageSelect}
+                        <div
+                            class="tooltip-shell variant-select-shell stt-language-select-shell"
+                        >
+                            <select
+                                class="variant-select stt-language-select"
+                                value={selectedSttLanguage}
+                                aria-label="Whisper language"
+                                title={selectedSttLanguageLabel}
+                                onchange={handleSttLanguageChange}
+                            >
+                                {#each sttLanguageOptions as option}
+                                    <option value={option.value}
+                                        >{option.label}</option
+                                    >
+                                {/each}
+                            </select>
+                            <div class="tooltip-bubble variant-tooltip">
+                                {sttLanguageTooltip}
+                            </div>
+                        </div>
+                    {/if}
                 </div>
                 <span class="banner-subtitle"
                     >{isExternalGemmaVariant
@@ -100,6 +142,11 @@
                           ? "Using the loaded Gemma model"
                           : "Loads with the Gemma model above"}</span
                 >
+                {#if sttNotificationMessage}
+                    <span class="banner-detail warning"
+                        >{sttNotificationMessage}</span
+                    >
+                {/if}
             </div>
         </div>
     {:else if isDownloadingStt}
@@ -122,6 +169,28 @@
                         {sttModelTooltip}
                     </div>
                 </div>
+                {#if showSttLanguageSelect}
+                    <div
+                        class="tooltip-shell variant-select-shell stt-language-select-shell"
+                    >
+                        <select
+                            class="variant-select stt-language-select"
+                            value={selectedSttLanguage}
+                            aria-label="Whisper language"
+                            title={selectedSttLanguageLabel}
+                            onchange={handleSttLanguageChange}
+                        >
+                            {#each sttLanguageOptions as option}
+                                <option value={option.value}
+                                    >{option.label}</option
+                                >
+                            {/each}
+                        </select>
+                        <div class="tooltip-bubble variant-tooltip">
+                            {sttLanguageTooltip}
+                        </div>
+                    </div>
+                {/if}
             </div>
             <div class="download-row">
                 <span
@@ -135,6 +204,9 @@
                     >
                 {/if}
             </div>
+            {#if sttNotificationMessage}
+                <span class="banner-detail warning">{sttNotificationMessage}</span>
+            {/if}
             <div class="progress-row">
                 <button
                     type="button"
@@ -201,8 +273,35 @@
                                     {sttModelTooltip}
                                 </div>
                             </div>
+                            {#if showSttLanguageSelect}
+                                <div
+                                    class="tooltip-shell variant-select-shell stt-language-select-shell"
+                                >
+                                    <select
+                                        class="variant-select stt-language-select"
+                                        value={selectedSttLanguage}
+                                        aria-label="Whisper language"
+                                        title={selectedSttLanguageLabel}
+                                        onchange={handleSttLanguageChange}
+                                    >
+                                        {#each sttLanguageOptions as option}
+                                            <option value={option.value}
+                                                >{option.label}</option
+                                            >
+                                        {/each}
+                                    </select>
+                                    <div class="tooltip-bubble variant-tooltip">
+                                        {sttLanguageTooltip}
+                                    </div>
+                                </div>
+                            {/if}
                         </div>
                         <span class="banner-subtitle">Loaded</span>
+                        {#if sttNotificationMessage}
+                            <span class="banner-detail warning"
+                                >{sttNotificationMessage}</span
+                            >
+                        {/if}
                     </div>
                     <div class="loaded-actions">
                         <button
@@ -250,6 +349,28 @@
                                 {sttModelTooltip}
                             </div>
                         </div>
+                        {#if showSttLanguageSelect}
+                            <div
+                                class="tooltip-shell variant-select-shell stt-language-select-shell"
+                            >
+                                <select
+                                    class="variant-select stt-language-select"
+                                    value={selectedSttLanguage}
+                                    aria-label="Whisper language"
+                                    title={selectedSttLanguageLabel}
+                                    onchange={handleSttLanguageChange}
+                                >
+                                    {#each sttLanguageOptions as option}
+                                        <option value={option.value}
+                                            >{option.label}</option
+                                        >
+                                    {/each}
+                                </select>
+                                <div class="tooltip-bubble variant-tooltip">
+                                    {sttLanguageTooltip}
+                                </div>
+                            </div>
+                        {/if}
                     </div>
                     {#if isLoadingStt}
                         <span class="banner-subtitle">{sttLoadMessage}</span>
@@ -267,6 +388,11 @@
                                 {isClearingSttCache ? "Clearing..." : "Clear Cache"}
                             </button>
                         </div>
+                    {/if}
+                    {#if sttNotificationMessage}
+                        <span class="banner-detail warning"
+                            >{sttNotificationMessage}</span
+                        >
                     {/if}
                 </div>
                 <button
@@ -303,12 +429,39 @@
                             {sttModelTooltip}
                         </div>
                     </div>
+                    {#if showSttLanguageSelect}
+                        <div
+                            class="tooltip-shell variant-select-shell stt-language-select-shell"
+                        >
+                            <select
+                                class="variant-select stt-language-select"
+                                value={selectedSttLanguage}
+                                aria-label="Whisper language"
+                                title={selectedSttLanguageLabel}
+                                onchange={handleSttLanguageChange}
+                            >
+                                {#each sttLanguageOptions as option}
+                                    <option value={option.value}
+                                        >{option.label}</option
+                                    >
+                                {/each}
+                            </select>
+                            <div class="tooltip-bubble variant-tooltip">
+                                {sttLanguageTooltip}
+                            </div>
+                        </div>
+                    {/if}
                 </div>
                 {#if sttDownloadError}
                     <span class="banner-subtitle error">Download failed</span>
                     <span class="banner-detail error">{sttDownloadError}</span>
                 {:else}
                     <span class="banner-subtitle">Model not found in cache</span>
+                {/if}
+                {#if sttNotificationMessage}
+                    <span class="banner-detail warning"
+                        >{sttNotificationMessage}</span
+                    >
                 {/if}
             </div>
             <button

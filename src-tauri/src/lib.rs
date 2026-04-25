@@ -442,6 +442,7 @@ struct AppState {
     stt_stderr_tail: Mutex<VecDeque<String>>,
     selected_stt_model: Mutex<SttModelVariant>,
     loaded_stt_model: Mutex<Option<SttModelVariant>>,
+    selected_stt_language: Mutex<Option<KokoroLanguage>>,
     selected_csm_voice: Mutex<CsmVoice>,
     selected_kokoro_language: Mutex<KokoroLanguage>,
     selected_csm_quantized: Mutex<bool>,
@@ -2525,6 +2526,10 @@ fn loaded_stt_model(state: &AppState) -> Option<SttModelVariant> {
     *state.loaded_stt_model.lock().unwrap()
 }
 
+fn selected_stt_language(state: &AppState) -> Option<KokoroLanguage> {
+    *state.selected_stt_language.lock().unwrap()
+}
+
 fn format_memory_bytes(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = KIB * 1024.0;
@@ -2787,6 +2792,27 @@ fn set_stt_model_variant(state: State<'_, AppState>, variant: String) -> Result<
 
     let mut variant_guard = state.selected_stt_model.lock().unwrap();
     *variant_guard = selected_variant;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_stt_language(state: State<'_, AppState>) -> String {
+    selected_stt_language(state.inner())
+        .map(|language| language.key().to_string())
+        .unwrap_or_else(|| "auto".to_string())
+}
+
+#[tauri::command]
+fn set_stt_language(state: State<'_, AppState>, language: String) -> Result<(), String> {
+    let trimmed_language = language.trim();
+    let selected_language =
+        if trimmed_language.eq_ignore_ascii_case("auto") || trimmed_language.is_empty() {
+            None
+        } else {
+            Some(KokoroLanguage::from_key(trimmed_language)?)
+        };
+    let mut language_guard = state.selected_stt_language.lock().unwrap();
+    *language_guard = selected_language;
     Ok(())
 }
 
@@ -4801,11 +4827,18 @@ async fn transcribe_audio_with_stt_worker(
         pending_requests.insert(request_id, response_tx);
     }
 
-    let request = serde_json::json!({
+    let selected_language = selected_stt_language(state.inner());
+    let mut request = serde_json::json!({
         "type": "transcribe",
         "request_id": request_id,
         "audio_wav_base64": audio_wav_base64,
     });
+    if selected_variant == SttModelVariant::WhisperLargeV3Turbo {
+        if let Some(language) = selected_language {
+            request["language"] =
+                serde_json::Value::String(language.whisper_language_code().to_string());
+        }
+    }
 
     let send_result = async {
         let mut stdin = process.stdin.lock().await;
@@ -12489,6 +12522,7 @@ pub fn run() {
             loaded_csm_model: Mutex::new(None),
             selected_stt_model: Mutex::new(SttModelVariant::WhisperLargeV3Turbo),
             loaded_stt_model: Mutex::new(None),
+            selected_stt_language: Mutex::new(None),
             selected_csm_voice: Mutex::new(CsmVoice::Female),
             selected_kokoro_language: Mutex::new(KokoroLanguage::AmericanEnglish),
             selected_csm_quantized: Mutex::new(default_csm_quantized),
@@ -12638,6 +12672,8 @@ pub fn run() {
             set_gemma_variant,
             get_stt_model_variant,
             set_stt_model_variant,
+            get_stt_language,
+            set_stt_language,
             check_model_status,
             check_ollama_status,
             get_ollama_models,

@@ -54,6 +54,7 @@
         DEFAULT_LMSTUDIO_MODEL,
         DEFAULT_OPENAI_COMPATIBLE_MODEL,
         DEFAULT_OLLAMA_MODEL,
+        DEFAULT_STT_LANGUAGE,
         DEFAULT_STT_MODEL,
         END_OF_UTTERANCE_SILENCE_STEP_MS,
         END_OF_UTTERANCE_SILENCE_STORAGE_KEY,
@@ -149,6 +150,7 @@
         ShowAboutModalEvent,
         StoredModelPreferences,
         TriggerAppUpdateCheckEvent,
+        SttLanguage,
         SttModelVariant,
         SttStatusEvent,
         TranscriptEvent,
@@ -300,6 +302,7 @@
         DEFAULT_KOKORO_LANGUAGE,
     );
     let selectedSttModel = $state<SttModelVariant>(DEFAULT_STT_MODEL);
+    let selectedSttLanguage = $state<SttLanguage>(DEFAULT_STT_LANGUAGE);
     let pendingModelPreset = $state<ModelPreset | null>(null);
     let csmDownloadMessage = $state("Preparing download...");
     let csmDownloadProgress = $state<number | null>(null);
@@ -732,6 +735,10 @@
             label: "Whisper Large V3 Turbo",
         },
     ]);
+    const sttLanguageOptions: Array<SelectOption<SttLanguage>> = [
+        { value: "auto", label: "Auto" },
+        ...kokoroLanguageOptions,
+    ];
     const loadedModelChangeHint =
         "(Unload first before changing other models.)";
 
@@ -828,6 +835,16 @@
         sttModelOptions.find((option) => option.value === selectedSttModel)
             ?.label ?? "Whisper Large V3 Turbo",
     );
+    const selectedSttLanguageLabel = $derived(
+        sttLanguageOptions.find(
+            (option) => option.value === selectedSttLanguage,
+        )?.label ?? "Auto",
+    );
+    const sttLanguageTooltip = $derived(
+        selectedSttLanguage === "auto"
+            ? "Let Whisper Large V3 Turbo detect the spoken language automatically."
+            : "Pass this language hint to Whisper Large V3 Turbo transcription.",
+    );
     const sttModelTooltip = $derived(
         appendLoadedModelChangeHint(
             selectedSttModel === "gemma"
@@ -839,6 +856,17 @@
                   : "Use mlx-audio with mlx-community/whisper-large-v3-turbo-asr-fp16 for transcription. This model has higher RAM usage with 99+ languages support.",
             selectedSttModel !== "gemma" && isSttLoaded,
         ),
+    );
+    const nonEnglishKokoroTtsSelected = $derived(
+        selectedCsmModel === "kokoro_82m" &&
+            selectedKokoroLanguage !== "american_english" &&
+            selectedKokoroLanguage !== "british_english",
+    );
+    const sttNotificationMessage = $derived(
+        nonEnglishKokoroTtsSelected &&
+            selectedSttModel === "distil_whisper_large_v3"
+            ? "Non-English STT is only supported in Whisper Large V3 Turbo."
+            : null,
     );
     const modelPresetTooltip = $derived(
         getModelPresetDescription(activeModelPreset),
@@ -1492,6 +1520,7 @@
             csmModel: selectedCsmModel,
             kokoroLanguage: selectedKokoroLanguage,
             sttModel: selectedSttModel,
+            sttLanguage: selectedSttLanguage,
             ollamaModel: selectedOllamaModel,
             lmstudioModel: selectedLmStudioModel,
             openaiCompatibleModel: selectedOpenAiCompatibleModel,
@@ -3087,7 +3116,9 @@
         return {
             gemmaVariant: selectedGemmaVariant,
             csmModel: selectedCsmModel,
+            kokoroLanguage: selectedKokoroLanguage,
             sttModel: selectedSttModel,
+            sttLanguage: selectedSttLanguage,
             ollamaModel: selectedOllamaModel,
             lmstudioModel: selectedLmStudioModel,
             openaiCompatibleModel: selectedOpenAiCompatibleModel,
@@ -3114,6 +3145,10 @@
         sttLoadMessage = "Starting worker...";
     }
 
+    async function setSttLanguageSelection(nextLanguage: SttLanguage) {
+        await invoke("set_stt_language", { language: nextLanguage });
+    }
+
     async function restoreModelPreferences() {
         const restoredPreferences = loadModelPreferencesFromStorage();
 
@@ -3126,6 +3161,8 @@
             isExternalGemmaVariant(restoredPreferences.gemmaVariant)
                 ? DEFAULT_STT_MODEL
                 : restoredPreferences.sttModel;
+        selectedSttLanguage =
+            restoredPreferences.sttLanguage ?? DEFAULT_STT_LANGUAGE;
         if (restoredPreferences.ollamaModel) {
             selectedOllamaModel = restoredPreferences.ollamaModel;
         }
@@ -3194,6 +3231,12 @@
             await setSttModelSelection(selectedSttModel);
         } catch (err) {
             console.error("Failed to restore STT model:", err);
+        }
+
+        try {
+            await setSttLanguageSelection(selectedSttLanguage);
+        } catch (err) {
+            console.error("Failed to restore STT language:", err);
         }
 
         if (isOllamaSupported) {
@@ -4640,6 +4683,23 @@
         }
     }
 
+    async function handleSttLanguageChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        const nextLanguage = target.value as SttLanguage;
+        const previousLanguage = selectedSttLanguage;
+
+        selectedSttLanguage = nextLanguage;
+
+        try {
+            await setSttLanguageSelection(nextLanguage);
+            persistModelPreferences();
+        } catch (err) {
+            selectedSttLanguage = previousLanguage;
+            console.error("Failed to update STT language:", err);
+            alert(`Failed to update the STT language.\n${String(err)}`);
+        }
+    }
+
     async function handleModelPresetChange(event: Event) {
         const target = event.currentTarget as HTMLSelectElement;
         const nextPreset = target.value as ModelPreset;
@@ -4727,6 +4787,8 @@
             selectedKokoroLanguage =
                 previousSelection.kokoroLanguage ?? DEFAULT_KOKORO_LANGUAGE;
             selectedSttModel = previousSelection.sttModel;
+            selectedSttLanguage =
+                previousSelection.sttLanguage ?? DEFAULT_STT_LANGUAGE;
             selectedOllamaModel =
                 previousSelection.ollamaModel ?? DEFAULT_OLLAMA_MODEL;
             selectedLmStudioModel =
@@ -4751,6 +4813,7 @@
                 csmModelVariant,
                 kokoroLanguage,
                 sttModelVariant,
+                sttLanguage,
                 gemmaDownloaded,
                 ollamaSupported,
                 lmstudioSupported,
@@ -4766,6 +4829,7 @@
                 invoke<CsmModelVariant>("get_csm_model_variant"),
                 invoke<KokoroLanguage>("get_kokoro_language"),
                 invoke<SttModelVariant>("get_stt_model_variant"),
+                invoke<SttLanguage>("get_stt_language"),
                 invoke<boolean>("check_model_status"),
                 invoke<boolean>("check_ollama_status"),
                 invoke<boolean>("check_lmstudio_status"),
@@ -4782,6 +4846,7 @@
             selectedCsmModel = csmModelVariant;
             selectedKokoroLanguage = kokoroLanguage;
             selectedSttModel = sttModelVariant;
+            selectedSttLanguage = sttLanguage;
             isGemmaDownloaded = gemmaDownloaded;
             const previousOllamaSupported = isOllamaSupported;
             const previousLmStudioSupported = isLmStudioSupported;
@@ -7060,6 +7125,11 @@
                     {sttVariantDisabled}
                     {sttModelTooltip}
                     {selectedSttModelLabel}
+                    {selectedSttLanguage}
+                    {sttLanguageOptions}
+                    {sttLanguageTooltip}
+                    {selectedSttLanguageLabel}
+                    {sttNotificationMessage}
                     {sttDownloadError}
                     {sttDownloadMessage}
                     {sttDownloadProgress}
@@ -7071,6 +7141,7 @@
                     {isClearingSttCache}
                     {formatDownloadPercent}
                     {handleSttModelChange}
+                    {handleSttLanguageChange}
                     {handleCancelSttDownload}
                     {handleUnloadStt}
                     {handleClearSttCache}
