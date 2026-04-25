@@ -48,6 +48,7 @@
         DEFAULT_CSM_MODEL,
         DEFAULT_END_OF_UTTERANCE_SILENCE_MS,
         DEFAULT_GEMMA_VARIANT,
+        DEFAULT_KOKORO_LANGUAGE,
         DEFAULT_LLM_CONTEXT_TURN_LIMIT,
         DEFAULT_LLM_IMAGE_HISTORY_LIMIT,
         DEFAULT_LMSTUDIO_MODEL,
@@ -135,6 +136,7 @@
         CsmStatusEvent,
         ExternalGemmaVariant,
         GemmaVariant,
+        KokoroLanguage,
         ModelDownloadProgressEvent,
         ModelMemoryUsageSnapshot,
         ModelPreset,
@@ -294,6 +296,9 @@
     let gemmaDownloadError = $state<string | null>(null);
     let selectedGemmaVariant = $state<GemmaVariant>(DEFAULT_GEMMA_VARIANT);
     let selectedCsmModel = $state<CsmModelVariant>(DEFAULT_CSM_MODEL);
+    let selectedKokoroLanguage = $state<KokoroLanguage>(
+        DEFAULT_KOKORO_LANGUAGE,
+    );
     let selectedSttModel = $state<SttModelVariant>(DEFAULT_STT_MODEL);
     let pendingModelPreset = $state<ModelPreset | null>(null);
     let csmDownloadMessage = $state("Preparing download...");
@@ -302,6 +307,7 @@
     let csmDownloadError = $state<string | null>(null);
     let csmLoadMessage = $state("Starting worker...");
     let csmNotificationMessage = $state<string | null>(null);
+    let lastKokoroRuntimeAlertMessage = $state<string | null>(null);
     let sttDownloadMessage = $state("Preparing download...");
     let sttDownloadProgress = $state<number | null>(null);
     let sttDownloadIndeterminate = $state(true);
@@ -309,7 +315,7 @@
     let sttLoadMessage = $state("Starting worker...");
     let isPreparingRuntime = $state(false);
     let runtimeSetupMessage = $state(
-        "Preparing local Python runtime. [Time Needed: ~2mins]",
+        "Preparing local Python runtime. This can take several minutes when dependencies need to be installed.",
     );
     let runtimeSetupError = $state<string | null>(null);
     let isCsmQuantized = $state(true);
@@ -492,6 +498,7 @@
         resolveModelPreset({
             gemmaVariant: selectedGemmaVariant,
             csmModel: selectedCsmModel,
+            kokoroLanguage: selectedKokoroLanguage,
             sttModel: selectedSttModel,
         }),
     );
@@ -539,6 +546,15 @@
     const csmVariantDisabled = $derived(
         isPreparingRuntime ||
             isCsmLoaded ||
+            isDownloadingCsm ||
+            isClearingCsmCache ||
+            isCancellingCsmDownload ||
+            isLoadingCsm ||
+            isUnloadingCsm,
+    );
+    const kokoroLanguageDisabled = $derived(
+        selectedCsmModel !== "kokoro_82m" ||
+            isPreparingRuntime ||
             isDownloadingCsm ||
             isClearingCsmCache ||
             isCancellingCsmDownload ||
@@ -690,6 +706,17 @@
         { value: "cosyvoice3_0_5b_fp16", label: "Fun-CosyVoice3-0.5B (fp16)" },
         { value: "expressiva_1b", label: "CSM Expressiva 1B" },
     ];
+    const kokoroLanguageOptions: Array<SelectOption<KokoroLanguage>> = [
+        { value: "american_english", label: "American English" },
+        { value: "british_english", label: "British English" },
+        { value: "japanese", label: "Japanese" },
+        { value: "mandarin_chinese", label: "Mandarin Chinese" },
+        { value: "spanish", label: "Spanish" },
+        { value: "french", label: "French" },
+        { value: "hindi", label: "Hindi" },
+        { value: "italian", label: "Italian" },
+        { value: "brazilian_portuguese", label: "Brazilian Portuguese" },
+    ];
     const sttModelOptions: Array<SelectOption<SttModelVariant>> = $derived([
         {
             value: "gemma",
@@ -767,12 +794,22 @@
         csmModelOptions.find((option) => option.value === selectedCsmModel)
             ?.label ?? "Kokoro-82M",
     );
+    const selectedKokoroLanguageLabel = $derived(
+        kokoroLanguageOptions.find(
+            (option) => option.value === selectedKokoroLanguage,
+        )?.label ?? "American English",
+    );
+    const kokoroLanguageTooltip = $derived(
+        selectedKokoroLanguage === "french"
+            ? "Kokoro French currently provides only ff_siwis. Male characters use that female voice."
+            : "Kokoro language controls pronunciation and picks the matching voice pair. Character gender still selects female or male.",
+    );
     const csmModelTooltip = $derived(
         appendLoadedModelChangeHint(
             selectedCsmModel === "expressiva_1b"
                 ? "CSM Expressiva 1B supports voice conditioning and optional quantization."
                 : selectedCsmModel === "kokoro_82m"
-                  ? "Kokoro-82M is a lighter English TTS backend. Quantization is not used for this model."
+                  ? "Kokoro-82M is a lighter multilingual TTS backend. Quantization is not used for this model."
                   : selectedCsmModel === "cosyvoice2_0_5b"
                     ? "CosyVoice2-0.5B produces high quality audio with higher usage of memory."
                     : selectedCsmModel === "cosyvoice3_0_5b_8bit"
@@ -891,6 +928,16 @@
             contacts[0] ??
             null,
     );
+    const kokoroVoiceNotificationMessage = $derived(
+        selectedCsmModel === "kokoro_82m" &&
+            selectedKokoroLanguage === "french" &&
+            selectedContact?.gender === "male"
+            ? "Kokoro French only has a female voice. Male characters use ff_siwis."
+            : null,
+    );
+    const csmBannerNotificationMessage = $derived(
+        kokoroVoiceNotificationMessage ?? csmNotificationMessage,
+    );
     const selectedContactName = $derived(
         getContactDisplayName(selectedContact),
     );
@@ -934,9 +981,7 @@
         `background-image: url('${selectedContactIconUrl}')`,
     );
     const runtimeSetupTitle = $derived(
-        isPreparingRuntime
-            ? "Preparing Local Runtime [One-Time Setup]"
-            : "Runtime Setup Failed",
+        isPreparingRuntime ? "Preparing Local Runtime" : "Runtime Setup Failed",
     );
     const PLAYBACK_PREBUFFER_SAMPLES = 2048;
     const MAX_CONTEXT_BACKED_CONVERSATION_LOG_ENTRIES = 48;
@@ -1445,6 +1490,7 @@
             version: 1,
             gemmaVariant: selectedGemmaVariant,
             csmModel: selectedCsmModel,
+            kokoroLanguage: selectedKokoroLanguage,
             sttModel: selectedSttModel,
             ollamaModel: selectedOllamaModel,
             lmstudioModel: selectedLmStudioModel,
@@ -3058,6 +3104,10 @@
         csmLoadMessage = "Starting worker...";
     }
 
+    async function setKokoroLanguageSelection(nextLanguage: KokoroLanguage) {
+        await invoke("set_kokoro_language", { language: nextLanguage });
+    }
+
     async function setSttModelSelection(nextVariant: SttModelVariant) {
         await invoke("set_stt_model_variant", { variant: nextVariant });
         resetDownloadState("stt");
@@ -3069,6 +3119,8 @@
 
         selectedGemmaVariant = restoredPreferences.gemmaVariant;
         selectedCsmModel = restoredPreferences.csmModel;
+        selectedKokoroLanguage =
+            restoredPreferences.kokoroLanguage ?? DEFAULT_KOKORO_LANGUAGE;
         selectedSttModel =
             restoredPreferences.sttModel === "gemma" &&
             isExternalGemmaVariant(restoredPreferences.gemmaVariant)
@@ -3122,6 +3174,14 @@
                     err,
                 );
             }
+        }
+
+        try {
+            await invoke("set_kokoro_language", {
+                language: selectedKokoroLanguage,
+            });
+        } catch (err) {
+            console.error("Failed to restore Kokoro language:", err);
         }
 
         try {
@@ -4391,6 +4451,13 @@
         runtimeSetupError = null;
     }
 
+    function isKokoroRuntimePreparationMessage(message: string) {
+        return (
+            message.includes("Kokoro") &&
+            message.includes("OpenDuck needs to finish installing Kokoro language support")
+        );
+    }
+
     function shouldApplyDownloadEvent(payload: ModelDownloadProgressEvent) {
         if (payload.phase !== "progress") {
             return true;
@@ -4539,6 +4606,23 @@
         }
     }
 
+    async function handleKokoroLanguageChange(event: Event) {
+        const target = event.currentTarget as HTMLSelectElement;
+        const nextLanguage = target.value as KokoroLanguage;
+        const previousLanguage = selectedKokoroLanguage;
+
+        selectedKokoroLanguage = nextLanguage;
+
+        try {
+            await setKokoroLanguageSelection(nextLanguage);
+            persistModelPreferences();
+        } catch (err) {
+            selectedKokoroLanguage = previousLanguage;
+            console.error("Failed to update Kokoro language:", err);
+            alert(`Failed to update the Kokoro language.\n${String(err)}`);
+        }
+    }
+
     async function handleSttModelChange(event: Event) {
         const target = event.currentTarget as HTMLSelectElement;
         const nextVariant = target.value as SttModelVariant;
@@ -4640,6 +4724,8 @@
         } catch (err) {
             selectedGemmaVariant = previousSelection.gemmaVariant;
             selectedCsmModel = previousSelection.csmModel;
+            selectedKokoroLanguage =
+                previousSelection.kokoroLanguage ?? DEFAULT_KOKORO_LANGUAGE;
             selectedSttModel = previousSelection.sttModel;
             selectedOllamaModel =
                 previousSelection.ollamaModel ?? DEFAULT_OLLAMA_MODEL;
@@ -4663,6 +4749,7 @@
             const [
                 gemmaVariant,
                 csmModelVariant,
+                kokoroLanguage,
                 sttModelVariant,
                 gemmaDownloaded,
                 ollamaSupported,
@@ -4677,6 +4764,7 @@
             ] = await Promise.all([
                 invoke<GemmaVariant>("get_gemma_variant"),
                 invoke<CsmModelVariant>("get_csm_model_variant"),
+                invoke<KokoroLanguage>("get_kokoro_language"),
                 invoke<SttModelVariant>("get_stt_model_variant"),
                 invoke<boolean>("check_model_status"),
                 invoke<boolean>("check_ollama_status"),
@@ -4692,6 +4780,7 @@
 
             selectedGemmaVariant = gemmaVariant;
             selectedCsmModel = csmModelVariant;
+            selectedKokoroLanguage = kokoroLanguage;
             selectedSttModel = sttModelVariant;
             isGemmaDownloaded = gemmaDownloaded;
             const previousOllamaSupported = isOllamaSupported;
@@ -5048,7 +5137,7 @@
         isPreparingRuntime = true;
         runtimeSetupError = null;
         runtimeSetupMessage =
-            "Preparing local Python runtime. This can take several minutes on first launch.";
+            "Preparing local Python runtime. This can take several minutes when dependencies need to be installed.";
 
         try {
             await invoke("ensure_runtime_dependencies");
@@ -6349,6 +6438,8 @@
                     }),
                     listen<CsmErrorEvent>("csm-error", ({ payload }) => {
                         const message = normalizeErrorMessage(payload.message);
+                        const isKokoroRuntimePreparationError =
+                            isKokoroRuntimePreparationMessage(message);
                         console.error("CSM error:", message);
                         void syncModelStatus();
                         if (
@@ -6361,7 +6452,23 @@
                                 updateStageAfterPlaybackStateChange();
                             }
                         }
-                        if (calling && payload.request_id == null) {
+                        if (isKokoroRuntimePreparationError) {
+                            csmNotificationMessage = message;
+                            if (
+                                calling &&
+                                lastKokoroRuntimeAlertMessage !== message
+                            ) {
+                                lastKokoroRuntimeAlertMessage = message;
+                                alert(
+                                    `OpenDuck is preparing Kokoro language support.\n${message}`,
+                                );
+                            }
+                        }
+                        if (
+                            calling &&
+                            payload.request_id == null &&
+                            !isKokoroRuntimePreparationError
+                        ) {
                             alert(`OpenDuck error.\n${message}`);
                         }
                     }),
@@ -6980,6 +7087,11 @@
                     {csmModelOptions}
                     {csmVariantDisabled}
                     {csmModelTooltip}
+                    {selectedKokoroLanguage}
+                    {kokoroLanguageOptions}
+                    {kokoroLanguageDisabled}
+                    {kokoroLanguageTooltip}
+                    {selectedKokoroLanguageLabel}
                     {csmQuantizeAvailable}
                     {isCsmQuantized}
                     {isUpdatingCsmQuantize}
@@ -6989,13 +7101,14 @@
                     {csmDownloadProgress}
                     {csmDownloadIndeterminate}
                     {csmLoadMessage}
-                    {csmNotificationMessage}
+                    csmNotificationMessage={csmBannerNotificationMessage}
                     {isCancellingCsmDownload}
                     {isUnloadingCsm}
                     {isLoadingCsm}
                     {isClearingCsmCache}
                     {formatDownloadPercent}
                     {handleCsmModelChange}
+                    {handleKokoroLanguageChange}
                     {handleCancelCsmDownload}
                     {handleUnloadCsm}
                     {handleClearCsmCache}

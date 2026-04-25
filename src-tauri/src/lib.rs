@@ -443,6 +443,7 @@ struct AppState {
     selected_stt_model: Mutex<SttModelVariant>,
     loaded_stt_model: Mutex<Option<SttModelVariant>>,
     selected_csm_voice: Mutex<CsmVoice>,
+    selected_kokoro_language: Mutex<KokoroLanguage>,
     selected_csm_quantized: Mutex<bool>,
     csm_reference_audio_path: Mutex<Option<PathBuf>>,
     csm_reference_text: Mutex<Option<String>>,
@@ -2508,6 +2509,10 @@ fn selected_csm_model(state: &AppState) -> CsmModelVariant {
     *state.selected_csm_model.lock().unwrap()
 }
 
+fn selected_kokoro_language(state: &AppState) -> KokoroLanguage {
+    *state.selected_kokoro_language.lock().unwrap()
+}
+
 fn loaded_csm_model(state: &AppState) -> Option<CsmModelVariant> {
     *state.loaded_csm_model.lock().unwrap()
 }
@@ -2829,7 +2834,7 @@ async fn ensure_runtime_dependencies_inner(
         RuntimeSetupStatusEvent {
             phase: "starting".to_string(),
             message:
-                "Preparing local Python runtime. This can take several minutes on first launch."
+                "Preparing local Python runtime. This can take several minutes when dependencies need to be installed."
                     .to_string(),
         },
     );
@@ -2941,7 +2946,7 @@ async fn ensure_runtime_dependencies_inner(
         .find(|line| !line.is_empty())
         .cloned();
     let error_message = if status.success() {
-        "Runtime setup finished, but required Python dependencies are still missing.".to_string()
+        "Runtime setup finished, but Kokoro language support is still missing required Python dependencies.".to_string()
     } else if let Some(summary) = stderr_summary {
         format!("Runtime setup failed: {summary}")
     } else {
@@ -3115,6 +3120,19 @@ fn get_csm_quantize(state: State<'_, AppState>) -> bool {
 #[tauri::command]
 fn get_csm_model_variant(state: State<'_, AppState>) -> String {
     selected_csm_model(state.inner()).key().to_string()
+}
+
+#[tauri::command]
+fn get_kokoro_language(state: State<'_, AppState>) -> String {
+    selected_kokoro_language(state.inner()).key().to_string()
+}
+
+#[tauri::command]
+fn set_kokoro_language(state: State<'_, AppState>, language: String) -> Result<(), String> {
+    let selected_language = KokoroLanguage::from_key(&language)?;
+    let mut language_guard = state.selected_kokoro_language.lock().unwrap();
+    *language_guard = selected_language;
+    Ok(())
 }
 
 #[tauri::command]
@@ -5454,6 +5472,20 @@ async fn send_csm_synthesis_request(
     text: &str,
 ) -> Result<(), String> {
     let state = app_handle.state::<AppState>();
+    let selected_language = selected_kokoro_language(state.inner());
+    if loaded_csm_model(state.inner()) == Some(CsmModelVariant::Kokoro82m)
+        && !kokoro_language_dependencies_available(app_handle, selected_language)
+    {
+        info!(
+            "Kokoro {} runtime dependencies are missing. Preparing runtime before synthesis.",
+            selected_language.key()
+        );
+        if csm_process_is_ready(state.inner()).await {
+            stop_csm_server_inner(state.inner()).await?;
+        }
+        ensure_runtime_dependencies_inner(app_handle, state.inner()).await?;
+    }
+
     if !csm_process_is_ready(state.inner()).await {
         info!(
             "Speech worker was unavailable for synthesis request {}. Attempting restart.",
@@ -5483,7 +5515,8 @@ async fn send_csm_synthesis_request(
         "request_id": request_id,
         "text": text,
         "speaker": CSM_EXPRESSIVA_SPEAKER_ID,
-        "voice": selected_voice.kokoro_voice(),
+        "voice": selected_voice.kokoro_voice(selected_language),
+        "lang_code": selected_language.lang_code(),
         "max_audio_length_ms": CSM_MAX_AUDIO_LENGTH_MS,
         "temperature": CSM_TEMPERATURE,
         "top_k": CSM_TOP_K,
@@ -11039,20 +11072,72 @@ fn resolve_setup_script(app_handle: &tauri::AppHandle) -> Result<PathBuf, String
         .ok_or_else(|| "Unable to locate setup_python_env.sh".to_string())
 }
 
+fn runtime_root_has_required_markers(runtime_root: &Path) -> bool {
+    runtime_root.join(RUNTIME_SETUP_COMPLETE_FILE).exists()
+        && runtime_root
+            .join(KOKORO_MULTILINGUAL_RUNTIME_MARKER_FILE)
+            .exists()
+}
+
+fn python_site_package_module_exists(site_packages: &Path, module_name: &str) -> bool {
+    site_packages.join(module_name).exists()
+        || site_packages.join(format!("{module_name}.py")).exists()
+}
+
+fn kokoro_unidic_dictionary_available(site_packages: &Path) -> bool {
+    site_packages
+        .join("unidic")
+        .join("dicdir")
+        .join("mecabrc")
+        .exists()
+}
+
+fn kokoro_python_modules_available(app_handle: &tauri::AppHandle, module_names: &[&str]) -> bool {
+    if module_names.is_empty() {
+        return true;
+    }
+
+    let Ok(site_packages) = resolve_kokoro_site_packages(app_handle) else {
+        return false;
+    };
+
+    module_names
+        .iter()
+        .all(|module_name| python_site_package_module_exists(&site_packages, module_name))
+        && (!module_names.contains(&"unidic") || kokoro_unidic_dictionary_available(&site_packages))
+}
+
+fn kokoro_multilingual_dependencies_available(app_handle: &tauri::AppHandle) -> bool {
+    kokoro_python_modules_available(app_handle, KOKORO_MULTILINGUAL_REQUIRED_PYTHON_MODULES)
+}
+
+fn kokoro_language_dependencies_available(
+    app_handle: &tauri::AppHandle,
+    language: KokoroLanguage,
+) -> bool {
+    kokoro_python_modules_available(app_handle, language.required_python_modules())
+}
+
 fn runtime_dependencies_available(app_handle: &tauri::AppHandle) -> bool {
-    // If we have an installed runtime in the app data directory, it must be complete.
+    let core_dependencies_available = || {
+        resolve_gemma_python_executable(app_handle).is_ok()
+            && resolve_csm_site_packages(app_handle).is_ok()
+            && resolve_kokoro_site_packages(app_handle).is_ok()
+            && resolve_cosyvoice_site_packages(app_handle).is_ok()
+            && resolve_stt_site_packages(app_handle).is_ok()
+            && kokoro_multilingual_dependencies_available(app_handle)
+    };
+
+    // If we have an installed runtime in the app data directory, it must be current.
     if let Ok(runtime_root) = resolve_runtime_root(app_handle) {
         if runtime_root.exists() {
-            return runtime_root.join(".complete").exists();
+            return runtime_root_has_required_markers(&runtime_root)
+                && core_dependencies_available();
         }
     }
 
     // Fallback for development where dependencies are pre-installed in the source tree.
-    resolve_gemma_python_executable(app_handle).is_ok()
-        && resolve_csm_site_packages(app_handle).is_ok()
-        && resolve_kokoro_site_packages(app_handle).is_ok()
-        && resolve_cosyvoice_site_packages(app_handle).is_ok()
-        && resolve_stt_site_packages(app_handle).is_ok()
+    core_dependencies_available()
 }
 
 fn resolve_gemma_python_executable(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -11148,6 +11233,16 @@ fn resolve_existing_path_dev_first(
     label: &str,
 ) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
+    let runtime_root = resolve_runtime_root(app_handle).ok();
+    let should_prefer_runtime = runtime_root
+        .as_deref()
+        .is_some_and(runtime_root_has_required_markers);
+
+    if should_prefer_runtime {
+        if let Some(runtime_root) = runtime_root.as_deref() {
+            push_runtime_path_candidates(&mut candidates, runtime_root, relative_path);
+        }
+    }
 
     if let Ok(current_dir) = std::env::current_dir() {
         candidates.push(current_dir.join("src-tauri").join(relative_path));
@@ -11157,10 +11252,9 @@ fn resolve_existing_path_dev_first(
         }
     }
 
-    if let Ok(runtime_root) = resolve_runtime_root(app_handle) {
-        candidates.push(runtime_root.join(relative_path));
-        if let Ok(stripped) = relative_path.strip_prefix("resources") {
-            candidates.push(runtime_root.join(stripped));
+    if !should_prefer_runtime {
+        if let Some(runtime_root) = runtime_root.as_deref() {
+            push_runtime_path_candidates(&mut candidates, runtime_root, relative_path);
         }
     }
 
@@ -11175,6 +11269,17 @@ fn resolve_existing_path_dev_first(
         .into_iter()
         .find(|candidate| candidate.exists())
         .ok_or_else(|| format!("Unable to locate {} at {}", label, relative_path.display()))
+}
+
+fn push_runtime_path_candidates(
+    candidates: &mut Vec<PathBuf>,
+    runtime_root: &Path,
+    relative_path: &Path,
+) {
+    candidates.push(runtime_root.join(relative_path));
+    if let Ok(stripped) = relative_path.strip_prefix("resources") {
+        candidates.push(runtime_root.join(stripped));
+    }
 }
 
 fn resolve_csm_context_audio_file(
@@ -12004,6 +12109,7 @@ pub fn run() {
             selected_stt_model: Mutex::new(SttModelVariant::WhisperLargeV3Turbo),
             loaded_stt_model: Mutex::new(None),
             selected_csm_voice: Mutex::new(CsmVoice::Female),
+            selected_kokoro_language: Mutex::new(KokoroLanguage::AmericanEnglish),
             selected_csm_quantized: Mutex::new(default_csm_quantized),
             csm_reference_audio_path: Mutex::new(None),
             csm_reference_text: Mutex::new(None),
@@ -12192,8 +12298,10 @@ pub fn run() {
             stop_csm_server,
             stop_stt_server,
             get_csm_model_variant,
+            get_kokoro_language,
             get_csm_quantize,
             set_csm_model_variant,
+            set_kokoro_language,
             set_csm_quantize,
             set_csm_voice,
             update_conversation_context_entry,

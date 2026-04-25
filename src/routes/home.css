@@ -2274,6 +2274,11 @@ main.idle-layout {
     min-width: 140px;
 }
 
+.kokoro-language-select {
+    max-width: 210px;
+    min-width: 150px;
+}
+
 .variant-select:hover:not(:disabled) {
     background: rgba(255, 255, 255, 0.1);
 }

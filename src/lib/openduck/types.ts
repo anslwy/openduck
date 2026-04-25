@@ -199,6 +199,16 @@ export type CsmModelVariant =
     | "cosyvoice3_0_5b_fp16"
     | "chatterbox_turbo_8bit"
     | "chatterbox_turbo_fp16";
+export type KokoroLanguage =
+    | "american_english"
+    | "british_english"
+    | "japanese"
+    | "mandarin_chinese"
+    | "spanish"
+    | "french"
+    | "hindi"
+    | "italian"
+    | "brazilian_portuguese";
 export type SttModelVariant = "gemma" | "distil_whisper_large_v3" | "whisper_large_v3_turbo";
 
 export type ConversationLogEntry = {
@@ -274,6 +284,7 @@ export type StoredModelPreferences = {
     version: 1;
     gemmaVariant: GemmaVariant;
     csmModel: CsmModelVariant;
+    kokoroLanguage?: KokoroLanguage | null;
     sttModel: SttModelVariant;
     ollamaModel?: string | null;
     lmstudioModel?: string | null;

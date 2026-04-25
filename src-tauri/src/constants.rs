@@ -7,10 +7,61 @@ pub(crate) const KOKORO_MODEL_REPO: &str = "mlx-community/Kokoro-82M-bf16";
 pub(crate) const KOKORO_CACHE_DIR: &str = "models--mlx-community--Kokoro-82M-bf16";
 pub(crate) const KOKORO_MODEL_FILE: &str = "kokoro-v1_0.safetensors";
 pub(crate) const KOKORO_CONFIG_FILE: &str = "config.json";
-pub(crate) const KOKORO_DEFAULT_VOICE: &str = "af_heart";
-pub(crate) const KOKORO_DEFAULT_VOICE_FILE: &str = "voices/af_heart.pt";
-pub(crate) const KOKORO_MALE_VOICE: &str = "am_michael";
-pub(crate) const KOKORO_MALE_VOICE_FILE: &str = "voices/am_michael.pt";
+pub(crate) const KOKORO_AMERICAN_ENGLISH_FEMALE_VOICE: &str = "af_heart";
+pub(crate) const KOKORO_AMERICAN_ENGLISH_FEMALE_VOICE_FILE: &str = "voices/af_heart.pt";
+pub(crate) const KOKORO_AMERICAN_ENGLISH_MALE_VOICE: &str = "am_michael";
+pub(crate) const KOKORO_AMERICAN_ENGLISH_MALE_VOICE_FILE: &str = "voices/am_michael.pt";
+pub(crate) const KOKORO_BRITISH_ENGLISH_FEMALE_VOICE: &str = "bf_emma";
+pub(crate) const KOKORO_BRITISH_ENGLISH_FEMALE_VOICE_FILE: &str = "voices/bf_emma.pt";
+pub(crate) const KOKORO_BRITISH_ENGLISH_MALE_VOICE: &str = "bm_fable";
+pub(crate) const KOKORO_BRITISH_ENGLISH_MALE_VOICE_FILE: &str = "voices/bm_fable.pt";
+pub(crate) const KOKORO_JAPANESE_FEMALE_VOICE: &str = "jf_alpha";
+pub(crate) const KOKORO_JAPANESE_FEMALE_VOICE_FILE: &str = "voices/jf_alpha.pt";
+pub(crate) const KOKORO_JAPANESE_MALE_VOICE: &str = "jm_kumo";
+pub(crate) const KOKORO_JAPANESE_MALE_VOICE_FILE: &str = "voices/jm_kumo.pt";
+pub(crate) const KOKORO_MANDARIN_CHINESE_FEMALE_VOICE: &str = "zf_xiaobei";
+pub(crate) const KOKORO_MANDARIN_CHINESE_FEMALE_VOICE_FILE: &str = "voices/zf_xiaobei.pt";
+pub(crate) const KOKORO_MANDARIN_CHINESE_MALE_VOICE: &str = "zm_yunjian";
+pub(crate) const KOKORO_MANDARIN_CHINESE_MALE_VOICE_FILE: &str = "voices/zm_yunjian.pt";
+pub(crate) const KOKORO_SPANISH_FEMALE_VOICE: &str = "ef_dora";
+pub(crate) const KOKORO_SPANISH_FEMALE_VOICE_FILE: &str = "voices/ef_dora.pt";
+pub(crate) const KOKORO_SPANISH_MALE_VOICE: &str = "em_alex";
+pub(crate) const KOKORO_SPANISH_MALE_VOICE_FILE: &str = "voices/em_alex.pt";
+pub(crate) const KOKORO_FRENCH_FEMALE_VOICE: &str = "ff_siwis";
+pub(crate) const KOKORO_FRENCH_FEMALE_VOICE_FILE: &str = "voices/ff_siwis.pt";
+pub(crate) const KOKORO_HINDI_FEMALE_VOICE: &str = "hf_alpha";
+pub(crate) const KOKORO_HINDI_FEMALE_VOICE_FILE: &str = "voices/hf_alpha.pt";
+pub(crate) const KOKORO_HINDI_MALE_VOICE: &str = "hm_omega";
+pub(crate) const KOKORO_HINDI_MALE_VOICE_FILE: &str = "voices/hm_omega.pt";
+pub(crate) const KOKORO_ITALIAN_FEMALE_VOICE: &str = "if_sara";
+pub(crate) const KOKORO_ITALIAN_FEMALE_VOICE_FILE: &str = "voices/if_sara.pt";
+pub(crate) const KOKORO_ITALIAN_MALE_VOICE: &str = "im_nicola";
+pub(crate) const KOKORO_ITALIAN_MALE_VOICE_FILE: &str = "voices/im_nicola.pt";
+pub(crate) const KOKORO_BRAZILIAN_PORTUGUESE_FEMALE_VOICE: &str = "pf_dora";
+pub(crate) const KOKORO_BRAZILIAN_PORTUGUESE_FEMALE_VOICE_FILE: &str = "voices/pf_dora.pt";
+pub(crate) const KOKORO_BRAZILIAN_PORTUGUESE_MALE_VOICE: &str = "pm_alex";
+pub(crate) const KOKORO_BRAZILIAN_PORTUGUESE_MALE_VOICE_FILE: &str = "voices/pm_alex.pt";
+pub(crate) const KOKORO_REQUIRED_FILES: &[&str] = &[
+    KOKORO_CONFIG_FILE,
+    KOKORO_MODEL_FILE,
+    KOKORO_AMERICAN_ENGLISH_FEMALE_VOICE_FILE,
+    KOKORO_AMERICAN_ENGLISH_MALE_VOICE_FILE,
+    KOKORO_BRITISH_ENGLISH_FEMALE_VOICE_FILE,
+    KOKORO_BRITISH_ENGLISH_MALE_VOICE_FILE,
+    KOKORO_JAPANESE_FEMALE_VOICE_FILE,
+    KOKORO_JAPANESE_MALE_VOICE_FILE,
+    KOKORO_MANDARIN_CHINESE_FEMALE_VOICE_FILE,
+    KOKORO_MANDARIN_CHINESE_MALE_VOICE_FILE,
+    KOKORO_SPANISH_FEMALE_VOICE_FILE,
+    KOKORO_SPANISH_MALE_VOICE_FILE,
+    KOKORO_FRENCH_FEMALE_VOICE_FILE,
+    KOKORO_HINDI_FEMALE_VOICE_FILE,
+    KOKORO_HINDI_MALE_VOICE_FILE,
+    KOKORO_ITALIAN_FEMALE_VOICE_FILE,
+    KOKORO_ITALIAN_MALE_VOICE_FILE,
+    KOKORO_BRAZILIAN_PORTUGUESE_FEMALE_VOICE_FILE,
+    KOKORO_BRAZILIAN_PORTUGUESE_MALE_VOICE_FILE,
+];
 pub(crate) const COSYVOICE2_MODEL_REPO: &str = "mlx-community/CosyVoice2-0.5B-fp16";
 pub(crate) const COSYVOICE2_CACHE_DIR: &str = "models--mlx-community--CosyVoice2-0.5B-fp16";
 pub(crate) const COSYVOICE2_MODEL_FILE: &str = "model.safetensors";
@@ -90,6 +141,24 @@ pub(crate) const ASSISTANT_RESPONSE_EVENT: &str = "assistant-response";
 pub(crate) const OVERLAY_NOTIFICATION_EVENT: &str = "overlay-notification";
 pub(crate) const MODEL_DOWNLOAD_EVENT: &str = "model-download-progress";
 pub(crate) const RUNTIME_SETUP_EVENT: &str = "runtime-setup-status";
+pub(crate) const RUNTIME_SETUP_COMPLETE_FILE: &str = ".complete";
+pub(crate) const KOKORO_MULTILINGUAL_RUNTIME_MARKER_FILE: &str = ".kokoro-multilingual-v2";
+pub(crate) const KOKORO_JAPANESE_REQUIRED_PYTHON_MODULES: &[&str] =
+    &["fugashi", "jaconv", "mojimoji", "pyopenjtalk", "unidic"];
+pub(crate) const KOKORO_MANDARIN_CHINESE_REQUIRED_PYTHON_MODULES: &[&str] =
+    &["cn2an", "jieba", "pypinyin", "pypinyin_dict"];
+pub(crate) const KOKORO_MULTILINGUAL_REQUIRED_PYTHON_MODULES: &[&str] =
+    &[
+        "fugashi",
+        "jaconv",
+        "mojimoji",
+        "pyopenjtalk",
+        "unidic",
+        "cn2an",
+        "jieba",
+        "pypinyin",
+        "pypinyin_dict",
+    ];
 pub(crate) const SCREEN_CAPTURE_EVENT: &str = "screen-capture";
 pub(crate) const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 pub(crate) const CSM_STDERR_TAIL_LIMIT: usize = 8;

@@ -1,6 +1,10 @@
 <!-- Speech model banner for managing the active TTS backend and its optional quantization toggle. -->
 <script lang="ts">
-    import type { CsmModelVariant, SelectOption } from "$lib/openduck/types";
+    import type {
+        CsmModelVariant,
+        KokoroLanguage,
+        SelectOption,
+    } from "$lib/openduck/types";
 
     let {
         isDownloadingCsm,
@@ -10,6 +14,11 @@
         csmModelOptions,
         csmVariantDisabled,
         csmModelTooltip,
+        selectedKokoroLanguage,
+        kokoroLanguageOptions,
+        kokoroLanguageDisabled,
+        kokoroLanguageTooltip,
+        selectedKokoroLanguageLabel,
         csmQuantizeAvailable,
         isCsmQuantized,
         isUpdatingCsmQuantize,
@@ -26,6 +35,7 @@
         isClearingCsmCache,
         formatDownloadPercent,
         handleCsmModelChange,
+        handleKokoroLanguageChange,
         handleCancelCsmDownload,
         handleUnloadCsm,
         handleClearCsmCache,
@@ -40,6 +50,11 @@
         csmModelOptions: Array<SelectOption<CsmModelVariant>>;
         csmVariantDisabled: boolean;
         csmModelTooltip: string;
+        selectedKokoroLanguage: KokoroLanguage;
+        kokoroLanguageOptions: Array<SelectOption<KokoroLanguage>>;
+        kokoroLanguageDisabled: boolean;
+        kokoroLanguageTooltip: string;
+        selectedKokoroLanguageLabel: string;
         csmQuantizeAvailable: boolean;
         isCsmQuantized: boolean;
         isUpdatingCsmQuantize: boolean;
@@ -56,6 +71,7 @@
         isClearingCsmCache: boolean;
         formatDownloadPercent: (progress: number) => string;
         handleCsmModelChange: (event: Event) => Promise<void>;
+        handleKokoroLanguageChange: (event: Event) => Promise<void>;
         handleCancelCsmDownload: () => Promise<void>;
         handleUnloadCsm: () => Promise<void>;
         handleClearCsmCache: () => Promise<void>;
@@ -63,6 +79,10 @@
         handleLoadCsm: () => Promise<void>;
         handleCsmQuantizeToggle: () => Promise<void>;
     }>();
+
+    const showKokoroLanguageSelect = $derived(
+        selectedCsmModel === "kokoro_82m",
+    );
 </script>
 
 <div
@@ -89,6 +109,31 @@
                         {csmModelTooltip}
                     </div>
                 </div>
+                {#if showKokoroLanguageSelect}
+                    <div
+                        class="tooltip-shell variant-select-shell kokoro-language-select-shell"
+                    >
+                        <select
+                            class="variant-select kokoro-language-select"
+                            value={selectedKokoroLanguage}
+                            aria-label="Kokoro language"
+                            title={selectedKokoroLanguageLabel}
+                            disabled={kokoroLanguageDisabled}
+                            onchange={handleKokoroLanguageChange}
+                        >
+                            {#each kokoroLanguageOptions as option}
+                                <option
+                                    value={option.value}
+                                    disabled={option.disabled}
+                                    >{option.label}</option
+                                >
+                            {/each}
+                        </select>
+                        <div class="tooltip-bubble variant-tooltip">
+                            {kokoroLanguageTooltip}
+                        </div>
+                    </div>
+                {/if}
             </div>
             <div class="download-row">
                 <span
@@ -168,6 +213,31 @@
                                     {csmModelTooltip}
                                 </div>
                             </div>
+                            {#if showKokoroLanguageSelect}
+                                <div
+                                    class="tooltip-shell variant-select-shell kokoro-language-select-shell"
+                                >
+                                    <select
+                                        class="variant-select kokoro-language-select"
+                                        value={selectedKokoroLanguage}
+                                        aria-label="Kokoro language"
+                                        title={selectedKokoroLanguageLabel}
+                                        disabled={kokoroLanguageDisabled}
+                                        onchange={handleKokoroLanguageChange}
+                                    >
+                                        {#each kokoroLanguageOptions as option}
+                                            <option
+                                                value={option.value}
+                                                disabled={option.disabled}
+                                                >{option.label}</option
+                                            >
+                                        {/each}
+                                    </select>
+                                    <div class="tooltip-bubble variant-tooltip">
+                                        {kokoroLanguageTooltip}
+                                    </div>
+                                </div>
+                            {/if}
                         </div>
                         <span class="banner-subtitle">Loaded</span>
                         {#if csmNotificationMessage}
@@ -222,6 +292,31 @@
                                 {csmModelTooltip}
                             </div>
                         </div>
+                        {#if showKokoroLanguageSelect}
+                            <div
+                                class="tooltip-shell variant-select-shell kokoro-language-select-shell"
+                            >
+                                <select
+                                    class="variant-select kokoro-language-select"
+                                    value={selectedKokoroLanguage}
+                                    aria-label="Kokoro language"
+                                    title={selectedKokoroLanguageLabel}
+                                    disabled={kokoroLanguageDisabled}
+                                    onchange={handleKokoroLanguageChange}
+                                >
+                                    {#each kokoroLanguageOptions as option}
+                                        <option
+                                            value={option.value}
+                                            disabled={option.disabled}
+                                            >{option.label}</option
+                                        >
+                                    {/each}
+                                </select>
+                                <div class="tooltip-bubble variant-tooltip">
+                                    {kokoroLanguageTooltip}
+                                </div>
+                            </div>
+                        {/if}
                         {#if csmQuantizeAvailable}
                             <div class="tooltip-shell">
                                 <button
@@ -294,6 +389,31 @@
                             {csmModelTooltip}
                         </div>
                     </div>
+                    {#if showKokoroLanguageSelect}
+                        <div
+                            class="tooltip-shell variant-select-shell kokoro-language-select-shell"
+                        >
+                            <select
+                                class="variant-select kokoro-language-select"
+                                value={selectedKokoroLanguage}
+                                aria-label="Kokoro language"
+                                title={selectedKokoroLanguageLabel}
+                                disabled={kokoroLanguageDisabled}
+                                onchange={handleKokoroLanguageChange}
+                            >
+                                {#each kokoroLanguageOptions as option}
+                                    <option
+                                        value={option.value}
+                                        disabled={option.disabled}
+                                        >{option.label}</option
+                                    >
+                                {/each}
+                            </select>
+                            <div class="tooltip-bubble variant-tooltip">
+                                {kokoroLanguageTooltip}
+                            </div>
+                        </div>
+                    {/if}
                     {#if csmQuantizeAvailable}
                         <div class="tooltip-shell">
                             <button

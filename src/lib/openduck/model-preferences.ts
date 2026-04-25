@@ -2,6 +2,7 @@
 import {
     DEFAULT_CSM_MODEL,
     DEFAULT_GEMMA_VARIANT,
+    DEFAULT_KOKORO_LANGUAGE,
     DEFAULT_LMSTUDIO_MODEL,
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
     DEFAULT_STT_MODEL,
@@ -12,6 +13,7 @@ import {
 import type {
     CsmModelVariant,
     GemmaVariant,
+    KokoroLanguage,
     ModelPreset,
     ModelSelection,
     StoredModelPreferences,
@@ -23,6 +25,7 @@ export function createDefaultModelPreferences(): StoredModelPreferences {
         version: 1,
         gemmaVariant: DEFAULT_GEMMA_VARIANT,
         csmModel: DEFAULT_CSM_MODEL,
+        kokoroLanguage: DEFAULT_KOKORO_LANGUAGE,
         sttModel: DEFAULT_STT_MODEL,
         ollamaModel: DEFAULT_OLLAMA_MODEL,
         lmstudioModel: DEFAULT_LMSTUDIO_MODEL,
@@ -50,6 +53,20 @@ export function isCsmModelVariant(value: unknown): value is CsmModelVariant {
         value === "cosyvoice3_0_5b_fp16" ||
         value === "chatterbox_turbo_8bit" ||
         value === "chatterbox_turbo_fp16"
+    );
+}
+
+export function isKokoroLanguage(value: unknown): value is KokoroLanguage {
+    return (
+        value === "american_english" ||
+        value === "british_english" ||
+        value === "japanese" ||
+        value === "mandarin_chinese" ||
+        value === "spanish" ||
+        value === "french" ||
+        value === "hindi" ||
+        value === "italian" ||
+        value === "brazilian_portuguese"
     );
 }
 
@@ -132,6 +149,7 @@ export function loadModelPreferencesFromStorage(): StoredModelPreferences {
             version?: unknown;
             gemmaVariant?: unknown;
             csmModel?: unknown;
+            kokoroLanguage?: unknown;
             sttModel?: unknown;
             ollamaModel?: unknown;
             lmstudioModel?: unknown;
@@ -150,6 +168,9 @@ export function loadModelPreferencesFromStorage(): StoredModelPreferences {
             csmModel: isCsmModelVariant(parsed.csmModel)
                 ? parsed.csmModel
                 : DEFAULT_CSM_MODEL,
+            kokoroLanguage: isKokoroLanguage(parsed.kokoroLanguage)
+                ? parsed.kokoroLanguage
+                : DEFAULT_KOKORO_LANGUAGE,
             sttModel: isSttModelVariant(parsed.sttModel)
                 ? parsed.sttModel
                 : DEFAULT_STT_MODEL,

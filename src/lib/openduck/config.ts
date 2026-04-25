@@ -2,6 +2,7 @@
 import type {
   CsmModelVariant,
   GemmaVariant,
+  KokoroLanguage,
   ModelPreset,
   ModelSelection,
   SttModelVariant,
@@ -48,6 +49,7 @@ export const GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY = "openduck.global-shortcut-i
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
 
 export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
+export const DEFAULT_KOKORO_LANGUAGE: KokoroLanguage = "american_english";
 export const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
 export const DEFAULT_OLLAMA_MODEL = "gemma2:2b";
 export const DEFAULT_LMSTUDIO_MODEL = "";

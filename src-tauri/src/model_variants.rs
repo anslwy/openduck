@@ -107,10 +107,125 @@ impl CsmVoice {
         }
     }
 
-    pub(crate) fn kokoro_voice(self) -> &'static str {
+    pub(crate) fn kokoro_voice(self, language: KokoroLanguage) -> &'static str {
+        language.voice_for_gender(self)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KokoroLanguage {
+    AmericanEnglish,
+    BritishEnglish,
+    Japanese,
+    MandarinChinese,
+    Spanish,
+    French,
+    Hindi,
+    Italian,
+    BrazilianPortuguese,
+}
+
+impl KokoroLanguage {
+    pub(crate) fn from_key(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "american_english" | "american-english" | "en_us" | "en-us" | "american" | "a" => {
+                Ok(Self::AmericanEnglish)
+            }
+            "british_english" | "british-english" | "en_gb" | "en-gb" | "british" | "b" => {
+                Ok(Self::BritishEnglish)
+            }
+            "japanese" | "ja" | "jp" | "j" => Ok(Self::Japanese),
+            "mandarin_chinese" | "mandarin-chinese" | "mandarin" | "chinese" | "zh" | "zh_cn"
+            | "zh-cn" | "z" => Ok(Self::MandarinChinese),
+            "spanish" | "es" | "e" => Ok(Self::Spanish),
+            "french" | "fr" | "fr_fr" | "fr-fr" | "f" => Ok(Self::French),
+            "hindi" | "hi" | "h" => Ok(Self::Hindi),
+            "italian" | "it" | "i" => Ok(Self::Italian),
+            "brazilian_portuguese"
+            | "brazilian-portuguese"
+            | "portuguese"
+            | "pt"
+            | "pt_br"
+            | "pt-br"
+            | "p" => Ok(Self::BrazilianPortuguese),
+            other => Err(format!("Unsupported Kokoro language: {other}")),
+        }
+    }
+
+    pub(crate) fn key(self) -> &'static str {
         match self {
-            Self::Male => KOKORO_MALE_VOICE,
-            Self::Female | Self::Custom => KOKORO_DEFAULT_VOICE,
+            Self::AmericanEnglish => "american_english",
+            Self::BritishEnglish => "british_english",
+            Self::Japanese => "japanese",
+            Self::MandarinChinese => "mandarin_chinese",
+            Self::Spanish => "spanish",
+            Self::French => "french",
+            Self::Hindi => "hindi",
+            Self::Italian => "italian",
+            Self::BrazilianPortuguese => "brazilian_portuguese",
+        }
+    }
+
+    pub(crate) fn lang_code(self) -> &'static str {
+        match self {
+            Self::AmericanEnglish => "a",
+            Self::BritishEnglish => "b",
+            Self::Japanese => "j",
+            Self::MandarinChinese => "z",
+            Self::Spanish => "e",
+            Self::French => "f",
+            Self::Hindi => "h",
+            Self::Italian => "i",
+            Self::BrazilianPortuguese => "p",
+        }
+    }
+
+    pub(crate) fn female_voice(self) -> &'static str {
+        match self {
+            Self::AmericanEnglish => KOKORO_AMERICAN_ENGLISH_FEMALE_VOICE,
+            Self::BritishEnglish => KOKORO_BRITISH_ENGLISH_FEMALE_VOICE,
+            Self::Japanese => KOKORO_JAPANESE_FEMALE_VOICE,
+            Self::MandarinChinese => KOKORO_MANDARIN_CHINESE_FEMALE_VOICE,
+            Self::Spanish => KOKORO_SPANISH_FEMALE_VOICE,
+            Self::French => KOKORO_FRENCH_FEMALE_VOICE,
+            Self::Hindi => KOKORO_HINDI_FEMALE_VOICE,
+            Self::Italian => KOKORO_ITALIAN_FEMALE_VOICE,
+            Self::BrazilianPortuguese => KOKORO_BRAZILIAN_PORTUGUESE_FEMALE_VOICE,
+        }
+    }
+
+    pub(crate) fn male_voice(self) -> Option<&'static str> {
+        match self {
+            Self::AmericanEnglish => Some(KOKORO_AMERICAN_ENGLISH_MALE_VOICE),
+            Self::BritishEnglish => Some(KOKORO_BRITISH_ENGLISH_MALE_VOICE),
+            Self::Japanese => Some(KOKORO_JAPANESE_MALE_VOICE),
+            Self::MandarinChinese => Some(KOKORO_MANDARIN_CHINESE_MALE_VOICE),
+            Self::Spanish => Some(KOKORO_SPANISH_MALE_VOICE),
+            Self::French => None,
+            Self::Hindi => Some(KOKORO_HINDI_MALE_VOICE),
+            Self::Italian => Some(KOKORO_ITALIAN_MALE_VOICE),
+            Self::BrazilianPortuguese => Some(KOKORO_BRAZILIAN_PORTUGUESE_MALE_VOICE),
+        }
+    }
+
+    pub(crate) fn voice_for_gender(self, voice: CsmVoice) -> &'static str {
+        match voice {
+            CsmVoice::Male => self.male_voice().unwrap_or_else(|| self.female_voice()),
+            CsmVoice::Female | CsmVoice::Custom => self.female_voice(),
+        }
+    }
+
+    pub(crate) fn required_python_modules(self) -> &'static [&'static str] {
+        match self {
+            Self::Japanese => KOKORO_JAPANESE_REQUIRED_PYTHON_MODULES,
+            Self::MandarinChinese => KOKORO_MANDARIN_CHINESE_REQUIRED_PYTHON_MODULES,
+            Self::AmericanEnglish
+            | Self::BritishEnglish
+            | Self::Spanish
+            | Self::French
+            | Self::Hindi
+            | Self::Italian
+            | Self::BrazilianPortuguese => &[],
         }
     }
 }
@@ -220,12 +335,7 @@ impl CsmModelVariant {
     pub(crate) fn required_files(self) -> &'static [&'static str] {
         match self {
             Self::Expressiva1b => &[CSM_EXPRESSIVA_MODEL_FILE],
-            Self::Kokoro82m => &[
-                KOKORO_CONFIG_FILE,
-                KOKORO_MODEL_FILE,
-                KOKORO_DEFAULT_VOICE_FILE,
-                KOKORO_MALE_VOICE_FILE,
-            ],
+            Self::Kokoro82m => KOKORO_REQUIRED_FILES,
             Self::CosyVoice205b => &[
                 COSYVOICE2_CONFIG_FILE,
                 COSYVOICE2_MODEL_FILE,

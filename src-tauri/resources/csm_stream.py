@@ -53,6 +53,62 @@ KOKORO_DEFAULT_VOICE = "af_heart"
 KOKORO_DEFAULT_VOICE_FILE = f"voices/{KOKORO_DEFAULT_VOICE}.pt"
 KOKORO_MALE_VOICE = "am_michael"
 KOKORO_MALE_VOICE_FILE = f"voices/{KOKORO_MALE_VOICE}.pt"
+KOKORO_SUPPORTED_LANG_CODES = {"a", "b", "j", "z", "e", "f", "h", "i", "p"}
+KOKORO_LANG_ALIASES = {
+    "american_english": "a",
+    "american-english": "a",
+    "en_us": "a",
+    "en-us": "a",
+    "british_english": "b",
+    "british-english": "b",
+    "en_gb": "b",
+    "en-gb": "b",
+    "japanese": "j",
+    "ja": "j",
+    "jp": "j",
+    "mandarin_chinese": "z",
+    "mandarin-chinese": "z",
+    "mandarin": "z",
+    "chinese": "z",
+    "zh": "z",
+    "zh_cn": "z",
+    "zh-cn": "z",
+    "spanish": "e",
+    "es": "e",
+    "french": "f",
+    "fr": "f",
+    "fr_fr": "f",
+    "fr-fr": "f",
+    "hindi": "h",
+    "hi": "h",
+    "italian": "i",
+    "it": "i",
+    "brazilian_portuguese": "p",
+    "brazilian-portuguese": "p",
+    "portuguese": "p",
+    "pt": "p",
+    "pt_br": "p",
+    "pt-br": "p",
+}
+KOKORO_VOICES = (
+    KOKORO_DEFAULT_VOICE,
+    KOKORO_MALE_VOICE,
+    "bf_emma",
+    "bm_fable",
+    "jf_alpha",
+    "jm_kumo",
+    "zf_xiaobei",
+    "zm_yunjian",
+    "ef_dora",
+    "em_alex",
+    "ff_siwis",
+    "hf_alpha",
+    "hm_omega",
+    "if_sara",
+    "im_nicola",
+    "pf_dora",
+    "pm_alex",
+)
 COSYVOICE2_MODEL_REPO = "mlx-community/CosyVoice2-0.5B-fp16"
 COSYVOICE2_MODEL_FILE = "model.safetensors"
 COSYVOICE2_CONFIG_FILE = "config.json"
@@ -169,25 +225,73 @@ def download_hf_file(repo_id: str, filename: str, label: str) -> str:
     return hf_hub_download(repo_id=repo_id, filename=filename)
 
 
+def normalize_kokoro_lang_code(value: object) -> str:
+    lang_code = str(value or KOKORO_LANG_CODE).strip().lower()
+    lang_code = KOKORO_LANG_ALIASES.get(lang_code, lang_code)
+    if lang_code in KOKORO_SUPPORTED_LANG_CODES:
+        return lang_code
+    return KOKORO_LANG_CODE
+
+
+def kokoro_unidic_dictionary_ready() -> bool:
+    if importlib.util.find_spec("unidic") is None:
+        return False
+
+    try:
+        import unidic
+
+        return Path(unidic.DICDIR, "mecabrc").exists()
+    except Exception:
+        return False
+
+
+def ensure_kokoro_language_dependencies(lang_code: str) -> None:
+    if lang_code == "j":
+        missing = [
+            module_name
+            for module_name in ("fugashi", "jaconv", "mojimoji", "pyopenjtalk", "unidic")
+            if importlib.util.find_spec(module_name) is None
+        ]
+        if missing or not kokoro_unidic_dictionary_ready():
+            detail = ", ".join(missing) if missing else "UniDic dictionary data"
+            raise RuntimeError(
+                "Kokoro Japanese support is still being prepared. OpenDuck needs to finish installing Kokoro language support, then reload the speech model. Missing: "
+                + detail
+                + "."
+            )
+
+    if lang_code == "z":
+        missing = [
+            module_name
+            for module_name in ("cn2an", "jieba", "pypinyin", "pypinyin_dict")
+            if importlib.util.find_spec(module_name) is None
+        ]
+        if missing:
+            raise RuntimeError(
+                "Kokoro Mandarin Chinese support is still being prepared. OpenDuck needs to finish installing Kokoro language support, then reload the speech model. Missing: "
+                + ", ".join(missing)
+                + "."
+            )
+
+
 def download_csm_weights() -> str:
     return download_hf_file(CSM_MODEL_REPO, CSM_MODEL_FILE, "CSM checkpoint")
 
 
 def download_kokoro_assets() -> list[str]:
-    return [
+    paths = [
         download_hf_file(KOKORO_MODEL_REPO, KOKORO_CONFIG_FILE, "Kokoro config"),
         download_hf_file(KOKORO_MODEL_REPO, KOKORO_MODEL_FILE, "Kokoro checkpoint"),
-        download_hf_file(
-            KOKORO_MODEL_REPO,
-            KOKORO_DEFAULT_VOICE_FILE,
-            f"Kokoro voice {KOKORO_DEFAULT_VOICE}",
-        ),
-        download_hf_file(
-            KOKORO_MODEL_REPO,
-            KOKORO_MALE_VOICE_FILE,
-            f"Kokoro voice {KOKORO_MALE_VOICE}",
-        ),
     ]
+    for voice in KOKORO_VOICES:
+        paths.append(
+            download_hf_file(
+                KOKORO_MODEL_REPO,
+                f"voices/{voice}.pt",
+                f"Kokoro voice {voice}",
+            )
+        )
+    return paths
 
 
 def download_cosyvoice2_assets() -> list[str]:
@@ -858,12 +962,16 @@ def run_kokoro_server(_quantize: bool) -> int:
         try:
             synthesis_started_at = time.perf_counter()
             emitted_audio = False
+            lang_code = normalize_kokoro_lang_code(
+                request.get("lang_code", KOKORO_LANG_CODE)
+            )
+            ensure_kokoro_language_dependencies(lang_code)
             with redirect_library_stdout():
                 generator = model.generate(
                     text=text,
                     voice=str(request.get("voice", KOKORO_DEFAULT_VOICE)),
                     speed=float(request.get("speed", 1.0)),
-                    lang_code=KOKORO_LANG_CODE,
+                    lang_code=lang_code,
                 )
                 for result in generator:
                     audio_wav_base64 = encode_wav_base64(

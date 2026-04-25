@@ -106,6 +106,16 @@ status "Installing csm-mlx into the CSM environment..."
 status "Installing mlx-audio into the Kokoro environment..."
 "$KOKORO_ENV_DIR/venv/bin/pip" install -U pip
 "$KOKORO_ENV_DIR/venv/bin/pip" install numpy huggingface_hub tqdm spacy "mlx-audio==$MLX_AUDIO_VERSION" soundfile
+status "Installing Kokoro multilingual G2P dependencies..."
+"$KOKORO_ENV_DIR/venv/bin/pip" install "misaki[ja,zh]"
+if ! "$KOKORO_ENV_DIR/venv/bin/python3" -c "from pathlib import Path; import unidic; raise SystemExit(0 if Path(unidic.DICDIR, 'mecabrc').exists() else 1)"; then
+    status "Installing Kokoro Japanese UniDic dictionary..."
+    "$KOKORO_ENV_DIR/venv/bin/python3" -m unidic download
+else
+    status "Kokoro Japanese UniDic dictionary already installed."
+fi
+status "Verifying Kokoro multilingual G2P dependencies..."
+"$KOKORO_ENV_DIR/venv/bin/python3" -c "from pathlib import Path; import fugashi, jaconv, mojimoji, pyopenjtalk, unidic, cn2an, jieba, pypinyin, pypinyin_dict; assert Path(unidic.DICDIR, 'mecabrc').exists(), f'Missing UniDic dictionary at {unidic.DICDIR}'"
 status "Installing Kokoro English G2P model..."
 "$KOKORO_ENV_DIR/venv/bin/python3" -m spacy download en_core_web_sm
 status "Installing mlx-audio-plus into the CosyVoice environment..."
@@ -116,7 +126,7 @@ status "Installing mlx-audio into the STT environment..."
 "$STT_ENV_DIR/venv/bin/pip" install numpy huggingface_hub tqdm "mlx-audio==$MLX_AUDIO_STT_VERSION" soundfile
 
 status "Setup complete!"
-touch "$RUNTIME_ROOT_DIR/.complete"
+touch "$RUNTIME_ROOT_DIR/.complete" "$RUNTIME_ROOT_DIR/.kokoro-multilingual-v2"
 status "Gemma environment: $PYTHON_ENV_DIR/venv"
 status "CSM environment: $CSM_ENV_DIR/venv"
 status "Kokoro environment: $KOKORO_ENV_DIR/venv"
