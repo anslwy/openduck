@@ -4,7 +4,7 @@
   <img src="icon.png" alt="OpenDuck Logo" width="200">
 </p>
 
-Screen-aware, voice-first, local AI tool that stays lean and out of your away until you ask questions. Built for Apple Silicon (M1 or later).
+Lightweight, screen-aware, voice-first local AI assistant for 8 different languages (English, Japanese, Mandarin Chinese, Spanish, French, Hindi, Italian and Portuguese) with real-time subtitles and translations.
 
 ![Rust](https://img.shields.io/badge/rust-1.80+-orange.svg)
 ![Svelte](https://img.shields.io/badge/svelte-5.0+-ff3e00.svg)
@@ -22,9 +22,9 @@ https://github.com/user-attachments/assets/4603ce80-9b74-4b0e-8f8c-ff242f7bdc37
 
 ## Screenshots
 
-|![Dual Subtitles](/screenshots/dual-subtitles.png) | ![Settings](/screenshots/settings.png) |
+|![Dual Subtitles](/screenshots/dual-subtitles.png) | ![Transcript](/screenshots/transcript.png) |
 |:---:|:---:|
-| Dual Subtitles | Settings |
+| Dual Subtitles | Transcript |
 |![Screen-Aware Vision](/screenshots/screen-aware.png) | ![Characters](/screenshots/characters.png) |
 | Screen-Aware Vision | Characters |
 
@@ -38,6 +38,10 @@ https://github.com/user-attachments/assets/4603ce80-9b74-4b0e-8f8c-ff242f7bdc37
 - **Engineered for Efficiency**: Native macOS application built with Rust and Svelte, optimizing memory for AI models.
 - **Low Latency**: Sub-second latency from the moment you stop talking to when the AI begins speaking.
 - **Flexible Model Support**: Built-in MLX-optimized models or connect to Ollama, LM Studio, and OpenAI-compatible endpoints.
+- **Multiple Languages Support**: Support real-time voice chat in 8 different languages (English, Japanese, Mandarin Chinese, Spanish, French, Hindi, Italian and Portuguese) from Kokoro and Whisper Large V3
+
+## Requirements
+- Apple Silicon (M1 or later)
 
 ## Installation
 
