@@ -705,16 +705,29 @@
             label: "Whisper Large V3 Turbo",
         },
     ]);
+    const loadedModelChangeHint =
+        "(Unload first before changing other models.)";
+
+    function appendLoadedModelChangeHint(
+        tooltip: string,
+        shouldAppend: boolean,
+    ) {
+        return shouldAppend ? `${tooltip} ${loadedModelChangeHint}` : tooltip;
+    }
+
     const gemmaVariantTooltip = $derived(
-        selectedGemmaVariant === "e4b"
-            ? "E4B uses more RAM but is generally more capable. Recommended for Macs with 24 GB+ of unified memory."
-            : selectedGemmaVariant === "e2b"
-              ? "E2B uses less RAM but is generally less capable. Recommended for Macs with 16 GB+ of unified memory."
-              : selectedGemmaVariant === "lmstudio"
-                ? "Gemma STT is not supported with LM Studio. Start LM Studio's local server and load a model so it appears here."
-                : selectedGemmaVariant === "openai_compatible"
-                  ? "Gemma STT is not supported with OpenAI-compatible APIs. Use a text-and-image chat model here and switch STT to Whisper."
-                  : 'Gemma STT is not supported with Ollama. If your model does not show, run "ollama run {your_model}" in Terminal (One-time only).',
+        appendLoadedModelChangeHint(
+            selectedGemmaVariant === "e4b"
+                ? "E4B uses more RAM but is generally more capable. Recommended for Macs with 24 GB+ of unified memory."
+                : selectedGemmaVariant === "e2b"
+                  ? "E2B uses less RAM but is generally less capable. Recommended for Macs with 16 GB+ of unified memory."
+                  : selectedGemmaVariant === "lmstudio"
+                    ? "Gemma STT is not supported with LM Studio. Start LM Studio's local server and load a model so it appears here."
+                    : selectedGemmaVariant === "openai_compatible"
+                      ? "Gemma STT is not supported with OpenAI-compatible APIs. Use a text-and-image chat model here and switch STT to Whisper."
+                      : 'Gemma STT is not supported with Ollama. If your model does not show, run "ollama run {your_model}" in Terminal (One-time only).',
+            isGemmaLoaded,
+        ),
     );
     const selectedGemmaUsesExternalProvider = $derived(
         isExternalGemmaVariant(selectedGemmaVariant),
@@ -755,34 +768,40 @@
             ?.label ?? "Kokoro-82M",
     );
     const csmModelTooltip = $derived(
-        selectedCsmModel === "expressiva_1b"
-            ? "CSM Expressiva 1B supports voice conditioning and optional quantization."
-            : selectedCsmModel === "kokoro_82m"
-              ? "Kokoro-82M is a lighter English TTS backend. Quantization is not used for this model."
-              : selectedCsmModel === "cosyvoice2_0_5b"
-                ? "CosyVoice2-0.5B produces high quality audio with higher usage of memory."
-                : selectedCsmModel === "cosyvoice3_0_5b_8bit"
-                  ? "Fun-CosyVoice3-0.5B (8-bit) provides a balance between realistic voice quality and RAM usage."
-                  : selectedCsmModel === "cosyvoice3_0_5b_fp16"
-                    ? "Fun-CosyVoice3-0.5B (fp16) provides the highest possible voice quality."
-                    : selectedCsmModel === "chatterbox_turbo_8bit"
-                      ? "Chatterbox Turbo (8-bit) provides a fast and realistic voice with lower RAM usage."
-                      : selectedCsmModel === "chatterbox_turbo_fp16"
-                        ? "Chatterbox Turbo (fp16) provides the highest possible voice quality with higher RAM usage."
-                        : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM.",
+        appendLoadedModelChangeHint(
+            selectedCsmModel === "expressiva_1b"
+                ? "CSM Expressiva 1B supports voice conditioning and optional quantization."
+                : selectedCsmModel === "kokoro_82m"
+                  ? "Kokoro-82M is a lighter English TTS backend. Quantization is not used for this model."
+                  : selectedCsmModel === "cosyvoice2_0_5b"
+                    ? "CosyVoice2-0.5B produces high quality audio with higher usage of memory."
+                    : selectedCsmModel === "cosyvoice3_0_5b_8bit"
+                      ? "Fun-CosyVoice3-0.5B (8-bit) provides a balance between realistic voice quality and RAM usage."
+                      : selectedCsmModel === "cosyvoice3_0_5b_fp16"
+                        ? "Fun-CosyVoice3-0.5B (fp16) provides the highest possible voice quality."
+                        : selectedCsmModel === "chatterbox_turbo_8bit"
+                          ? "Chatterbox Turbo (8-bit) provides a fast and realistic voice with lower RAM usage."
+                          : selectedCsmModel === "chatterbox_turbo_fp16"
+                            ? "Chatterbox Turbo (fp16) provides the highest possible voice quality with higher RAM usage."
+                            : "Fun-CosyVoice3-0.5B (4-bit) provides a realistic voice while using significantly less VRAM.",
+            isCsmLoaded,
+        ),
     );
     const selectedSttModelLabel = $derived(
         sttModelOptions.find((option) => option.value === selectedSttModel)
             ?.label ?? "Whisper Large V3 Turbo",
     );
     const sttModelTooltip = $derived(
-        selectedSttModel === "gemma"
-            ? selectedGemmaUsesExternalProvider
-                ? `Gemma STT is not supported when using ${selectedExternalProviderLabel}.`
-                : "Use the loaded Gemma model for transcription. There is no separate STT model to load."
-            : selectedSttModel === "distil_whisper_large_v3"
-              ? "Use mlx-audio with distil-whisper/distil-large-v3 for transcription. This model has lower RAM usage but supports only English."
-              : "Use mlx-audio with mlx-community/whisper-large-v3-turbo-asr-fp16 for transcription. This model has higher RAM usage with 99+ languages support.",
+        appendLoadedModelChangeHint(
+            selectedSttModel === "gemma"
+                ? selectedGemmaUsesExternalProvider
+                    ? `Gemma STT is not supported when using ${selectedExternalProviderLabel}.`
+                    : "Use the loaded Gemma model for transcription. There is no separate STT model to load."
+                : selectedSttModel === "distil_whisper_large_v3"
+                  ? "Use mlx-audio with distil-whisper/distil-large-v3 for transcription. This model has lower RAM usage but supports only English."
+                  : "Use mlx-audio with mlx-community/whisper-large-v3-turbo-asr-fp16 for transcription. This model has higher RAM usage with 99+ languages support.",
+            selectedSttModel !== "gemma" && isSttLoaded,
+        ),
     );
     const modelPresetTooltip = $derived(
         getModelPresetDescription(activeModelPreset),
@@ -3299,10 +3318,12 @@
         });
     }
 
-    async function checkForAppUpdates(options: {
-        source?: "manual" | "automatic";
-        suppressAutoPrompt?: boolean;
-    } = {}) {
+    async function checkForAppUpdates(
+        options: {
+            source?: "manual" | "automatic";
+            suppressAutoPrompt?: boolean;
+        } = {},
+    ) {
         const source = options.source ?? "manual";
         const suppressAutoPrompt = options.suppressAutoPrompt ?? false;
         if (
@@ -3326,9 +3347,8 @@
             updateObject = await check();
             if (updateObject) {
                 const rawTarget = updateObject.rawJson.target;
-                const releaseNotes = await resolveAppUpdateReleaseNotes(
-                    updateObject,
-                );
+                const releaseNotes =
+                    await resolveAppUpdateReleaseNotes(updateObject);
                 availableAppUpdate = {
                     version: updateObject.version,
                     currentVersion:
@@ -3473,7 +3493,10 @@
     }
 
     async function resolveAppUpdateReleaseNotes(update: Update) {
-        const fallbackNotesPreview = createReleaseNotesPreview(update.body, 150);
+        const fallbackNotesPreview = createReleaseNotesPreview(
+            update.body,
+            150,
+        );
 
         try {
             return await fetchGithubReleaseNotesMetadata();
@@ -3821,7 +3844,10 @@
             const nextContact = createImportedContactFromRawText(rawText);
 
             if (nextContact.iconDataUrl) {
-                await saveStoredContactIcon(nextContact.id, nextContact.iconDataUrl);
+                await saveStoredContactIcon(
+                    nextContact.id,
+                    nextContact.iconDataUrl,
+                );
             }
 
             contacts = [...contacts, nextContact];
@@ -4878,8 +4904,9 @@
 
     async function syncLmStudioConfig() {
         try {
-            const { baseUrl, hasApiKey } =
-                await invoke<ProviderConfig>("get_lmstudio_config");
+            const { baseUrl, hasApiKey } = await invoke<ProviderConfig>(
+                "get_lmstudio_config",
+            );
             lmstudioBaseUrl = baseUrl;
             lmstudioHasApiKey = hasApiKey;
         } catch (err) {
@@ -6815,7 +6842,9 @@
     {#if !calling}
         <div
             class="model-tags"
-            class:dimmed={showContactsPopup || showAboutPopup || showUpdatePrompt}
+            class:dimmed={showContactsPopup ||
+                showAboutPopup ||
+                showUpdatePrompt}
         >
             {#if showRuntimeSetupBanner}
                 <div
@@ -7361,7 +7390,9 @@
 
         <div
             class="control-bar"
-            class:dimmed={showContactsPopup || showAboutPopup || showUpdatePrompt}
+            class:dimmed={showContactsPopup ||
+                showAboutPopup ||
+                showUpdatePrompt}
         >
             <div class="info">
                 <span class="username"
