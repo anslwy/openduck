@@ -891,7 +891,7 @@
     const muteButtonLabel = $derived(
         micMuted ? "Unmute microphone" : "Mute microphone",
     );
-    const muteButtonTitle = $derived(`${muteButtonLabel} (Space)`);
+    const muteButtonTitle = $derived(`${muteButtonLabel} (M)`);
     const csmQuantizeAvailable = $derived(selectedCsmModel === "expressiva_1b");
     const loadAllMissingDownloads = $derived(
         (() => {
@@ -4854,7 +4854,7 @@
 
         if (
             calling &&
-            event.code === "Space" &&
+            (event.key === "m" || event.key === "M") &&
             !event.repeat &&
             !event.altKey &&
             !event.ctrlKey &&
@@ -8426,7 +8426,7 @@
                             type="button"
                             onclick={toggleMic}
                             aria-label={muteButtonLabel}
-                            aria-keyshortcuts="Space"
+                            aria-keyshortcuts="m"
                             title={muteButtonTitle}
                         >
                             {#if micMuted}
@@ -8487,7 +8487,7 @@
                         </button>
                         <div class="tooltip-bubble control-tooltip">
                             <span>{muteButtonLabel}</span>
-                            <span class="tooltip-shortcut">Space</span>
+                            <span class="tooltip-shortcut">M</span>
                         </div>
                     </div>
                     <div class="tooltip-shell control-tooltip-shell">
