@@ -147,18 +147,17 @@ pub(crate) const KOKORO_JAPANESE_REQUIRED_PYTHON_MODULES: &[&str] =
     &["fugashi", "jaconv", "mojimoji", "pyopenjtalk", "unidic"];
 pub(crate) const KOKORO_MANDARIN_CHINESE_REQUIRED_PYTHON_MODULES: &[&str] =
     &["cn2an", "jieba", "pypinyin", "pypinyin_dict"];
-pub(crate) const KOKORO_MULTILINGUAL_REQUIRED_PYTHON_MODULES: &[&str] =
-    &[
-        "fugashi",
-        "jaconv",
-        "mojimoji",
-        "pyopenjtalk",
-        "unidic",
-        "cn2an",
-        "jieba",
-        "pypinyin",
-        "pypinyin_dict",
-    ];
+pub(crate) const KOKORO_MULTILINGUAL_REQUIRED_PYTHON_MODULES: &[&str] = &[
+    "fugashi",
+    "jaconv",
+    "mojimoji",
+    "pyopenjtalk",
+    "unidic",
+    "cn2an",
+    "jieba",
+    "pypinyin",
+    "pypinyin_dict",
+];
 pub(crate) const SCREEN_CAPTURE_EVENT: &str = "screen-capture";
 pub(crate) const CSM_STARTUP_TIMEOUT_SECS: u64 = 180;
 pub(crate) const CSM_STDERR_TAIL_LIMIT: usize = 8;
@@ -223,6 +222,7 @@ pub(crate) const STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS: usize = 48;
 pub(crate) const STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS: u64 = 2500;
 pub(crate) const PLAYBACK_REFERENCE_MIN_RMS: f32 = 0.003;
 pub(crate) const PLAYBACK_ECHO_MAX_GAIN: f32 = 1.5;
+pub(crate) const DEFAULT_CONTACT_ID: &str = "contact-openduck";
 pub(crate) const DEFAULT_CONTACT_PROMPT: &str =
     "You are a friendly voice AI assistant from OpenDuck. A local-first voice-call desktop application built for rubberducking.";
 pub(crate) const BUILT_IN_VOICE_CALL_PROMPT: &str =

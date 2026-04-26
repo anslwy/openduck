@@ -1,11 +1,13 @@
 <script lang="ts">
-    import type { SessionMetadata } from "$lib/openduck/types";
+    import type { SessionMetadata, ContactProfile } from "$lib/openduck/types";
     import { onMount } from "svelte";
     import ConfirmDialog from "../ui/ConfirmDialog.svelte";
 
     let {
         sessions,
         activeSessionId,
+        contacts,
+        selectedContactId,
         onSelect,
         onDelete,
         onRename,
@@ -15,6 +17,8 @@
     } = $props<{
         sessions: SessionMetadata[];
         activeSessionId: string | null;
+        contacts: ContactProfile[];
+        selectedContactId: string;
         onSelect: (session: SessionMetadata) => void;
         onDelete: (session: SessionMetadata) => void;
         onRename: (session: SessionMetadata, newTitle: string) => void;
@@ -179,11 +183,16 @@
             <div class="sessions-date-header">{date}</div>
             {#each sessionsByDate[date] as session}
                 {@const globalIndex = sessions.indexOf(session)}
+                {@const characterId = session.character_id || "contact-openduck"}
+                {@const sessionContact =
+                    contacts.find((c) => c.id === characterId) || contacts[0]}
+                {@const isCurrentCharacter = characterId === selectedContactId}
                 <div
                     class="session-item-wrapper"
                     class:selected={globalIndex === selectedIndex}
                     class:active={session.id === activeSessionId}
                     class:editing={editingSessionId === session.id}
+                    class:non-current-character={!isCurrentCharacter}
                     onmouseenter={() => (selectedIndex = globalIndex)}
                 >
                     {#if editingSessionId === session.id}
@@ -249,12 +258,18 @@
                             class="session-item"
                             onclick={() => onSelect(session)}
                         >
-                            <span class="session-item-title"
-                                >{session.title}</span
-                            >
+                            <div class="session-item-left">
+                                <div
+                                    class="session-avatar"
+                                    style="background-image: url('{sessionContact?.iconDataUrl || "/icon.png"}')"
+                                ></div>
+                                <span class="session-item-title"
+                                    >{session.title}</span
+                                >
+                            </div>
                             <span class="session-item-time"
                                 >{formatTime(session.updated_at)}</span
-                            >
+                                >
                         </button>
                         <button
                             type="button"
@@ -371,5 +386,31 @@
         align-items: center;
         gap: 10px;
         color: #ffdf63;
+    }
+
+    .session-item-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .session-avatar {
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        background-size: cover;
+        background-position: center;
+        flex-shrink: 0;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .non-current-character {
+        opacity: 0.5;
+    }
+
+    .non-current-character:hover {
+        opacity: 0.8;
     }
 </style>

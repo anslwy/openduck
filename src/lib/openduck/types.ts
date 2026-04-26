@@ -322,6 +322,7 @@ export type SelectOption<T extends string> = {
 export type SessionMetadata = {
     id: string;
     title: string;
+    character_id?: string | null;
     created_at: number;
     updated_at: number;
 };

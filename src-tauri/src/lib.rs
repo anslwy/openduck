@@ -171,6 +171,7 @@ struct ConversationTurn {
 struct SessionMetadata {
     id: String,
     title: String,
+    character_id: Option<String>,
     created_at: u64,
     updated_at: u64,
 }
@@ -465,6 +466,7 @@ struct AppState {
     conversation_session_id: AtomicU64,
     current_session_id: Mutex<Option<String>>,
     current_session_title: Mutex<Option<String>>,
+    current_character_id: Mutex<String>,
     call_started_at: Mutex<Option<Instant>>,
     processing_audio_started_at: Mutex<Option<Instant>>,
     processing_audio_latency_request_id: Mutex<Option<u64>>,
@@ -1594,6 +1596,11 @@ fn attach_pasted_screen_capture(
         "Pasted screenshot attached to your next turn.",
     );
     Ok(())
+}
+
+#[tauri::command]
+fn set_current_character_id(state: State<'_, AppState>, character_id: String) {
+    *state.current_character_id.lock().unwrap() = character_id;
 }
 
 #[tauri::command]
@@ -11219,12 +11226,14 @@ fn save_current_session(app_handle: &AppHandle, state: &AppState) -> Result<(), 
 
     let session_file = resolve_session_file(app_handle, &session_id)?;
 
-    let (turns, title) = {
+    let (turns, title, character_id) = {
         let turns_guard = state.conversation_turns.lock().unwrap();
         let title_guard = state.current_session_title.lock().unwrap();
+        let character_id_guard = state.current_character_id.lock().unwrap();
         (
             turns_guard.iter().cloned().collect::<Vec<_>>(),
             title_guard.clone(),
+            character_id_guard.clone(),
         )
     };
 
@@ -11240,6 +11249,7 @@ fn save_current_session(app_handle: &AppHandle, state: &AppState) -> Result<(), 
         if let Some(new_title) = title {
             metadata.title = new_title;
         }
+        metadata.character_id = Some(character_id);
         metadata
     } else {
         let now = SystemTime::now()
@@ -11254,6 +11264,7 @@ fn save_current_session(app_handle: &AppHandle, state: &AppState) -> Result<(), 
                     .map(|t| t.user_text.chars().take(50).collect())
                     .unwrap_or_else(|| "New Session".to_string())
             }),
+            character_id: Some(character_id),
             created_at: now,
             updated_at: now,
         }
@@ -11353,6 +11364,15 @@ async fn load_session(
     {
         let mut id_guard = state.current_session_id.lock().unwrap();
         *id_guard = Some(session_id);
+    }
+
+    {
+        let mut char_id_guard = state.current_character_id.lock().unwrap();
+        *char_id_guard = data
+            .metadata
+            .character_id
+            .clone()
+            .unwrap_or_else(|| DEFAULT_CONTACT_ID.to_string());
     }
 
     {
@@ -11532,9 +11552,11 @@ async fn fork_session(
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    let character_id = state.current_character_id.lock().unwrap().clone();
     let metadata = SessionMetadata {
         id: new_session_id.clone(),
         title: new_title,
+        character_id: Some(character_id),
         created_at: now,
         updated_at: now,
     };
@@ -12700,6 +12722,7 @@ pub fn run() {
             conversation_session_id: AtomicU64::new(1),
             current_session_id: Mutex::new(None),
             current_session_title: Mutex::new(None),
+            current_character_id: Mutex::new(DEFAULT_CONTACT_ID.to_string()),
             call_started_at: Mutex::new(None),
             processing_audio_started_at: Mutex::new(None),
             processing_audio_latency_request_id: Mutex::new(None),
@@ -12792,6 +12815,7 @@ pub fn run() {
             restart_app,
             refresh_runtime_caches,
             set_voice_system_prompt,
+            set_current_character_id,
             set_csm_reference_voice,
             export_contact_profile,
             reset_call_session,

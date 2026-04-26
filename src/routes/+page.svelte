@@ -3742,6 +3742,11 @@
 
     async function handleSelectSession(session: SessionMetadata) {
         try {
+            if (session.character_id && session.character_id !== selectedContactId) {
+                await selectContact(session.character_id, {
+                    skipSessionLoading: true,
+                });
+            }
             const turns = await invoke<ConversationTurn[]>("load_session", {
                 sessionId: session.id,
             });
@@ -3933,8 +3938,15 @@
         openAboutPopup();
     }
 
-    function selectContact(contactId: string) {
+    async function selectContact(
+        contactId: string,
+        options: { skipSessionLoading?: boolean } = {},
+    ) {
         if (!contacts.some((contact) => contact.id === contactId)) {
+            return;
+        }
+
+        if (selectedContactId === contactId) {
             return;
         }
 
@@ -3942,6 +3954,27 @@
         persistContactsMetadata();
         queueSelectedContactPromptSync();
         queueSelectedContactVoiceReferenceSync();
+
+        if (
+            !options.skipSessionLoading &&
+            selectLastSessionEnabled &&
+            !calling
+        ) {
+            const lastSessionForCharacter = sessions.find(
+                (s) =>
+                    s.character_id === contactId ||
+                    (!s.character_id && contactId === DEFAULT_CONTACT_ID),
+            );
+            if (lastSessionForCharacter) {
+                if (lastSessionForCharacter.id !== currentSessionId) {
+                    await handleSelectSession(lastSessionForCharacter);
+                }
+            } else {
+                await handleNewChat();
+            }
+        }
+
+        void invoke("set_current_character_id", { characterId: contactId });
     }
 
     function createNewContact() {
@@ -7385,6 +7418,9 @@
             const restoredContacts = await loadContactsFromStorage();
             contacts = restoredContacts.contacts;
             selectedContactId = restoredContacts.selectedContactId;
+            void invoke("set_current_character_id", {
+                characterId: selectedContactId,
+            });
             persistContactsMetadata();
             await initializeOpenDuckContactImports();
             await syncSelectedContactPrompt();
@@ -7425,7 +7461,14 @@
                 selectLastSessionEnabled &&
                 sessions.length > 0
             ) {
-                void handleSelectSession(sessions[0]);
+                const lastSessionForCharacter = sessions.find(
+                    (s) =>
+                        s.character_id === selectedContactId ||
+                        (!s.character_id && selectedContactId === DEFAULT_CONTACT_ID),
+                );
+                if (lastSessionForCharacter) {
+                    void handleSelectSession(lastSessionForCharacter);
+                }
             }
             await ensureRuntimeDependencies();
             await syncModelStatus();
@@ -8472,6 +8515,8 @@
             <SessionsPopup
                 {sessions}
                 activeSessionId={currentSessionId}
+                {contacts}
+                {selectedContactId}
                 onSelect={handleSelectSession}
                 onDelete={handleDeleteSession}
                 onRename={handleRenameSession}
