@@ -35,10 +35,15 @@ https://github.com/user-attachments/assets/4603ce80-9b74-4b0e-8f8c-ff242f7bdc37
 - **Live Transcription & Subtitle**: Real-Time showing trascribtion and subtitle so you don't miss anything important.
 - **Conversation Management**: Search, rename, resume, fork or delete any previous chat session from your local disk.
 - **Portability**: Share your characters (Prompt, Avatar, Voice) easily with `.openduck` files.
+- **Live2D Characters**: Attach Cubism `.model3.zip` models to contacts, including expression maps for emotion tags. See [LIVE2D.md](LIVE2D.md).
 - **Engineered for Efficiency**: Native macOS application built with Rust and Svelte, optimizing memory for AI models.
 - **Low Latency**: Sub-second latency from the moment you stop talking to when the AI begins speaking.
 - **Flexible Model Support**: Built-in MLX-optimized models or connect to Ollama, LM Studio, and OpenAI-compatible endpoints.
 - **Multiple Languages Support**: Support real-time voice chat in 8 different languages (English, Japanese, Mandarin Chinese, Spanish, French, Hindi, Italian and Portuguese) from Kokoro and Whisper Large V3
+
+## Live2D Sample Characters
+
+The bundled Live2D demo characters, Haru and Jin Natori, use sample data from [Live2D Sample Data](https://www.live2d.com/en/learn/sample/). They are included for demonstration purposes only. Review Live2D's license and terms before using those assets outside local testing or demos.
 
 ## Requirements
 - Apple Silicon (M1 or later)
