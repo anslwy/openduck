@@ -1,4 +1,5 @@
 // Helpers for contact metadata, contact icon storage, and import/export related browser-side utilities.
+import JSZip from "jszip";
 import {
   BUILT_IN_VOICE_CALL_PROMPT,
   CONTACT_ASSETS_DB_VERSION,
@@ -49,11 +50,16 @@ type ImportedContactProfile = {
   cubismModel?: unknown;
 };
 
+function arrayBufferLooksLikeZip(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4));
+  return bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b;
+}
+
 const builtInContactModules = import.meta.glob(
   "../../../characters/*.openduck",
   {
     eager: true,
-    query: "?raw",
+    query: "?url",
     import: "default",
   },
 );
@@ -243,9 +249,9 @@ export function createImportedContactFromRawText(rawText: string): ContactProfil
   };
 }
 
-function createDefaultContactList(): ContactProfile[] {
-  const builtInContacts = Object.entries(builtInContactModules)
-    .sort(([leftPath], [rightPath]) => {
+async function createDefaultContactList(): Promise<ContactProfile[]> {
+  const sortedEntries = Object.entries(builtInContactModules).sort(
+    ([leftPath], [rightPath]) => {
       const leftIsOpenDuck = leftPath.endsWith("/openduck.openduck");
       const rightIsOpenDuck = rightPath.endsWith("/openduck.openduck");
 
@@ -258,34 +264,90 @@ function createDefaultContactList(): ContactProfile[] {
       }
 
       return leftPath.localeCompare(rightPath);
-    })
-    .map(([path, rawText]) => {
-      if (typeof rawText !== "string") {
-        return null;
-      }
+    },
+  );
 
-      try {
-        const parsed = JSON.parse(rawText);
-        const importedContact = normalizeImportedContactProfile(parsed);
-        if (!importedContact) {
+  const builtInContacts = (
+    await Promise.all(
+      sortedEntries.map(async ([path, url]) => {
+        if (typeof url !== "string") {
           return null;
         }
 
-        const id = path.endsWith("/openduck.openduck")
-          ? DEFAULT_CONTACT_ID
-          : createContactId();
+        try {
+          const response = await fetch(url);
+          if (!response.ok) {
+              console.error(`Failed to fetch built-in contact ${path}: ${response.statusText}`);
+              return null;
+          }
+          const buffer = await response.arrayBuffer();
 
-        return {
-          id,
-          ...importedContact,
-          hasCustomIcon: Boolean(importedContact.iconDataUrl),
-        };
-      } catch (err) {
-        console.error(`Failed to parse built-in contact ${path}:`, err);
-        return null;
-      }
-    })
-    .filter((contact): contact is ContactProfile => contact !== null);
+          let rawText: string;
+          let importedContact: Omit<ContactProfile, "id" | "hasCustomIcon"> | null = null;
+          const filename = path.split("/").pop() || path;
+          const nameWithoutExtension = filename.replace(/\.openduck$/, "");
+          const id = path.endsWith("/openduck.openduck")
+            ? DEFAULT_CONTACT_ID
+            : `built-in-${nameWithoutExtension}`;
+
+          if (arrayBufferLooksLikeZip(buffer)) {
+             const archive = await JSZip.loadAsync(buffer);
+             const contactEntry = archive.file("contact.json");
+             if (!contactEntry) {
+                 console.error(`Built-in archive ${path} is missing contact.json`);
+                 return null;
+             }
+             rawText = await contactEntry.async("text");
+             const parsed = JSON.parse(rawText);
+             importedContact = normalizeImportedContactProfile(parsed);
+
+             if (importedContact?.cubismModel?.source === "zip") {
+                 const cubismModel = importedContact.cubismModel;
+                 const zipPath = cubismModel.zipPath || Object.keys(archive.files).find((p) =>
+                      p.toLowerCase().endsWith(".model3.zip"),
+                  );
+
+                 if (zipPath) {
+                     const cubismZipEntry = archive.file(zipPath);
+                     if (cubismZipEntry) {
+                         const existingZip = await loadStoredContactCubismModelZip(id);
+                         if (!existingZip) {
+                             console.log(`Storing built-in Live2D model for ${id}`);
+                             const cubismZipBlob = await cubismZipEntry.async("blob");
+                             await saveStoredContactCubismModelZip(id, cubismZipBlob);
+                         } else {
+                             console.log(`Live2D model for ${id} already exists in storage`);
+                         }
+                         importedContact.cubismModel = {
+                             ...cubismModel,
+                             zipId: id,
+                             zipPath: null,
+                         };
+                     }
+                 }
+             }
+          } else {
+             rawText = new TextDecoder().decode(buffer);
+             const parsed = JSON.parse(rawText);
+             importedContact = normalizeImportedContactProfile(parsed);
+          }
+
+          if (!importedContact) {
+            return null;
+          }
+
+          return {
+            id,
+            ...importedContact,
+            hasCustomIcon: Boolean(importedContact.iconDataUrl),
+          };
+        } catch (err) {
+          console.error(`Failed to parse built-in contact ${path}:`, err);
+          return null;
+        }
+      }),
+    )
+  ).filter((contact): contact is ContactProfile => contact !== null);
 
   return builtInContacts.length > 0
     ? builtInContacts
@@ -328,12 +390,7 @@ function mergeMissingBuiltInContacts(
   builtInContacts: ContactProfile[],
   builtInContactsBySignature: Map<string, ContactProfile>,
 ) {
-  if (
-    storedContacts.length === 0 ||
-    !storedContacts.some((contact) =>
-      builtInContactsBySignature.has(createContactSignature(contact)),
-    )
-  ) {
+  if (storedContacts.length === 0) {
     return storedContacts;
   }
 
@@ -624,7 +681,7 @@ export async function deleteStoredContactCubismModelZip(contactId: string) {
 }
 
 export async function loadContactsFromStorage() {
-  const defaultContacts = createDefaultContactList();
+  const defaultContacts = await createDefaultContactList();
   const builtInContactsBySignature = createBuiltInContactIndex(defaultContacts);
   const defaultSelectedContactId = defaultContacts[0]?.id ?? DEFAULT_CONTACT_ID;
 
@@ -684,7 +741,7 @@ export async function loadContactsFromStorage() {
         return {
           ...contact,
           gender: contact.gender ?? builtInContact?.gender ?? null,
-          cubismModel: contact.cubismModel ?? builtInContact?.cubismModel ?? null,
+          cubismModel: builtInContact?.cubismModel ?? contact.cubismModel ?? null,
           hasCustomIcon: Boolean(iconDataUrl),
           iconDataUrl,
         };

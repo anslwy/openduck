@@ -36,7 +36,8 @@
       "../sample-male.mp3",
       "../sample-male-transcript.txt",
       "../sample-female.mp3",
-      "../sample-female-transcript.txt"
+      "../sample-female-transcript.txt",
+      "../characters/*.openduck"
     ],
     "fileAssociations": [
       {
