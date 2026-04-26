@@ -361,7 +361,7 @@
                         class="contact-text-input"
                         type="text"
                         value={selectedContact?.refText ?? ""}
-                        placeholder="Transcription of the reference audio."
+                        placeholder="Transcription of the reference audio you uploaded above."
                         oninput={handleSelectedContactRefTextInput}
                     />
                 </label>
@@ -405,7 +405,7 @@
                     />
                 </div>
 
-                <label class="contact-field">
+                <label class="contact-field" style="display: none">
                     <span class="contact-field-label"
                         >Cubism Model Expression (Optional)</span
                     >
@@ -421,7 +421,7 @@
                 <label class="contact-field">
                     <div class="contact-field-header">
                         <span class="contact-field-label"
-                            >Cubism Emotion Map (JSON Optional)</span
+                            >Cubism Emotion Map (JSON, Optional)</span
                         >
                         {#if emotionMapError}
                             <span
@@ -447,7 +447,9 @@
 
                 <div class="contact-field-row">
                     <label class="contact-field">
-                        <span class="contact-field-label">Scale</span>
+                        <span class="contact-field-label"
+                            >Cubism Model Scale</span
+                        >
                         <div class="contact-select-shell">
                             <select
                                 class="contact-text-input contact-select"
@@ -473,7 +475,9 @@
                         </div>
                     </label>
                     <label class="contact-field">
-                        <span class="contact-field-label">Zoom</span>
+                        <span class="contact-field-label"
+                            >Cubism Model Zoom</span
+                        >
                         <input
                             class="contact-text-input"
                             type="number"
@@ -483,7 +487,9 @@
                         />
                     </label>
                     <label class="contact-field">
-                        <span class="contact-field-label">Offset X</span>
+                        <span class="contact-field-label"
+                            >Cubism Model Offset X</span
+                        >
                         <input
                             class="contact-text-input"
                             type="number"
@@ -492,7 +498,9 @@
                         />
                     </label>
                     <label class="contact-field">
-                        <span class="contact-field-label">Offset Y</span>
+                        <span class="contact-field-label"
+                            >Cubism Model Offset Y</span
+                        >
                         <input
                             class="contact-text-input"
                             type="number"
