@@ -476,6 +476,7 @@ struct AppState {
     tray_pong_playback_enabled: Mutex<bool>,
     tray_pong_playback_hydrated: Mutex<bool>,
     tray_pong_playback_modified_before_hydration: Mutex<bool>,
+    sleep_assertion_child: Mutex<Option<Child>>,
     end_of_utterance_silence_ms: Mutex<u32>,
     auto_continue_silence_ms: Mutex<Option<u32>>,
     auto_continue_max_count: Mutex<Option<u32>>,
@@ -1711,6 +1712,48 @@ async fn interrupt_tts(app_handle: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn set_tts_playback_active(app_handle: tauri::AppHandle, active: bool) {
     set_tts_playback_active_state(&app_handle, active);
+}
+
+#[tauri::command]
+async fn set_keep_awake(state: State<'_, AppState>, active: bool) -> Result<(), String> {
+    if active {
+        let mut child_guard = state.sleep_assertion_child.lock().unwrap();
+        if child_guard.is_some() {
+            return Ok(());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let mut command = Command::new("/usr/bin/caffeinate");
+            command
+                .arg("-d") // Prevent display sleep
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+
+            match command.spawn() {
+                Ok(child) => {
+                    *child_guard = Some(child);
+                    debug!("Started caffeinate -d to prevent display sleep");
+                }
+                Err(err) => {
+                    warn!("Failed to start caffeinate: {}", err);
+                    return Err(format!("Failed to start caffeinate: {}", err));
+                }
+            }
+        }
+    } else {
+        let child = {
+            let mut child_guard = state.sleep_assertion_child.lock().unwrap();
+            child_guard.take()
+        };
+
+        if let Some(mut child) = child {
+            let _ = child.kill().await;
+            debug!("Stopped caffeinate display sleep prevention");
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -8110,6 +8153,11 @@ fn cleanup_before_app_exit(app_handle: &AppHandle) {
     });
     stop_csm_server_for_exit(state.inner());
     stop_stt_server_for_exit(state.inner());
+
+    let mut keep_awake_child = state.sleep_assertion_child.lock().unwrap();
+    if let Some(mut child) = keep_awake_child.take() {
+        let _ = child.start_kill();
+    }
 }
 
 fn request_app_quit(app_handle: &AppHandle) {
@@ -12648,6 +12696,7 @@ pub fn run() {
             tray_pong_playback_enabled: Mutex::new(true),
             tray_pong_playback_hydrated: Mutex::new(false),
             tray_pong_playback_modified_before_hydration: Mutex::new(false),
+            sleep_assertion_child: Mutex::new(None),
             end_of_utterance_silence_ms: Mutex::new(END_OF_UTTERANCE_SILENCE_MS),
             auto_continue_silence_ms: Mutex::new(DEFAULT_AUTO_CONTINUE_SILENCE_MS),
             auto_continue_max_count: Mutex::new(DEFAULT_AUTO_CONTINUE_MAX_COUNT),
@@ -12824,6 +12873,7 @@ pub fn run() {
             start_new_session,
             get_current_session_id,
             update_current_session_title,
+            set_keep_awake,
         ])
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]

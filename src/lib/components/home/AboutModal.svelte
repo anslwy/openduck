@@ -55,6 +55,7 @@
         globalShortcutToggleMute,
         globalShortcutInterrupt,
         pongPlaybackEnabled,
+        keepScreenOnEnabled,
         autoUnmuteOnPastedScreenshotEnabled,
         autoCheckAppUpdatesEnabled,
         selectLastSessionEnabled,
@@ -76,6 +77,7 @@
         onUpdateGlobalShortcutToggleMute,
         onUpdateGlobalShortcutInterrupt,
         onUpdatePongPlayback,
+        onUpdateKeepScreenOn,
         onUpdateAutoUnmuteOnPastedScreenshot,
         onUpdateAutoCheckAppUpdates,
         onUpdateSelectLastSession,
@@ -108,6 +110,7 @@
         globalShortcutToggleMute: string;
         globalShortcutInterrupt: string;
         pongPlaybackEnabled: boolean;
+        keepScreenOnEnabled: boolean;
         autoUnmuteOnPastedScreenshotEnabled: boolean;
         autoCheckAppUpdatesEnabled: boolean;
         selectLastSessionEnabled: boolean;
@@ -129,6 +132,7 @@
         onUpdateGlobalShortcutToggleMute: (shortcut: string) => void;
         onUpdateGlobalShortcutInterrupt: (shortcut: string) => void;
         onUpdatePongPlayback: (enabled: boolean) => void;
+        onUpdateKeepScreenOn: (enabled: boolean) => void;
         onUpdateAutoUnmuteOnPastedScreenshot: (enabled: boolean) => void;
         onUpdateAutoCheckAppUpdates: (enabled: boolean) => void;
         onUpdateSelectLastSession: (enabled: boolean) => void;
@@ -462,6 +466,13 @@
             label: "Enable Pop Sound (Screenshots / Processing Audio / Finished Response)",
             value: pongPlaybackEnabled,
             onUpdate: onUpdatePongPlayback,
+        },
+        {
+            id: "keep-screen-on",
+            type: "toggle",
+            label: "Keep Screen On During Active Call",
+            value: keepScreenOnEnabled,
+            onUpdate: onUpdateKeepScreenOn,
         },
         {
             id: "auto-unmute",

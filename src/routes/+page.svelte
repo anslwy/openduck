@@ -77,6 +77,7 @@
         MIN_AUTO_CONTINUE_SILENCE_MS,
         MODEL_PRESETS,
         PONG_PLAYBACK_STORAGE_KEY,
+        KEEP_SCREEN_ON_STORAGE_KEY,
         SELECT_LAST_SESSION_STORAGE_KEY,
         AUTO_LOAD_MODELS_ON_STARTUP_STORAGE_KEY,
         SHOW_STAT_STORAGE_KEY,
@@ -92,6 +93,7 @@
         GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY,
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
         DEFAULT_SHOW_AI_SUBTITLE,
+        DEFAULT_KEEP_SCREEN_ON,
         DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE,
         DEFAULT_SHOW_CALL_TIMER,
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
@@ -102,6 +104,7 @@
         DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
         DEFAULT_GLOBAL_SHORTCUT_INTERRUPT,
     } from "$lib/openduck/config";
+
     import {
         createReleaseNotesPreview,
         formatAppUpdateInstallError,
@@ -365,6 +368,7 @@
     let activePongSource = $state<AudioBufferSourceNode | null>(null);
     let activePongGainNode = $state<GainNode | null>(null);
     let pongPlaybackEnabled = $state(true);
+    let keepScreenOnEnabled = $state(true);
     let autoUnmuteOnPastedScreenshotEnabled = $state(
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
     );
@@ -1862,9 +1866,7 @@
             return true;
         }
 
-        const rawPayload = window.localStorage.getItem(
-            PONG_PLAYBACK_STORAGE_KEY,
-        );
+        const rawPayload = window.localStorage.getItem(PONG_PLAYBACK_STORAGE_KEY);
         if (!rawPayload) {
             return true;
         }
@@ -1882,6 +1884,34 @@
         } catch (err) {
             console.error("Failed to restore pong playback preference:", err);
             return true;
+        }
+    }
+
+    function loadKeepScreenOnPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_KEEP_SCREEN_ON;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            KEEP_SCREEN_ON_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_KEEP_SCREEN_ON;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return DEFAULT_KEEP_SCREEN_ON;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error("Failed to restore keep screen on preference:", err);
+            return DEFAULT_KEEP_SCREEN_ON;
         }
     }
 
@@ -2346,6 +2376,36 @@
         }
     }
 
+    function persistKeepScreenOnPreference(enabled: boolean) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        window.localStorage.setItem(
+            KEEP_SCREEN_ON_STORAGE_KEY,
+            JSON.stringify({ version: 1, enabled }),
+        );
+    }
+
+    function applyKeepScreenOnPreference(enabled: boolean) {
+        keepScreenOnEnabled = enabled;
+        persistKeepScreenOnPreference(enabled);
+        syncKeepAwakeState();
+    }
+
+    let windowVisible = $state(
+        typeof document !== "undefined"
+            ? document.visibilityState === "visible"
+            : true,
+    );
+
+    function syncKeepAwakeState() {
+        const active = keepScreenOnEnabled && calling && windowVisible;
+        void invoke("set_keep_awake", { active }).catch((err) => {
+            console.error("Failed to sync keep awake state:", err);
+        });
+    }
+
     function applyAutoUnmuteOnPastedScreenshotPreference(enabled: boolean) {
         autoUnmuteOnPastedScreenshotEnabled = enabled;
         persistAutoUnmuteOnPastedScreenshotPreference(enabled);
@@ -2504,6 +2564,11 @@
         }
 
         applyPongPlaybackPreference(effectiveEnabled);
+    }
+
+    async function initializeKeepScreenOnPreference() {
+        const storedEnabled = loadKeepScreenOnPreferenceFromStorage();
+        applyKeepScreenOnPreference(storedEnabled);
     }
 
     async function initializeAppUpdatePreference() {
@@ -5790,6 +5855,7 @@
             console.error("Failed to start audio capture:", err);
             alert("Failed to start audio capture: " + String(err));
             calling = false;
+            syncKeepAwakeState();
             stopCallTimerTracking();
         }
     }
@@ -6229,19 +6295,13 @@
         await syncSelectedContactPrompt();
         await syncSelectedContactVoiceReference();
 
-        try {
-            await invoke("start_new_session");
-        } catch (err) {
-            console.error("Failed to start new session:", err);
-            alert("Failed to start new session: " + String(err));
-        }
-
         closeContactsPopup();
         closeConversationPopup();
         showSessionsPopup = false;
         resetConversationLog();
         resetScreenCaptureStatus();
         calling = true;
+        syncKeepAwakeState();
         activeExpression = null;
         callStartedAtMs = Date.now();
         resetProcessingAudioLatencies();
@@ -6293,6 +6353,7 @@
         showSessionsPopup = false;
         resetScreenCaptureStatus();
         calling = true;
+        syncKeepAwakeState();
         activeExpression = null;
         callStartedAtMs = Date.now();
         resetProcessingAudioLatencies();
@@ -6333,6 +6394,7 @@
 
     async function handleEndCall() {
         calling = false;
+        syncKeepAwakeState();
         activeExpression = null;
         stopPlayback();
         stopAudioCapture();
@@ -6840,6 +6902,10 @@
     }
 
     onMount(() => {
+        window.addEventListener("visibilitychange", () => {
+            windowVisible = document.visibilityState === "visible";
+            syncKeepAwakeState();
+        });
         window.addEventListener("error", (event) => {
             alert(
                 `JS Error: ${event.message}\nAt: ${event.filename}:${event.lineno}`,
@@ -7324,6 +7390,7 @@
             await syncOpenAiCompatibleConfig();
             await syncSubtitleTranslationLlmConfig();
             await initializePongPlaybackPreference();
+            await initializeKeepScreenOnPreference();
             await initializeAutoUnmuteOnPastedScreenshotPreference();
             await initializeSelectLastSessionPreference();
             await initializeAutoLoadModelsOnStartupPreference();
@@ -8025,6 +8092,7 @@
                     {globalShortcutToggleMute}
                     {globalShortcutInterrupt}
                     {pongPlaybackEnabled}
+                    {keepScreenOnEnabled}
                     {autoUnmuteOnPastedScreenshotEnabled}
                     {autoCheckAppUpdatesEnabled}
                     {selectLastSessionEnabled}
@@ -8046,6 +8114,7 @@
                     onUpdateGlobalShortcutToggleMute={applyGlobalShortcutToggleMutePreference}
                     onUpdateGlobalShortcutInterrupt={applyGlobalShortcutInterruptPreference}
                     onUpdatePongPlayback={applyPongPlaybackPreference}
+                    onUpdateKeepScreenOn={applyKeepScreenOnPreference}
                     onUpdateAutoUnmuteOnPastedScreenshot={applyAutoUnmuteOnPastedScreenshotPreference}
                     onUpdateAutoCheckAppUpdates={applyAutoCheckAppUpdatesPreference}
                     onUpdateSelectLastSession={applySelectLastSessionPreference}
