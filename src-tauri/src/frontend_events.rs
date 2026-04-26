@@ -157,6 +157,7 @@ pub(crate) struct ConversationContextCommittedEvent {
     pub(crate) assistant_entry_id: u64,
     pub(crate) user_text: String,
     pub(crate) assistant_text: String,
+    pub(crate) session_id: String,
     pub(crate) session_title: Option<String>,
 }
 

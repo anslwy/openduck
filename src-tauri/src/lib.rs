@@ -1691,6 +1691,9 @@ async fn reset_call_session(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    if let Err(err) = save_current_session(&app_handle, state.inner()) {
+        error!("Failed to save session before reset: {}", err);
+    }
     cancel_active_generation(&app_handle, false).await;
     set_tts_playback_active_state(&app_handle, false);
     reset_call_session_state(state.inner());
@@ -4599,10 +4602,11 @@ fn start_response_generation(
                     translations,
                 );
 
-                let session_title = {
+                let (session_id, session_title) = {
                     let state = app_handle_for_task.state::<AppState>();
-                    let guard = state.current_session_title.lock().unwrap();
-                    guard.clone()
+                    let id_guard = state.current_session_id.lock().unwrap();
+                    let title_guard = state.current_session_title.lock().unwrap();
+                    (id_guard.clone().unwrap_or_default(), title_guard.clone())
                 };
 
                 emit_conversation_context_committed(
@@ -4613,6 +4617,7 @@ fn start_response_generation(
                         assistant_entry_id,
                         user_text,
                         assistant_text: response_text,
+                        session_id,
                         session_title,
                     },
                 );
@@ -9370,27 +9375,27 @@ fn append_conversation_turn_with_save(
     let mut final_image_paths = Vec::new();
     let mut user_image_data_urls = Vec::new();
 
+    let session_id = {
+        let mut guard = state.current_session_id.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(Uuid::new_v4().to_string());
+        }
+        guard.clone().unwrap()
+    };
+
     for path in image_paths {
         let mut current_path = path;
         if let Some(data_url) = load_image_data_url(&current_path) {
             user_image_data_urls.push(data_url);
         }
 
-        if let Ok(session_id) = state
-            .current_session_id
-            .lock()
-            .unwrap()
-            .as_ref()
-            .ok_or("No session")
-        {
-            if let Ok(images_dir) = resolve_session_images_dir(app_handle, session_id) {
-                if let Some(file_name) = current_path.file_name() {
-                    let dest_path = images_dir.join(file_name);
-                    if let Err(err) = std::fs::rename(&current_path, &dest_path) {
-                        error!("Failed to move image to session directory: {}", err);
-                    } else {
-                        current_path = dest_path;
-                    }
+        if let Ok(images_dir) = resolve_session_images_dir(app_handle, &session_id) {
+            if let Some(file_name) = current_path.file_name() {
+                let dest_path = images_dir.join(file_name);
+                if let Err(err) = std::fs::rename(&current_path, &dest_path) {
+                    error!("Failed to move image to session directory: {}", err);
+                } else {
+                    current_path = dest_path;
                 }
             }
         }
@@ -11194,7 +11199,17 @@ fn resolve_session_images_dir(app_handle: &AppHandle, session_id: &str) -> Resul
 
 fn save_current_session(app_handle: &AppHandle, state: &AppState) -> Result<(), String> {
     let session_id = {
-        let guard = state.current_session_id.lock().unwrap();
+        let mut guard = state.current_session_id.lock().unwrap();
+        if guard.is_none() {
+            let turns_empty = {
+                let turns_guard = state.conversation_turns.lock().unwrap();
+                turns_guard.is_empty()
+            };
+            if turns_empty {
+                return Ok(());
+            }
+            *guard = Some(Uuid::new_v4().to_string());
+        }
         guard.clone()
     };
 

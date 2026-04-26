@@ -1384,9 +1384,14 @@
         );
     }
 
-    function markConversationTurnAsContextBacked(
+    async function markConversationTurnAsContextBacked(
         payload: ConversationContextCommittedEvent,
     ) {
+        if (!currentSessionId && payload.sessionId) {
+            currentSessionId = payload.sessionId;
+            void loadSessions();
+        }
+
         if (payload.sessionTitle) {
             currentSessionTitle = payload.sessionTitle;
         }
@@ -7149,7 +7154,7 @@
                                 return;
                             }
 
-                            markConversationTurnAsContextBacked(payload);
+                            void markConversationTurnAsContextBacked(payload);
                         },
                     ),
                     listen<ConversationImageHistoryClearedEvent>(

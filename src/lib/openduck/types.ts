@@ -146,6 +146,7 @@ export type ConversationContextCommittedEvent = {
     assistantEntryId: number;
     userText: string;
     assistantText: string;
+    sessionId: string;
     sessionTitle?: string | null;
 };
 export type ConversationImageHistoryClearedEvent = Record<string, never>;
