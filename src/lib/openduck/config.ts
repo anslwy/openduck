@@ -15,7 +15,9 @@ export const BUILT_IN_VOICE_CALL_PROMPT =
   "You are in a live voice call right now. Reply like a natural spoken conversation. Use plain short sentences only. Never use markdown, bullets, headings, numbered lists, code fences, tables, emojis, or stage directions. Keep responses concise, direct, and easy to speak aloud. Try to ask follow-up questions more often. Make sure your first sentence in every reply is short. Never display your thinking process. Answer directly.";
 export const CONTACTS_STORAGE_KEY = "openduck.contacts.v1";
 export const CONTACT_ICONS_DB_NAME = "openduck.contacts";
+export const CONTACT_ASSETS_DB_VERSION = 2;
 export const CONTACT_ICONS_STORE_NAME = "contact-icons";
+export const CONTACT_CUBISM_ZIPS_STORE_NAME = "contact-cubism-model-zips";
 export const DEFAULT_CONTACT_ID = "contact-openduck";
 export const MODEL_PREFERENCES_STORAGE_KEY = "openduck.model-preferences.v1";
 export const APP_UPDATE_PREFERENCES_STORAGE_KEY =

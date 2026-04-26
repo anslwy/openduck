@@ -23,15 +23,19 @@
     import GemmaBanner from "$lib/components/home/GemmaBanner.svelte";
     import SpeechBanner from "$lib/components/home/SpeechBanner.svelte";
     import SttBanner from "$lib/components/home/SttBanner.svelte";
+    import Live2dAvatar from "$lib/components/home/Live2dAvatar.svelte";
     import {
         createImportedContactFromRawText,
         createContactId,
         createDefaultContact,
         createStoredContactsPayload,
+        deleteStoredContactCubismModelZip,
         deleteStoredContactIcon,
         getContactDisplayName,
         loadContactsFromStorage,
+        loadStoredContactCubismModelZip,
         readFileAsDataUrl,
+        saveStoredContactCubismModelZip,
         saveStoredContactIcon,
         slugifyContactName,
     } from "$lib/openduck/contacts";
@@ -352,7 +356,9 @@
     let syncedTtsPlaybackActive = false;
     let pendingCompletionPongRequestId = $state<number | null>(null);
     let pendingTtsSegments = $state(0);
+    let activeExpression = $state<string | null>(null);
     let queuedPlaybackChunkCount = $state(0);
+    let assistantLipSyncValue = $state(0);
     let isQueueingCompletionPong = false;
     let cachedPongPlaybackSamples = $state<Float32Array | null>(null);
     let cachedPongPlaybackSampleRate = $state<number | null>(null);
@@ -480,6 +486,7 @@
     let contactsImportInput: HTMLInputElement | null = null;
     let contactIconInput: HTMLInputElement | null = null;
     let contactRefAudioInput: HTMLInputElement | null = null;
+    let contactCubismModelZipInput: HTMLInputElement | null = null;
     let refAudioPlaying = $state(false);
     let refAudioEl: HTMLAudioElement | null = null;
     let selectedContactPromptSyncTimeout: ReturnType<
@@ -969,9 +976,16 @@
     const selectedContactName = $derived(
         getContactDisplayName(selectedContact),
     );
-    const selectedContactPrompt = $derived(
-        selectedContact?.prompt.trim() || DEFAULT_CONTACT_PROMPT,
-    );
+    const selectedContactPrompt = $derived.by(() => {
+        const basePrompt =
+            selectedContact?.prompt.trim() || DEFAULT_CONTACT_PROMPT;
+        const emotionMap = selectedContact?.cubismModel?.emotionMap;
+        if (emotionMap && Object.keys(emotionMap).length > 0) {
+            const emotions = Object.keys(emotionMap).join(", ");
+            return `${basePrompt}\n\nYou can also express emotions by including tags like [emotion] in your response. Available emotions are: ${emotions}. For example: "Nice. [smile] I am happy to see you too. How's your day [shy]". You should include these tags naturally in your responses to convey your feelings. Do not use tags that are not in the list.`;
+        }
+        return basePrompt;
+    });
 
     $effect(() => {
         if (showContactsPopup) {
@@ -1005,9 +1019,19 @@
     const selectedContactIconUrl = $derived(
         selectedContact?.iconDataUrl ?? "/icon.png",
     );
+    const selectedContactCubismModel = $derived(
+        selectedContact?.cubismModel ?? null,
+    );
     const selectedContactImageStyle = $derived(
         `background-image: url('${selectedContactIconUrl}')`,
     );
+    let isCubismForceHidden = $state(false);
+    function triggerCubismReload() {
+        isCubismForceHidden = true;
+        setTimeout(() => {
+            isCubismForceHidden = false;
+        }, 50);
+    }
     const runtimeSetupTitle = $derived(
         isPreparingRuntime ? "Preparing Local Runtime" : "Runtime Setup Failed",
     );
@@ -3860,6 +3884,7 @@
             gender: selectedContact?.gender ?? null,
             refAudio: null,
             refText: null,
+            cubismModel: null,
         };
 
         contacts = [...contacts, nextContact];
@@ -3878,8 +3903,9 @@
         const contactId = selectedContact.id;
         try {
             await deleteStoredContactIcon(contactId);
+            await deleteStoredContactCubismModelZip(contactId);
         } catch (err) {
-            console.error("Failed to remove the contact icon:", err);
+            console.error("Failed to remove stored contact assets:", err);
         }
 
         const remainingContacts = contacts.filter(
@@ -3945,28 +3971,7 @@
     ) {
         try {
             const nextContact = createImportedContactFromRawText(rawText);
-
-            if (nextContact.iconDataUrl) {
-                await saveStoredContactIcon(
-                    nextContact.id,
-                    nextContact.iconDataUrl,
-                );
-            }
-
-            contacts = [...contacts, nextContact];
-            persistContactsMetadata();
-
-            if (calling) {
-                alert(
-                    `${nextContact.name} has been added. Please check contacts page after finishing the current conversation`,
-                );
-                return;
-            }
-
-            selectedContactId = nextContact.id;
-            showContactsPopup = true;
-            queueSelectedContactPromptSync();
-            queueSelectedContactVoiceReferenceSync();
+            await addImportedContact(nextContact);
         } catch (err) {
             console.error("Failed to import contact:", err);
             const message = sourceLabel
@@ -3976,12 +3981,131 @@
         }
     }
 
+    async function addImportedContact(nextContact: ContactProfile) {
+        if (nextContact.iconDataUrl) {
+            await saveStoredContactIcon(nextContact.id, nextContact.iconDataUrl);
+        }
+
+        contacts = [...contacts, nextContact];
+        persistContactsMetadata();
+
+        if (calling) {
+            alert(
+                `${nextContact.name} has been added. Please check contacts page after finishing the current conversation`,
+            );
+            return;
+        }
+
+        selectedContactId = nextContact.id;
+        showContactsPopup = true;
+        queueSelectedContactPromptSync();
+        queueSelectedContactVoiceReferenceSync();
+    }
+
+    function arrayBufferLooksLikeZip(buffer: ArrayBuffer) {
+        const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 4));
+        return bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b;
+    }
+
+    function base64ToArrayBuffer(base64Value: string) {
+        const binary = atob(base64Value.split("base64,").pop()?.trim() ?? "");
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) {
+            bytes[index] = binary.charCodeAt(index);
+        }
+        return bytes.buffer;
+    }
+
+    async function importContactFromOpenDuckArchive(
+        archiveData: ArrayBuffer | Blob,
+        sourceLabel?: string | null,
+    ) {
+        try {
+            const { default: JSZip } = await import("jszip");
+            const archive = await JSZip.loadAsync(archiveData);
+            const contactEntry = archive.file("contact.json");
+            if (!contactEntry) {
+                throw new Error("The OpenDuck archive is missing contact.json.");
+            }
+
+            const rawText = await contactEntry.async("text");
+            const parsed = JSON.parse(rawText) as Record<string, unknown>;
+            const nextContact = createImportedContactFromRawText(rawText);
+            const cubismModel =
+                parsed.cubismModel && typeof parsed.cubismModel === "object"
+                    ? (parsed.cubismModel as Record<string, unknown>)
+                    : null;
+            const zipPath =
+                typeof cubismModel?.zipPath === "string"
+                    ? cubismModel.zipPath
+                    : Object.keys(archive.files).find((path) =>
+                          path.toLowerCase().endsWith(".model3.zip"),
+                      ) ?? null;
+
+            if (nextContact.cubismModel?.source === "zip") {
+                if (!zipPath) {
+                    throw new Error(
+                        "The contact uses a Cubism zip model, but the archive does not include one.",
+                    );
+                }
+
+                const cubismZipEntry = archive.file(zipPath);
+                if (!cubismZipEntry) {
+                    throw new Error(`The archive is missing ${zipPath}.`);
+                }
+
+                const cubismZipBlob = await cubismZipEntry.async("blob");
+                await saveStoredContactCubismModelZip(
+                    nextContact.id,
+                    cubismZipBlob,
+                );
+                nextContact.cubismModel = {
+                    ...nextContact.cubismModel,
+                    source: "zip",
+                    url: null,
+                    zipId: nextContact.id,
+                    zipName:
+                        nextContact.cubismModel.zipName ??
+                        zipPath.split("/").pop() ??
+                        "cubism-model.model3.zip",
+                    zipPath: null,
+                };
+            }
+
+            await addImportedContact(nextContact);
+        } catch (err) {
+            console.error("Failed to import contact archive:", err);
+            const message = sourceLabel
+                ? `Failed to import contact from ${sourceLabel}.\n${normalizeErrorMessage(err)}`
+                : `Failed to import contact.\n${normalizeErrorMessage(err)}`;
+            alert(message);
+        }
+    }
+
+    async function importContactFromFile(file: File) {
+        const archiveData = await file.arrayBuffer();
+        if (arrayBufferLooksLikeZip(archiveData)) {
+            await importContactFromOpenDuckArchive(archiveData, file.name);
+            return;
+        }
+
+        await importContactFromRawText(await file.text(), file.name);
+    }
+
     async function handleOpenDuckContactImportEvent(
         payload: OpenDuckContactImportEvent,
     ) {
         if (payload.error) {
             alert(
                 `Failed to import contact from ${payload.sourcePath}.\n${payload.error}`,
+            );
+            return;
+        }
+
+        if (payload.rawDataBase64) {
+            await importContactFromOpenDuckArchive(
+                base64ToArrayBuffer(payload.rawDataBase64),
+                payload.sourcePath,
             );
             return;
         }
@@ -4022,7 +4146,7 @@
             return;
         }
 
-        await importContactFromRawText(await file.text(), file.name);
+        await importContactFromFile(file);
     }
 
     async function handleContactIconChange(event: Event) {
@@ -4078,6 +4202,10 @@
         contactRefAudioInput?.click();
     }
 
+    function triggerContactCubismModelZipUpload() {
+        contactCubismModelZipInput?.click();
+    }
+
     async function handleContactRefAudioChange(event: Event) {
         if (!selectedContact) {
             return;
@@ -4118,6 +4246,68 @@
         }));
         persistContactsMetadata();
         queueSelectedContactVoiceReferenceSync();
+    }
+
+    async function handleContactCubismModelZipChange(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const input = event.currentTarget as HTMLInputElement;
+        const file = input.files?.[0];
+        input.value = "";
+
+        if (!file) {
+            return;
+        }
+
+        if (!file.name.toLowerCase().endsWith(".zip")) {
+            alert("Please choose a .model3.zip file.");
+            return;
+        }
+
+        const contactId = selectedContact.id;
+        try {
+            await saveStoredContactCubismModelZip(contactId, file);
+            updateContactById(contactId, (contact) => ({
+                ...contact,
+                cubismModel: {
+                    ...(contact.cubismModel ?? {}),
+                    source: "zip",
+                    url: null,
+                    zipId: contactId,
+                    zipName: file.name,
+                    zipPath: null,
+                },
+            }));
+            persistContactsMetadata();
+            triggerCubismReload();
+        } catch (err) {
+            console.error("Failed to save the Cubism model zip:", err);
+            alert(
+                `Failed to save Cubism model zip.\n${normalizeErrorMessage(err)}`,
+            );
+        }
+    }
+
+    async function handleResetSelectedContactCubismModel() {
+        if (!selectedContact?.cubismModel) {
+            return;
+        }
+
+        const contactId = selectedContact.id;
+        try {
+            await deleteStoredContactCubismModelZip(contactId);
+        } catch (err) {
+            console.error("Failed to clear the Cubism model zip:", err);
+        }
+
+        updateContactById(contactId, (contact) => ({
+            ...contact,
+            cubismModel: null,
+        }));
+        persistContactsMetadata();
+        triggerCubismReload();
     }
 
     function handlePlaySelectedContactRefAudio() {
@@ -4170,6 +4360,225 @@
         queueSelectedContactVoiceReferenceSync();
     }
 
+    function handleSelectedContactCubismModelInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextUrl = (event.currentTarget as HTMLInputElement).value.trim();
+        const contactId = selectedContact.id;
+        if (nextUrl) {
+            void deleteStoredContactCubismModelZip(contactId).catch((err) => {
+                console.error("Failed to clear the Cubism model zip:", err);
+            });
+        }
+        updateContactById(contactId, (contact) => ({
+            ...contact,
+            cubismModel: nextUrl
+                ? {
+                      ...(contact.cubismModel ?? {}),
+                      source: "url",
+                      url: nextUrl,
+                      zipId: null,
+                      zipName: null,
+                      zipPath: null,
+                  }
+                : null,
+        }));
+        persistContactsMetadata();
+        triggerCubismReload();
+    }
+
+    function handleSelectedContactCubismExpressionInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextExpression = (
+            event.currentTarget as HTMLInputElement
+        ).value.trim();
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            cubismModel: contact.cubismModel
+                ? {
+                      ...contact.cubismModel,
+                      expression: nextExpression || null,
+                  }
+                : null,
+        }));
+        persistContactsMetadata();
+        triggerCubismReload();
+    }
+
+    function handleSelectedContactCubismScaleInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextScale = parseFloat(
+            (event.currentTarget as HTMLInputElement).value,
+        );
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            cubismModel: contact.cubismModel
+                ? {
+                      ...contact.cubismModel,
+                      scale: isNaN(nextScale) ? null : nextScale,
+                  }
+                : null,
+        }));
+        persistContactsMetadata();
+        triggerCubismReload();
+    }
+
+    function handleSelectedContactCubismOffsetXInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextOffset = parseFloat(
+            (event.currentTarget as HTMLInputElement).value,
+        );
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            cubismModel: contact.cubismModel
+                ? {
+                      ...contact.cubismModel,
+                      offsetX: isNaN(nextOffset) ? null : nextOffset,
+                  }
+                : null,
+        }));
+        persistContactsMetadata();
+        triggerCubismReload();
+    }
+
+    function handleSelectedContactCubismOffsetYInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextOffset = parseFloat(
+            (event.currentTarget as HTMLInputElement).value,
+        );
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            cubismModel: contact.cubismModel
+                ? {
+                      ...contact.cubismModel,
+                      offsetY: isNaN(nextOffset) ? null : nextOffset,
+                  }
+                : null,
+        }));
+        persistContactsMetadata();
+        triggerCubismReload();
+    }
+
+    function handleSelectedContactCubismZoomInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextZoom = parseFloat(
+            (event.currentTarget as HTMLInputElement).value,
+        );
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            cubismModel: contact.cubismModel
+                ? {
+                      ...contact.cubismModel,
+                      zoom: isNaN(nextZoom) ? null : nextZoom,
+                  }
+                : null,
+        }));
+        persistContactsMetadata();
+        triggerCubismReload();
+    }
+
+    function handleSelectedContactCubismEmotionMapInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextEmotionMapRaw = (
+            event.currentTarget as HTMLTextAreaElement
+        ).value.trim();
+        let nextEmotionMap: Record<string, string> | null = null;
+        try {
+            if (nextEmotionMapRaw) {
+                nextEmotionMap = JSON.parse(nextEmotionMapRaw);
+            }
+        } catch (err) {
+            // Keep the previous map if the JSON is invalid while typing
+            return;
+        }
+
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            cubismModel: contact.cubismModel
+                ? {
+                      ...contact.cubismModel,
+                      emotionMap: nextEmotionMap,
+                  }
+                : null,
+        }));
+        persistContactsMetadata();
+    }
+
+    async function createOpenDuckContactArchiveBase64(contact: ContactProfile) {
+        const { default: JSZip } = await import("jszip");
+        const archive = new JSZip();
+        const cubismModel = contact.cubismModel
+            ? { ...contact.cubismModel }
+            : null;
+
+        if (
+            cubismModel &&
+            (cubismModel.source === "zip" ||
+                (cubismModel.zipId && !cubismModel.url))
+        ) {
+            const zipId = cubismModel.zipId ?? contact.id;
+            const cubismZip = await loadStoredContactCubismModelZip(zipId);
+            if (!cubismZip) {
+                throw new Error(
+                    "This contact uses an uploaded Cubism model, but the model zip could not be found.",
+                );
+            }
+
+            const zipName =
+                cubismModel.zipName?.trim() || "cubism-model.model3.zip";
+            const zipPath = `assets/${zipName}`;
+            archive.file(zipPath, cubismZip);
+            cubismModel.source = "zip";
+            cubismModel.url = null;
+            cubismModel.zipId = null;
+            cubismModel.zipName = zipName;
+            cubismModel.zipPath = zipPath;
+        }
+
+        archive.file(
+            "contact.json",
+            JSON.stringify(
+                {
+                    version: 2,
+                    name: getContactDisplayName(contact),
+                    prompt: contact.prompt.trim() || DEFAULT_CONTACT_PROMPT,
+                    iconDataUrl: contact.iconDataUrl,
+                    gender: contact.gender,
+                    refAudio: contact.refAudio,
+                    refText: contact.refText,
+                    cubismModel,
+                },
+                null,
+                2,
+            ),
+        );
+
+        return archive.generateAsync({
+            type: "base64",
+            compression: "DEFLATE",
+        });
+    }
+
     async function handleExportSelectedContact() {
         if (!selectedContact) {
             return;
@@ -4194,6 +4603,10 @@
                 "export_contact_profile",
                 {
                     payload: {
+                        archiveDataBase64:
+                            await createOpenDuckContactArchiveBase64(
+                                selectedContact,
+                            ),
                         name: getContactDisplayName(selectedContact),
                         prompt:
                             selectedContact.prompt.trim() ||
@@ -4202,6 +4615,7 @@
                         gender: selectedContact.gender,
                         refAudio: selectedContact.refAudio,
                         refText: selectedContact.refText,
+                        cubismModel: selectedContact.cubismModel ?? null,
                         outputPath,
                     },
                 },
@@ -5295,25 +5709,41 @@
             };
 
             playbackProcessor.port.onmessage = (event) => {
-                const { type, requestId } = event.data as {
+                const { type, requestId, level } = event.data as {
                     type?: string;
                     requestId?: number;
+                    level?: number;
                 };
+
+                if (type === "lip-sync") {
+                    assistantLipSyncValue =
+                        typeof level === "number" && Number.isFinite(level)
+                            ? Math.min(1, Math.max(0, level))
+                            : 0;
+                    return;
+                }
 
                 if (type === "chunk-started") {
                     if (requestId != null) {
                         const segments = ttsSegmentTextMap.get(requestId);
                         if (segments && segments.length > 0) {
+                            // Flush any silent segments that were skipped by the backend
+                            while (segments.length > 1) {
+                                const first = segments[0];
+                                const hasSpeakableText = first.text
+                                    .replace(/\[([^\]]+)\]/g, "")
+                                    .trim();
+                                if (!hasSpeakableText) {
+                                    segments.shift();
+                                    processTtsSegment(first, requestId);
+                                } else {
+                                    break;
+                                }
+                            }
+
                             const segment = segments.shift();
                             if (segment) {
-                                currentSpokenResponse = (
-                                    currentSpokenResponse + segment.text
-                                ).trim();
-                                setCurrentAiSubtitle(
-                                    segment.text,
-                                    requestId,
-                                    segment.index,
-                                );
+                                processTtsSegment(segment, requestId);
                             }
                         }
                     }
@@ -5386,6 +5816,7 @@
             captureContext = null;
         }
         userVolume = 0;
+        assistantLipSyncValue = 0;
         if (mediaStream) {
             mediaStream.getTracks().forEach((track) => track.stop());
             mediaStream = null;
@@ -5408,6 +5839,7 @@
         pendingCompletionPongRequestId = null;
         pendingTtsSegments = 0;
         isQueueingCompletionPong = false;
+        assistantLipSyncValue = 0;
         setCurrentAiSubtitle("");
         stopActivePongPlayback();
         syncTtsPlaybackState(false);
@@ -5492,6 +5924,41 @@
         return mono;
     }
 
+    function processTtsSegment(
+        segment: { text: string; index: number },
+        requestId: number,
+    ) {
+        const emotionTagRegex = /\[([^\]]+)\]/g;
+        let match;
+        let lastExpression = null;
+        const emotionMap = selectedContact?.cubismModel?.emotionMap;
+
+        while ((match = emotionTagRegex.exec(segment.text)) !== null) {
+            const emotion = match[1].toLowerCase();
+            if (emotionMap && emotionMap[emotion]) {
+                lastExpression = emotionMap[emotion];
+            }
+        }
+
+        if (lastExpression) {
+            activeExpression = lastExpression;
+        }
+
+        const cleanText = segment.text
+            .replace(emotionTagRegex, "")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        if (cleanText) {
+            currentSpokenResponse = (
+                currentSpokenResponse +
+                " " +
+                cleanText
+            ).trim();
+            setCurrentAiSubtitle(cleanText, requestId, segment.index);
+        }
+    }
+
     async function queuePlaybackChunk(payload: CsmAudioChunkEvent) {
         if (!calling) {
             return;
@@ -5535,6 +6002,7 @@
                     samples: playbackSamples,
                     prebufferSamples: PLAYBACK_PREBUFFER_SAMPLES,
                     isNewSegment: payload.is_first_chunk,
+                    lipSync: true,
                 },
                 [playbackSamples.buffer],
             );
@@ -5740,6 +6208,7 @@
                     requestId,
                     samples: playbackSamples,
                     prebufferSamples: 0,
+                    lipSync: false,
                 },
                 [playbackSamples.buffer],
             );
@@ -5773,6 +6242,7 @@
         resetConversationLog();
         resetScreenCaptureStatus();
         calling = true;
+        activeExpression = null;
         callStartedAtMs = Date.now();
         resetProcessingAudioLatencies();
         clearLiveTranscriptSubtitle();
@@ -5823,6 +6293,7 @@
         showSessionsPopup = false;
         resetScreenCaptureStatus();
         calling = true;
+        activeExpression = null;
         callStartedAtMs = Date.now();
         resetProcessingAudioLatencies();
         clearLiveTranscriptSubtitle();
@@ -5862,6 +6333,7 @@
 
     async function handleEndCall() {
         calling = false;
+        activeExpression = null;
         stopPlayback();
         stopAudioCapture();
         closeContactsPopup();
@@ -6470,6 +6942,29 @@
                                     0,
                                     pendingTtsSegments - 1,
                                 );
+
+                                // Flush any silent segments that didn't trigger chunk-started
+                                const segments = ttsSegmentTextMap.get(
+                                    payload.request_id,
+                                );
+                                if (segments && segments.length > 0) {
+                                    while (segments.length > 0) {
+                                        const first = segments[0];
+                                        const hasSpeakableText = first.text
+                                            .replace(/\[([^\]]+)\]/g, "")
+                                            .trim();
+                                        if (!hasSpeakableText) {
+                                            segments.shift();
+                                            processTtsSegment(
+                                                first,
+                                                payload.request_id,
+                                            );
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+
                                 if (queuedPlaybackChunkCount === 0) {
                                     void queueCompletionPongIfReady(
                                         payload.request_id,
@@ -7269,18 +7764,32 @@
             </div>
         {/if}
         <div class="avatar-shell" style="--theme-rgb: {themeRgb}">
-            <div class="avatar-container">
-                {#if assistantSpeaking}
+            <div
+                class="avatar-container"
+                class:live2d-avatar-container={!!selectedContactCubismModel}
+            >
+                {#if assistantSpeaking && !(selectedContactCubismModel && !isCubismForceHidden)}
                     <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
                     <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
                     <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
                 {/if}
-                <div
-                    class="avatar"
-                    class:calling
-                    class:user-speaking={userSpeaking}
-                    style={selectedContactImageStyle}
-                ></div>
+                {#if selectedContactCubismModel && !isCubismForceHidden}
+                    <Live2dAvatar
+                        cubismModel={selectedContactCubismModel}
+                        fallbackImageStyle={selectedContactImageStyle}
+                        {calling}
+                        speaking={assistantSpeaking}
+                        expression={activeExpression}
+                        lipSyncValue={assistantLipSyncValue}
+                    />
+                {:else}
+                    <div
+                        class="avatar"
+                        class:calling
+                        class:user-speaking={userSpeaking}
+                        style={selectedContactImageStyle}
+                    ></div>
+                {/if}
             </div>
             {#if calling && showStatEnabled}
                 <div class="avatar-latency" aria-live="polite">
@@ -7397,13 +7906,22 @@
                     {createNewContact}
                     {triggerContactIconUpload}
                     {triggerContactRefAudioUpload}
+                    {triggerContactCubismModelZipUpload}
                     {handleResetSelectedContactIcon}
                     {handleResetSelectedContactRefAudio}
+                    {handleResetSelectedContactCubismModel}
                     {handlePlaySelectedContactRefAudio}
                     {handleSelectedContactNameInput}
                     {handleSelectedContactPromptInput}
                     {handleSelectedContactGenderInput}
                     {handleSelectedContactRefTextInput}
+                    {handleSelectedContactCubismModelInput}
+                    {handleSelectedContactCubismExpressionInput}
+                    {handleSelectedContactCubismEmotionMapInput}
+                    {handleSelectedContactCubismScaleInput}
+                    {handleSelectedContactCubismOffsetXInput}
+                    {handleSelectedContactCubismOffsetYInput}
+                    {handleSelectedContactCubismZoomInput}
                     {handleDeleteSelectedContact}
                     {handleExportSelectedContact}
                     {refAudioPlaying}
@@ -7904,7 +8422,7 @@
     <input
         class="hidden-file-input"
         type="file"
-        accept=".openduck,application/json,.json"
+        accept=".openduck,application/json,.json,application/zip,.zip"
         bind:this={contactsImportInput}
         onchange={handleContactImportChange}
     />
@@ -7921,5 +8439,12 @@
         accept="audio/*"
         bind:this={contactRefAudioInput}
         onchange={handleContactRefAudioChange}
+    />
+    <input
+        class="hidden-file-input"
+        type="file"
+        accept=".model3.zip,.zip,application/zip"
+        bind:this={contactCubismModelZipInput}
+        onchange={handleContactCubismModelZipChange}
     />
 </div>

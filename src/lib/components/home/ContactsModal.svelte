@@ -14,13 +14,22 @@
         createNewContact,
         triggerContactIconUpload,
         triggerContactRefAudioUpload,
+        triggerContactCubismModelZipUpload,
         handleResetSelectedContactIcon,
         handleResetSelectedContactRefAudio,
+        handleResetSelectedContactCubismModel,
         handlePlaySelectedContactRefAudio,
         handleSelectedContactNameInput,
         handleSelectedContactPromptInput,
         handleSelectedContactGenderInput,
         handleSelectedContactRefTextInput,
+        handleSelectedContactCubismModelInput,
+        handleSelectedContactCubismExpressionInput,
+        handleSelectedContactCubismEmotionMapInput,
+        handleSelectedContactCubismScaleInput,
+        handleSelectedContactCubismOffsetXInput,
+        handleSelectedContactCubismOffsetYInput,
+        handleSelectedContactCubismZoomInput,
         handleDeleteSelectedContact,
         handleExportSelectedContact,
         refAudioPlaying,
@@ -38,17 +47,75 @@
         createNewContact: () => void;
         triggerContactIconUpload: () => void;
         triggerContactRefAudioUpload: () => void;
+        triggerContactCubismModelZipUpload: () => void;
         handleResetSelectedContactIcon: () => Promise<void>;
         handleResetSelectedContactRefAudio: () => void;
+        handleResetSelectedContactCubismModel: () => Promise<void>;
         handlePlaySelectedContactRefAudio: () => void;
         handleSelectedContactNameInput: (event: Event) => void;
         handleSelectedContactPromptInput: (event: Event) => void;
         handleSelectedContactGenderInput: (event: Event) => void;
         handleSelectedContactRefTextInput: (event: Event) => void;
+        handleSelectedContactCubismModelInput: (event: Event) => void;
+        handleSelectedContactCubismExpressionInput: (event: Event) => void;
+        handleSelectedContactCubismEmotionMapInput: (event: Event) => void;
+        handleSelectedContactCubismScaleInput: (event: Event) => void;
+        handleSelectedContactCubismOffsetXInput: (event: Event) => void;
+        handleSelectedContactCubismOffsetYInput: (event: Event) => void;
+        handleSelectedContactCubismZoomInput: (event: Event) => void;
         handleDeleteSelectedContact: () => Promise<void>;
         handleExportSelectedContact: () => Promise<void>;
         refAudioPlaying: boolean;
     }>();
+
+    let emotionMapText = $state("");
+    let emotionMapError = $state<string | null>(null);
+    let lastSelectedContactId = $state<string | null>(null);
+    let validationTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    $effect(() => {
+        if (selectedContact?.id !== lastSelectedContactId) {
+            lastSelectedContactId = selectedContact?.id ?? null;
+            emotionMapText = selectedContact?.cubismModel?.emotionMap
+                ? JSON.stringify(
+                      selectedContact.cubismModel.emotionMap,
+                      null,
+                      2,
+                  )
+                : "";
+            emotionMapError = null;
+            if (validationTimeout) clearTimeout(validationTimeout);
+        }
+    });
+
+    function validateEmotionMap() {
+        if (validationTimeout) clearTimeout(validationTimeout);
+
+        if (!emotionMapText.trim()) {
+            emotionMapError = null;
+            return;
+        }
+
+        try {
+            JSON.parse(emotionMapText);
+            emotionMapError = null;
+        } catch (err) {
+            // Provide more detail if available from the JSON error
+            if (err instanceof Error) {
+                emotionMapError = err.message;
+            } else {
+                emotionMapError = "Invalid JSON";
+            }
+        }
+    }
+
+    function handleEmotionMapInput(event: Event) {
+        if (validationTimeout) clearTimeout(validationTimeout);
+        validationTimeout = setTimeout(validateEmotionMap, 1000);
+        handleSelectedContactCubismEmotionMapInput(event);
+    }
+
+    const scaleOptions = Array.from({ length: 20 }, (_, i) => (i + 1) * 0.5);
 </script>
 
 <button
@@ -116,6 +183,9 @@
                         <span class="contact-list-name"
                             >{getContactDisplayName(contact)}</span
                         >
+                        {#if contact.cubismModel}
+                            <span class="contact-list-badge">Live2D</span>
+                        {/if}
                     </button>
                 {/each}
             </div>
@@ -151,9 +221,14 @@
                     </button>
 
                     <div class="contacts-editor-copy">
-                        <span class="contacts-editor-name"
-                            >{selectedContactName}</span
-                        >
+                        <div class="contacts-editor-header">
+                            <span class="contacts-editor-name"
+                                >{selectedContactName}</span
+                            >
+                            {#if selectedContact?.cubismModel}
+                                <span class="contact-list-badge">Live2D</span>
+                            {/if}
+                        </div>
                         <span class="contacts-editor-hint"
                             >Click the icon to upload a contact photo. The duck
                             icon stays as fallback.</span
@@ -290,6 +365,142 @@
                         oninput={handleSelectedContactRefTextInput}
                     />
                 </label>
+
+                <div class="contact-field">
+                    <span class="contact-field-label"
+                        >Cubism Model (Optional)</span
+                    >
+                    <div class="contact-audio-row">
+                        <button
+                            type="button"
+                            class="utility-btn"
+                            onclick={triggerContactCubismModelZipUpload}
+                        >
+                            {selectedContact?.cubismModel?.source === "zip"
+                                ? "Change Model Zip"
+                                : "Upload Model Zip"}
+                        </button>
+                        {#if selectedContact?.cubismModel}
+                            <button
+                                type="button"
+                                class="utility-btn"
+                                onclick={handleResetSelectedContactCubismModel}
+                            >
+                                Reset
+                            </button>
+                        {/if}
+                        {#if selectedContact?.cubismModel?.source === "zip" && selectedContact.cubismModel.zipName}
+                            <span class="contact-file-name"
+                                >{selectedContact.cubismModel.zipName}</span
+                            >
+                        {/if}
+                    </div>
+                    <input
+                        class="contact-text-input"
+                        type="url"
+                        value={selectedContact?.cubismModel?.url ?? ""}
+                        placeholder="Or paste https://.../model3.json"
+                        oninput={handleSelectedContactCubismModelInput}
+                        hidden
+                    />
+                </div>
+
+                <label class="contact-field">
+                    <span class="contact-field-label"
+                        >Cubism Model Expression (Optional)</span
+                    >
+                    <input
+                        class="contact-text-input"
+                        type="text"
+                        value={selectedContact?.cubismModel?.expression ?? ""}
+                        placeholder="Expression name (e.g. happy)"
+                        oninput={handleSelectedContactCubismExpressionInput}
+                    />
+                </label>
+
+                <label class="contact-field">
+                    <div class="contact-field-header">
+                        <span class="contact-field-label"
+                            >Cubism Emotion Map (JSON Optional)</span
+                        >
+                        {#if emotionMapError}
+                            <span
+                                class="contact-field-error"
+                                title={emotionMapError}>{emotionMapError}</span
+                            >
+                        {/if}
+                    </div>
+                    <textarea
+                        class="contact-text-input contact-textarea"
+                        class:has-error={!!emotionMapError}
+                        autocomplete="off"
+                        autocorrect="off"
+                        autocapitalize="off"
+                        spellcheck="false"
+                        data-gramm="false"
+                        bind:value={emotionMapText}
+                        placeholder={'{ "joy": "f01", "smile": "f04", "shy": "f06" }'}
+                        oninput={handleEmotionMapInput}
+                        onblur={validateEmotionMap}
+                    ></textarea>
+                </label>
+
+                <div class="contact-field-row">
+                    <label class="contact-field">
+                        <span class="contact-field-label">Scale</span>
+                        <div class="contact-select-shell">
+                            <select
+                                class="contact-text-input contact-select"
+                                value={selectedContact?.cubismModel?.scale ??
+                                    1.55}
+                                onchange={handleSelectedContactCubismScaleInput}
+                            >
+                                {#each scaleOptions as scale}
+                                    <option value={scale}
+                                        >{scale.toFixed(1)}</option
+                                    >
+                                {/each}
+                                {#if selectedContact?.cubismModel?.scale && !scaleOptions.includes(selectedContact.cubismModel.scale)}
+                                    <option
+                                        value={selectedContact.cubismModel
+                                            .scale}
+                                        >{selectedContact.cubismModel.scale.toFixed(
+                                            2,
+                                        )}</option
+                                    >
+                                {/if}
+                            </select>
+                        </div>
+                    </label>
+                    <label class="contact-field">
+                        <span class="contact-field-label">Zoom</span>
+                        <input
+                            class="contact-text-input"
+                            type="number"
+                            step="0.1"
+                            value={selectedContact?.cubismModel?.zoom ?? 1.0}
+                            oninput={handleSelectedContactCubismZoomInput}
+                        />
+                    </label>
+                    <label class="contact-field">
+                        <span class="contact-field-label">Offset X</span>
+                        <input
+                            class="contact-text-input"
+                            type="number"
+                            value={selectedContact?.cubismModel?.offsetX ?? 0}
+                            oninput={handleSelectedContactCubismOffsetXInput}
+                        />
+                    </label>
+                    <label class="contact-field">
+                        <span class="contact-field-label">Offset Y</span>
+                        <input
+                            class="contact-text-input"
+                            type="number"
+                            value={selectedContact?.cubismModel?.offsetY ?? 0}
+                            oninput={handleSelectedContactCubismOffsetYInput}
+                        />
+                    </label>
+                </div>
             </div>
 
             <div class="contacts-editor-actions">

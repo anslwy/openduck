@@ -174,6 +174,7 @@ pub(crate) struct TriggerAppUpdateCheckEvent {}
 pub(crate) struct OpenDuckContactImportEvent {
     pub(crate) source_path: String,
     pub(crate) raw_text: Option<String>,
+    pub(crate) raw_data_base64: Option<String>,
     pub(crate) error: Option<String>,
 }
 

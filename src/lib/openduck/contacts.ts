@@ -1,6 +1,8 @@
 // Helpers for contact metadata, contact icon storage, and import/export related browser-side utilities.
 import {
   BUILT_IN_VOICE_CALL_PROMPT,
+  CONTACT_ASSETS_DB_VERSION,
+  CONTACT_CUBISM_ZIPS_STORE_NAME,
   CONTACTS_STORAGE_KEY,
   CONTACT_ICONS_DB_NAME,
   CONTACT_ICONS_STORE_NAME,
@@ -10,11 +12,12 @@ import {
 import type {
   ContactGender,
   ContactProfile,
+  CubismModelConfig,
   StoredContactProfile,
   StoredContactsPayload,
 } from "./types";
 
-let contactIconsDbPromise: Promise<IDBDatabase> | null = null;
+let contactAssetsDbPromise: Promise<IDBDatabase> | null = null;
 
 const BUILT_IN_VOICE_CALL_PROMPT_FRAGMENTS = [
   BUILT_IN_VOICE_CALL_PROMPT,
@@ -43,6 +46,7 @@ type ImportedContactProfile = {
   gender?: unknown;
   refAudio?: unknown;
   refText?: unknown;
+  cubismModel?: unknown;
 };
 
 const builtInContactModules = import.meta.glob(
@@ -65,6 +69,89 @@ export function normalizeContactGender(value: unknown): ContactGender | null {
   }
 
   return null;
+}
+
+function normalizeOptionalFiniteNumber(
+  value: unknown,
+  min: number,
+  max: number,
+): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+
+  return Math.min(max, Math.max(min, value));
+}
+
+export function normalizeCubismModel(value: unknown): CubismModelConfig | null {
+  if (typeof value === "string") {
+    const url = value.trim();
+    return url ? { source: "url", url } : null;
+  }
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const url =
+    typeof record.url === "string" && record.url.trim().length > 0
+      ? record.url.trim()
+      : null;
+  const zipId =
+    typeof record.zipId === "string" && record.zipId.trim().length > 0
+      ? record.zipId.trim()
+      : null;
+  const zipName =
+    typeof record.zipName === "string" && record.zipName.trim().length > 0
+      ? record.zipName.trim()
+      : null;
+  const zipPath =
+    typeof record.zipPath === "string" && record.zipPath.trim().length > 0
+      ? record.zipPath.trim()
+      : null;
+  const requestedSource =
+    record.source === "zip" || record.source === "url" ? record.source : null;
+  const source =
+    requestedSource === "zip" && (zipId || zipPath)
+      ? "zip"
+      : url
+        ? "url"
+        : zipId || zipPath
+          ? "zip"
+          : null;
+
+  if (!source) {
+    return null;
+  }
+
+  const scale = normalizeOptionalFiniteNumber(record.scale, 0.2, 2.5);
+  const offsetX = normalizeOptionalFiniteNumber(record.offsetX, -1000, 1000);
+  const offsetY = normalizeOptionalFiniteNumber(record.offsetY, -1000, 1000);
+  const zoom = normalizeOptionalFiniteNumber(record.zoom, 0.1, 10);
+  const expression =
+    typeof record.expression === "string" && record.expression.trim().length > 0
+      ? record.expression.trim()
+      : null;
+
+  const emotionMap =
+    record.emotionMap && typeof record.emotionMap === "object"
+      ? (record.emotionMap as Record<string, string>)
+      : null;
+
+  return {
+    source,
+    url,
+    zipId,
+    zipName,
+    zipPath,
+    scale,
+    offsetX,
+    offsetY,
+    zoom,
+    expression,
+    emotionMap,
+  };
 }
 
 function stripBuiltInVoiceCallPrompt(prompt: string) {
@@ -122,6 +209,7 @@ function normalizeImportedContactProfile(
     gender: normalizeContactGender(record.gender),
     refAudio: typeof record.refAudio === "string" ? record.refAudio : null,
     refText: typeof record.refText === "string" ? record.refText : null,
+    cubismModel: normalizeCubismModel(record.cubismModel),
   };
 }
 
@@ -220,6 +308,67 @@ function createBuiltInContactIndex(contactList: ContactProfile[]) {
   return index;
 }
 
+function createStoredContactProfile(
+  contact: ContactProfile,
+): StoredContactProfile {
+  return {
+    id: contact.id,
+    name: contact.name,
+    prompt: contact.prompt,
+    hasCustomIcon: contact.hasCustomIcon,
+    gender: contact.gender,
+    refAudio: contact.refAudio,
+    refText: contact.refText,
+    cubismModel: contact.cubismModel ?? null,
+  };
+}
+
+function mergeMissingBuiltInContacts(
+  storedContacts: StoredContactProfile[],
+  builtInContacts: ContactProfile[],
+  builtInContactsBySignature: Map<string, ContactProfile>,
+) {
+  if (
+    storedContacts.length === 0 ||
+    !storedContacts.some((contact) =>
+      builtInContactsBySignature.has(createContactSignature(contact)),
+    )
+  ) {
+    return storedContacts;
+  }
+
+  const storedSignatures = new Set(
+    storedContacts.map((contact) => createContactSignature(contact)),
+  );
+  const storedIds = new Set(storedContacts.map((contact) => contact.id));
+  const missingBuiltInContacts = builtInContacts
+    .filter(
+      (contact) =>
+        !storedIds.has(contact.id) &&
+        !storedSignatures.has(createContactSignature(contact)),
+    )
+    .map((contact) => createStoredContactProfile(contact));
+
+  return missingBuiltInContacts.length > 0
+    ? [...storedContacts, ...missingBuiltInContacts]
+    : storedContacts;
+}
+
+function dedupeStoredContacts(
+  storedContacts: StoredContactProfile[],
+): StoredContactProfile[] {
+  const seenIds = new Set<string>();
+
+  return storedContacts.filter((contact) => {
+    if (seenIds.has(contact.id)) {
+      return false;
+    }
+
+    seenIds.add(contact.id);
+    return true;
+  });
+}
+
 function shouldReplaceWithBuiltInContacts(
   storedContacts: StoredContactProfile[],
 ): boolean {
@@ -237,7 +386,8 @@ function shouldReplaceWithBuiltInContacts(
     LEGACY_DEFAULT_CONTACT_PROMPTS.has(contact.prompt) &&
     !contact.hasCustomIcon &&
     contact.refAudio === null &&
-    contact.refText === null
+    contact.refText === null &&
+    contact.cubismModel === null
   );
 }
 
@@ -251,6 +401,7 @@ export function createDefaultContact(): ContactProfile {
     gender: "female",
     refAudio: null,
     refText: null,
+    cubismModel: null,
   };
 }
 
@@ -277,13 +428,7 @@ export function createStoredContactsPayload(
     version: 1,
     selectedContactId: activeContactId,
     contacts: contactList.map((contact) => ({
-      id: contact.id,
-      name: contact.name,
-      prompt: contact.prompt,
-      hasCustomIcon: contact.hasCustomIcon,
-      gender: contact.gender,
-      refAudio: contact.refAudio,
-      refText: contact.refText,
+      ...createStoredContactProfile(contact),
     })),
   };
 }
@@ -310,6 +455,7 @@ function normalizeStoredContactProfile(
     gender: normalizeContactGender(record.gender),
     refAudio: typeof record.refAudio === "string" ? record.refAudio : null,
     refText: typeof record.refText === "string" ? record.refText : null,
+    cubismModel: normalizeCubismModel(record.cubismModel),
   };
 }
 
@@ -339,18 +485,24 @@ export function readFileAsDataUrl(file: File) {
   });
 }
 
-function openContactIconsDatabase() {
-  if (contactIconsDbPromise) {
-    return contactIconsDbPromise;
+function openContactAssetsDatabase() {
+  if (contactAssetsDbPromise) {
+    return contactAssetsDbPromise;
   }
 
-  contactIconsDbPromise = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = window.indexedDB.open(CONTACT_ICONS_DB_NAME, 1);
+  contactAssetsDbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+    const request = window.indexedDB.open(
+      CONTACT_ICONS_DB_NAME,
+      CONTACT_ASSETS_DB_VERSION,
+    );
 
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(CONTACT_ICONS_STORE_NAME)) {
         database.createObjectStore(CONTACT_ICONS_STORE_NAME);
+      }
+      if (!database.objectStoreNames.contains(CONTACT_CUBISM_ZIPS_STORE_NAME)) {
+        database.createObjectStore(CONTACT_CUBISM_ZIPS_STORE_NAME);
       }
     };
 
@@ -358,32 +510,33 @@ function openContactIconsDatabase() {
     request.onerror = () =>
       reject(
         request.error ??
-          new Error("Failed to open the contacts icon database."),
+          new Error("Failed to open the contacts asset database."),
       );
   });
 
-  return contactIconsDbPromise;
+  return contactAssetsDbPromise;
 }
 
-async function runContactIconStoreRequest(
+async function runContactAssetStoreRequest(
+  storeName: string,
   mode: IDBTransactionMode,
   requestFactory: (store: IDBObjectStore) => IDBRequest,
 ) {
-  const database = await openContactIconsDatabase();
+  const database = await openContactAssetsDatabase();
 
   return new Promise<unknown>((resolve, reject) => {
-    const transaction = database.transaction(CONTACT_ICONS_STORE_NAME, mode);
-    const store = transaction.objectStore(CONTACT_ICONS_STORE_NAME);
+    const transaction = database.transaction(storeName, mode);
+    const store = transaction.objectStore(storeName);
     const request = requestFactory(store);
 
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
       reject(
-        request.error ?? new Error("A contacts icon storage request failed."),
+        request.error ?? new Error("A contacts asset storage request failed."),
       );
     transaction.onerror = () =>
       reject(
-        transaction.error ?? new Error("A contacts icon transaction failed."),
+        transaction.error ?? new Error("A contacts asset transaction failed."),
       );
   });
 }
@@ -393,8 +546,10 @@ async function loadStoredContactIcon(contactId: string) {
     return null;
   }
 
-  const result = await runContactIconStoreRequest("readonly", (store) =>
-    store.get(contactId),
+  const result = await runContactAssetStoreRequest(
+    CONTACT_ICONS_STORE_NAME,
+    "readonly",
+    (store) => store.get(contactId),
   );
 
   return typeof result === "string" ? result : null;
@@ -408,8 +563,10 @@ export async function saveStoredContactIcon(
     return;
   }
 
-  await runContactIconStoreRequest("readwrite", (store) =>
-    store.put(dataUrl, contactId),
+  await runContactAssetStoreRequest(
+    CONTACT_ICONS_STORE_NAME,
+    "readwrite",
+    (store) => store.put(dataUrl, contactId),
   );
 }
 
@@ -418,8 +575,51 @@ export async function deleteStoredContactIcon(contactId: string) {
     return;
   }
 
-  await runContactIconStoreRequest("readwrite", (store) =>
-    store.delete(contactId),
+  await runContactAssetStoreRequest(
+    CONTACT_ICONS_STORE_NAME,
+    "readwrite",
+    (store) => store.delete(contactId),
+  );
+}
+
+export async function loadStoredContactCubismModelZip(contactId: string) {
+  if (typeof window === "undefined" || !("indexedDB" in window)) {
+    return null;
+  }
+
+  const result = await runContactAssetStoreRequest(
+    CONTACT_CUBISM_ZIPS_STORE_NAME,
+    "readonly",
+    (store) => store.get(contactId),
+  );
+
+  return result instanceof Blob ? result : null;
+}
+
+export async function saveStoredContactCubismModelZip(
+  contactId: string,
+  zipBlob: Blob,
+) {
+  if (typeof window === "undefined" || !("indexedDB" in window)) {
+    return;
+  }
+
+  await runContactAssetStoreRequest(
+    CONTACT_CUBISM_ZIPS_STORE_NAME,
+    "readwrite",
+    (store) => store.put(zipBlob, contactId),
+  );
+}
+
+export async function deleteStoredContactCubismModelZip(contactId: string) {
+  if (typeof window === "undefined" || !("indexedDB" in window)) {
+    return;
+  }
+
+  await runContactAssetStoreRequest(
+    CONTACT_CUBISM_ZIPS_STORE_NAME,
+    "readwrite",
+    (store) => store.delete(contactId),
   );
 }
 
@@ -455,16 +655,23 @@ export async function loadContactsFromStorage() {
             (contact): contact is StoredContactProfile => contact !== null,
           )
       : [];
+    const uniqueStoredContacts = dedupeStoredContacts(storedContacts);
 
-    if (shouldReplaceWithBuiltInContacts(storedContacts)) {
+    if (shouldReplaceWithBuiltInContacts(uniqueStoredContacts)) {
       return {
         contacts: defaultContacts,
         selectedContactId: defaultSelectedContactId,
       };
     }
 
+    const contactsToRestore = mergeMissingBuiltInContacts(
+      uniqueStoredContacts,
+      defaultContacts,
+      builtInContactsBySignature,
+    );
+
     const contactsWithIcons = await Promise.all(
-      storedContacts.map(async (contact) => {
+      contactsToRestore.map(async (contact) => {
         const builtInContact = builtInContactsBySignature.get(
           createContactSignature(contact),
         );
@@ -477,6 +684,7 @@ export async function loadContactsFromStorage() {
         return {
           ...contact,
           gender: contact.gender ?? builtInContact?.gender ?? null,
+          cubismModel: contact.cubismModel ?? builtInContact?.cubismModel ?? null,
           hasCustomIcon: Boolean(iconDataUrl),
           iconDataUrl,
         };

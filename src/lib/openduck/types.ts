@@ -137,6 +137,7 @@ export type TriggerAppUpdateCheckEvent = Record<string, never>;
 export type OpenDuckContactImportEvent = {
     sourcePath: string;
     rawText?: string | null;
+    rawDataBase64?: string | null;
     error?: string | null;
 };
 export type ConversationContextCommittedEvent = {
@@ -231,9 +232,24 @@ export type StoredContactProfile = {
     gender?: ContactGender | null;
     refAudio?: string | null;
     refText?: string | null;
+    cubismModel?: CubismModelConfig | null;
 };
 
 export type ContactGender = "male" | "female";
+
+export type CubismModelConfig = {
+    source?: "url" | "zip" | null;
+    url?: string | null;
+    zipId?: string | null;
+    zipName?: string | null;
+    zipPath?: string | null;
+    scale?: number | null;
+    offsetX?: number | null;
+    offsetY?: number | null;
+    zoom?: number | null;
+    expression?: string | null;
+    emotionMap?: Record<string, string> | null;
+};
 
 export type ContactProfile = StoredContactProfile & {
     iconDataUrl: string | null;

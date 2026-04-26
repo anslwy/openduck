@@ -630,12 +630,15 @@ struct DownloadProgressWorkerEvent {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ContactExportPayload {
+    #[serde(default)]
+    archive_data_base64: Option<String>,
     name: String,
     prompt: String,
     icon_data_url: Option<String>,
     gender: Option<String>,
     ref_audio: Option<String>,
     ref_text: Option<String>,
+    cubism_model: Option<serde_json::Value>,
     output_path: String,
 }
 
@@ -1613,6 +1616,37 @@ fn build_voice_system_prompt(prompt: &str) -> String {
 #[tauri::command]
 fn export_contact_profile(payload: ContactExportPayload) -> Result<ContactExportResult, String> {
     let export_path = normalize_contact_export_path(&payload.output_path)?;
+    if let Some(archive_data_base64) = payload.archive_data_base64.as_deref() {
+        let encoded = archive_data_base64
+            .split("base64,")
+            .last()
+            .unwrap_or(archive_data_base64)
+            .trim();
+        let bytes = BASE64_STANDARD
+            .decode(encoded)
+            .map_err(|err| format!("Failed to decode contact archive data: {err}"))?;
+
+        if let Some(parent) = export_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                format!(
+                    "Failed to create export directory at {}: {err}",
+                    parent.display()
+                )
+            })?;
+        }
+
+        std::fs::write(&export_path, bytes).map_err(|err| {
+            format!(
+                "Failed to export contact to {}: {err}",
+                export_path.display()
+            )
+        })?;
+
+        return Ok(ContactExportResult {
+            saved_path: export_path.display().to_string(),
+        });
+    }
+
     let gender = payload
         .gender
         .as_deref()
@@ -1626,6 +1660,7 @@ fn export_contact_profile(payload: ContactExportPayload) -> Result<ContactExport
         "gender": gender,
         "refAudio": payload.ref_audio,
         "refText": payload.ref_text,
+        "cubismModel": payload.cubism_model,
     });
     let encoded = serde_json::to_vec_pretty(&export_json).map_err(|err| err.to_string())?;
 
@@ -5668,7 +5703,7 @@ async fn queue_spoken_response_segments_for_csm(
 ) -> Result<usize, String> {
     let queued_start = (*queued_response_bytes).min(response_text.len());
     let pending_response_text = &response_text[queued_start..];
-    let (spoken_segments, consumed_len) = if flush_incomplete_segment {
+    let (mut spoken_segments, consumed_len) = if flush_incomplete_segment {
         (
             prepare_spoken_response_segments_for_csm(pending_response_text),
             pending_response_text.len(),
@@ -5676,6 +5711,26 @@ async fn queue_spoken_response_segments_for_csm(
     } else {
         prepare_completed_spoken_response_segments_for_csm(pending_response_text)
     };
+
+    if spoken_segments.len() > 1 {
+        let mut merged = Vec::with_capacity(spoken_segments.len());
+        for seg in spoken_segments {
+            if merged.is_empty() {
+                merged.push(seg);
+            } else {
+                let last_is_empty = strip_emotion_tags(merged.last().unwrap()).is_empty();
+                let curr_is_empty = strip_emotion_tags(&seg).is_empty();
+                if last_is_empty || curr_is_empty {
+                    let last = merged.last_mut().unwrap();
+                    last.push(' ');
+                    last.push_str(&seg);
+                } else {
+                    merged.push(seg);
+                }
+            }
+        }
+        spoken_segments = merged;
+    }
 
     if spoken_segments.is_empty() {
         return Ok(0);
@@ -5756,7 +5811,15 @@ async fn queue_spoken_response_segments_for_csm(
             }
         });
 
-        send_csm_synthesis_request(app_handle, request_id, spoken_segment).await?;
+        let tts_text = strip_emotion_tags(spoken_segment);
+        if tts_text.is_empty() {
+            info!("Skipping synthesis for tag-only segment {}: {}", segment_index, spoken_segment);
+            if let Err(err) = app_handle.emit(CSM_AUDIO_DONE_EVENT, CsmAudioDoneEvent { request_id }) {
+                error!("Failed to emit CSM completion for tag-only segment: {}", err);
+            }
+        } else {
+            send_csm_synthesis_request(app_handle, request_id, &tts_text).await?;
+        }
     }
 
     *queued_response_bytes = queued_start + consumed_len;
@@ -6489,6 +6552,22 @@ fn is_nonspoken_symbol(ch: char) -> bool {
 
 fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn strip_emotion_tags(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut in_tag = false;
+    for c in text.chars() {
+        if c == '[' {
+            in_tag = true;
+        } else if c == ']' && in_tag {
+            in_tag = false;
+            result.push(' ');
+        } else if !in_tag {
+            result.push(c);
+        }
+    }
+    collapse_whitespace(&result)
 }
 
 fn normalize_punctuation_spacing(text: &str) -> String {
@@ -9803,17 +9882,29 @@ fn handle_macos_opened_urls(app_handle: &AppHandle, urls: &[tauri::Url]) {
             handled_any = true;
         }
 
-        match std::fs::read_to_string(&source_path) {
-            Ok(raw_text) => {
+        match std::fs::read(&source_path) {
+            Ok(raw_data) => {
                 info!(
                     "Received macOS open-file request for OpenDuck contact: {}",
                     source_path.display()
                 );
+                let is_zip_archive = raw_data.starts_with(b"PK");
+                let raw_text = if is_zip_archive {
+                    None
+                } else {
+                    String::from_utf8(raw_data.clone()).ok()
+                };
+                let raw_data_base64 = if is_zip_archive || raw_text.is_none() {
+                    Some(BASE64_STANDARD.encode(raw_data))
+                } else {
+                    None
+                };
                 queue_or_emit_openduck_contact_import_event(
                     app_handle,
                     OpenDuckContactImportEvent {
                         source_path: source_path.display().to_string(),
-                        raw_text: Some(raw_text),
+                        raw_text,
+                        raw_data_base64,
                         error: None,
                     },
                 );
@@ -9829,6 +9920,7 @@ fn handle_macos_opened_urls(app_handle: &AppHandle, urls: &[tauri::Url]) {
                     OpenDuckContactImportEvent {
                         source_path: source_path.display().to_string(),
                         raw_text: None,
+                        raw_data_base64: None,
                         error: Some(format!("Failed to read the file. {}", err)),
                     },
                 );

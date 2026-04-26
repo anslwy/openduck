@@ -25,6 +25,14 @@
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.10.1"
+    "@tauri-apps/plugin-updater": "^2.10.1",
+    "jszip": "^3.10.1",
+    "pixi-live2d-display": "^0.4.0",
+    "pixi.js": "^6.5.10"
+  },
+  "overrides": {
+    "pixi-live2d-display": {
+      "gh-pages": "^6.0.0"
+    }
   }
 }

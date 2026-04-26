@@ -1,4 +1,12 @@
 const PLAYBACK_REFERENCE_STATE_KEY = "__openduckPlaybackReferenceState";
+const LIP_SYNC_UPDATE_INTERVAL_FRAMES = 512;
+const LIP_SYNC_RMS_FLOOR = 0.0015;
+const LIP_SYNC_PEAK_FLOOR = 0.004;
+const LIP_SYNC_RMS_GAIN = 15;
+const LIP_SYNC_PEAK_GAIN = 3.5;
+const LIP_SYNC_MIN_VOICED_LEVEL = 0.08;
+const LIP_SYNC_ATTACK = 0.6;
+const LIP_SYNC_RELEASE = 0.35;
 
 function getPlaybackReferenceState() {
   if (!globalThis[PLAYBACK_REFERENCE_STATE_KEY]) {
@@ -21,6 +29,27 @@ function writePlaybackSamples(samples) {
   }
 }
 
+function clamp01(value) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function lipSyncTargetFromEnergy(sumSquares, peak, sampleCount) {
+  if (sampleCount <= 0) {
+    return 0;
+  }
+
+  const rms = Math.sqrt(sumSquares / sampleCount);
+  const rmsLevel = Math.max(0, rms - LIP_SYNC_RMS_FLOOR) * LIP_SYNC_RMS_GAIN;
+  const peakLevel =
+    Math.max(0, peak - LIP_SYNC_PEAK_FLOOR) * LIP_SYNC_PEAK_GAIN;
+  const voiceFloor =
+    rms > LIP_SYNC_RMS_FLOOR || peak > LIP_SYNC_PEAK_FLOOR
+      ? LIP_SYNC_MIN_VOICED_LEVEL
+      : 0;
+
+  return clamp01(Math.max(rmsLevel, peakLevel, voiceFloor));
+}
+
 class PlaybackProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -31,6 +60,8 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.started = false;
     this.currentRequestId = null;
     this.chunkStarted = false;
+    this.lipSyncEnvelope = 0;
+    this.lipSyncFramesUntilPost = 0;
 
     this.port.onmessage = (event) => {
       const { type } = event.data ?? {};
@@ -44,7 +75,8 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         return;
       }
 
-      const { requestId, samples, prebufferSamples, isNewSegment } = event.data;
+      const { requestId, samples, prebufferSamples, isNewSegment, lipSync } =
+        event.data;
       if (this.currentRequestId !== requestId) {
         this.reset();
         this.currentRequestId = requestId;
@@ -56,7 +88,12 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         return;
       }
 
-      this.queue.push({ requestId, samples: chunk, isNewSegment });
+      this.queue.push({
+        requestId,
+        samples: chunk,
+        isNewSegment,
+        lipSync: lipSync !== false,
+      });
       this.bufferedSamples += chunk.length;
       this.prebufferSamples = Math.max(
         0,
@@ -76,6 +113,27 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     this.started = false;
     this.currentRequestId = null;
     this.chunkStarted = false;
+    this.lipSyncEnvelope = 0;
+    this.lipSyncFramesUntilPost = 0;
+    this.port.postMessage({ type: "lip-sync", level: 0 });
+  }
+
+  updateLipSyncLevel(target, frameCount) {
+    const smoothing =
+      target > this.lipSyncEnvelope ? LIP_SYNC_ATTACK : LIP_SYNC_RELEASE;
+    this.lipSyncEnvelope += (target - this.lipSyncEnvelope) * smoothing;
+    if (this.lipSyncEnvelope < 0.01 && target === 0) {
+      this.lipSyncEnvelope = 0;
+    }
+
+    this.lipSyncFramesUntilPost -= frameCount;
+    if (this.lipSyncFramesUntilPost <= 0) {
+      this.lipSyncFramesUntilPost += LIP_SYNC_UPDATE_INTERVAL_FRAMES;
+      this.port.postMessage({
+        type: "lip-sync",
+        level: this.lipSyncEnvelope,
+      });
+    }
   }
 
   process(inputs, outputs) {
@@ -85,6 +143,8 @@ class PlaybackProcessor extends AudioWorkletProcessor {
     }
 
     output.fill(0);
+    let lipSyncSumSquares = 0;
+    let lipSyncPeak = 0;
 
     if (
       !this.started &&
@@ -119,6 +179,13 @@ class PlaybackProcessor extends AudioWorkletProcessor {
           head.samples.subarray(this.offset, this.offset + toCopy),
           writeIndex,
         );
+        if (head.lipSync) {
+          for (let index = 0; index < toCopy; index += 1) {
+            const sample = head.samples[this.offset + index];
+            lipSyncSumSquares += sample * sample;
+            lipSyncPeak = Math.max(lipSyncPeak, Math.abs(sample));
+          }
+        }
         this.offset += toCopy;
         writeIndex += toCopy;
         this.bufferedSamples -= toCopy;
@@ -135,6 +202,14 @@ class PlaybackProcessor extends AudioWorkletProcessor {
       }
     }
 
+    this.updateLipSyncLevel(
+      lipSyncTargetFromEnergy(
+        lipSyncSumSquares,
+        lipSyncPeak,
+        output.length,
+      ),
+      output.length,
+    );
     writePlaybackSamples(output);
     return true;
   }
