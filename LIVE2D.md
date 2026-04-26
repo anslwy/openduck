@@ -2,6 +2,9 @@
 
 OpenDuck can attach a Live2D Cubism model to any contact. The app expects a Cubism 4 style `.model3.zip` file containing a `.model3.json` manifest, the referenced `.moc3`, textures, and optional expression, motion, pose, physics, and display-info files.
 
+|![Jin](/screenshots/spanish-live2d.png) | ![Haru](/screenshots/japanese-live2d.png) |
+|:---:|:---:|
+
 ## Sample Characters
 
 The bundled Live2D demo characters, Haru and Jin Natori, are based on Live2D sample data from:
