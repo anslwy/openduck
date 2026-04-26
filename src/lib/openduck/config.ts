@@ -24,13 +24,17 @@ export const APP_UPDATE_PREFERENCES_STORAGE_KEY =
   "openduck.app-update-preferences.v1";
 export const PONG_PLAYBACK_STORAGE_KEY = "openduck.pong-playback.v1";
 export const KEEP_SCREEN_ON_STORAGE_KEY = "openduck.keep-screen-on.v1";
-export const SELECT_LAST_SESSION_STORAGE_KEY = "openduck.select-last-session.v1";
-export const AUTO_LOAD_MODELS_ON_STARTUP_STORAGE_KEY = "openduck.auto-load-models-on-startup.v1";
+export const SELECT_LAST_SESSION_STORAGE_KEY =
+  "openduck.select-last-session.v1";
+export const AUTO_LOAD_MODELS_ON_STARTUP_STORAGE_KEY =
+  "openduck.auto-load-models-on-startup.v1";
 export const SHOW_STAT_STORAGE_KEY = "openduck.show-stat.v1";
 export const SHOW_SUBTITLE_STORAGE_KEY = "openduck.show-subtitle.v1";
 export const SHOW_AI_SUBTITLE_STORAGE_KEY = "openduck.show-ai-subtitle.v1";
-export const AI_SUBTITLE_TARGET_LANGUAGE_STORAGE_KEY = "openduck.ai-subtitle-target-language.v1";
+export const AI_SUBTITLE_TARGET_LANGUAGE_STORAGE_KEY =
+  "openduck.ai-subtitle-target-language.v1";
 export const SHOW_CALL_TIMER_STORAGE_KEY = "openduck.show-call-timer.v1";
+export const SUBTITLE_FONT_SIZE_STORAGE_KEY = "openduck.subtitle-font-size.v1";
 export const SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY =
   "openduck.show-hidden-window-overlay.v1";
 export const AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY =
@@ -48,14 +52,20 @@ export const LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY =
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
 export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY =
   "openduck.global-shortcut-entire.v1";
-export const GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY = "openduck.global-shortcut-toggle-mute.v1";
-export const GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY = "openduck.global-shortcut-interrupt.v1";
+export const GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY =
+  "openduck.global-shortcut-toggle-mute.v1";
+export const GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY =
+  "openduck.global-shortcut-interrupt.v1";
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
 
 export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";
 export const DEFAULT_KOKORO_LANGUAGE: KokoroLanguage = "american_english";
 export const DEFAULT_STT_MODEL: SttModelVariant = "whisper_large_v3_turbo";
 export const DEFAULT_STT_LANGUAGE: SttLanguage = "auto";
+export const DEFAULT_SUBTITLE_FONT_SIZE = 1.5;
+export const MIN_SUBTITLE_FONT_SIZE = 0.7;
+export const MAX_SUBTITLE_FONT_SIZE = 2.0;
+export const SUBTITLE_FONT_SIZE_STEP = 0.02;
 export const DEFAULT_OLLAMA_MODEL = "gemma2:2b";
 export const DEFAULT_LMSTUDIO_MODEL = "";
 export const DEFAULT_OPENAI_COMPATIBLE_MODEL = "";

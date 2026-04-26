@@ -22,6 +22,10 @@
         MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
         MIN_LLM_IMAGE_HISTORY_LIMIT,
+        DEFAULT_SUBTITLE_FONT_SIZE,
+        MIN_SUBTITLE_FONT_SIZE,
+        MAX_SUBTITLE_FONT_SIZE,
+        SUBTITLE_FONT_SIZE_STEP,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
         DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
@@ -62,6 +66,7 @@
         autoLoadModelsOnStartupEnabled,
         showStatEnabled,
         showSubtitleEnabled,
+        subtitleFontSize,
         showAiSubtitleEnabled,
         aiSubtitleTargetLanguage,
         subtitleTranslationLlmConfigured,
@@ -84,6 +89,7 @@
         onUpdateAutoLoadModelsOnStartup,
         onUpdateShowStat,
         onUpdateShowSubtitle,
+        onUpdateSubtitleFontSize,
         onUpdateShowAiSubtitle,
         onUpdateAiSubtitleTargetLanguage,
         onOpenSubtitleTranslationLlmConfig,
@@ -117,6 +123,7 @@
         autoLoadModelsOnStartupEnabled: boolean;
         showStatEnabled: boolean;
         showSubtitleEnabled: boolean;
+        subtitleFontSize: number;
         showAiSubtitleEnabled: boolean;
         aiSubtitleTargetLanguage: AiSubtitleTargetLanguage;
         subtitleTranslationLlmConfigured: boolean;
@@ -139,6 +146,7 @@
         onUpdateAutoLoadModelsOnStartup: (enabled: boolean) => void;
         onUpdateShowStat: (enabled: boolean) => void;
         onUpdateShowSubtitle: (enabled: boolean) => void;
+        onUpdateSubtitleFontSize: (fontSize: number) => void;
         onUpdateShowAiSubtitle: (enabled: boolean) => void;
         onUpdateAiSubtitleTargetLanguage: (
             targetLanguage: AiSubtitleTargetLanguage,
@@ -454,6 +462,19 @@
     });
     const minimumLlmImageHistoryLabel = `${MIN_LLM_IMAGE_HISTORY_LIMIT}`;
     const maximumLlmImageHistoryLabel = "Unlimited";
+    const subtitleFontSizeProgress = $derived.by(() => {
+        const range = MAX_SUBTITLE_FONT_SIZE - MIN_SUBTITLE_FONT_SIZE;
+        if (range <= 0) {
+            return 0;
+        }
+
+        return ((subtitleFontSize - MIN_SUBTITLE_FONT_SIZE) / range) * 100;
+    });
+    const minimumSubtitleFontSizeLabel = `${MIN_SUBTITLE_FONT_SIZE.toFixed(1)}x`;
+    const maximumSubtitleFontSizeLabel = `${MAX_SUBTITLE_FONT_SIZE.toFixed(1)}x`;
+    const formattedSubtitleFontSize = $derived(
+        `${subtitleFontSize.toFixed(2)}x`,
+    );
 
     onDestroy(() => {
         clearCopyFeedback();
@@ -576,6 +597,21 @@
             label: "Show Hidden-Window Overlay (Toasts, Live Transcript, AI Subtitle)",
             value: showHiddenWindowOverlayEnabled,
             onUpdate: onUpdateShowHiddenWindowOverlay,
+        },
+        {
+            id: "subtitle-font-size",
+            type: "slider",
+            label: "Subtitle Font Size",
+            detail: "Adjust the text size of the live transcript and AI subtitles displayed during calls.",
+            value: subtitleFontSize,
+            min: MIN_SUBTITLE_FONT_SIZE,
+            max: MAX_SUBTITLE_FONT_SIZE,
+            step: SUBTITLE_FONT_SIZE_STEP,
+            displayValue: formattedSubtitleFontSize,
+            progress: subtitleFontSizeProgress,
+            minLabel: minimumSubtitleFontSizeLabel,
+            maxLabel: maximumSubtitleFontSizeLabel,
+            onUpdate: onUpdateSubtitleFontSize,
         },
         {
             id: "stt-silence",

@@ -59,6 +59,10 @@
         DEFAULT_OPENAI_COMPATIBLE_MODEL,
         DEFAULT_OLLAMA_MODEL,
         DEFAULT_STT_LANGUAGE,
+        DEFAULT_SUBTITLE_FONT_SIZE,
+        MIN_SUBTITLE_FONT_SIZE,
+        MAX_SUBTITLE_FONT_SIZE,
+        SUBTITLE_FONT_SIZE_STEP,
         DEFAULT_STT_MODEL,
         END_OF_UTTERANCE_SILENCE_STEP_MS,
         END_OF_UTTERANCE_SILENCE_STORAGE_KEY,
@@ -85,6 +89,7 @@
         SHOW_AI_SUBTITLE_STORAGE_KEY,
         AI_SUBTITLE_TARGET_LANGUAGE_STORAGE_KEY,
         SHOW_CALL_TIMER_STORAGE_KEY,
+        SUBTITLE_FONT_SIZE_STORAGE_KEY,
         SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
         AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
@@ -376,6 +381,7 @@
     let autoLoadModelsOnStartupEnabled = $state(false);
     let showStatEnabled = $state(false);
     let showSubtitleEnabled = $state(true);
+    let subtitleFontSize = $state(DEFAULT_SUBTITLE_FONT_SIZE);
     let showAiSubtitleEnabled = $state(DEFAULT_SHOW_AI_SUBTITLE);
     let aiSubtitleTargetLanguage = $state<AiSubtitleTargetLanguage>(
         DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE,
@@ -1643,6 +1649,21 @@
         );
     }
 
+    function persistSubtitleFontSizePreference(fontSize: number) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload = {
+            version: 1,
+            fontSize,
+        };
+        window.localStorage.setItem(
+            SUBTITLE_FONT_SIZE_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function persistShowSubtitlePreference(enabled: boolean) {
         if (typeof window === "undefined") {
             return;
@@ -1871,7 +1892,9 @@
             return true;
         }
 
-        const rawPayload = window.localStorage.getItem(PONG_PLAYBACK_STORAGE_KEY);
+        const rawPayload = window.localStorage.getItem(
+            PONG_PLAYBACK_STORAGE_KEY,
+        );
         if (!rawPayload) {
             return true;
         }
@@ -2115,6 +2138,37 @@
         } catch (err) {
             console.error("Failed to restore show subtitle preference:", err);
             return true;
+        }
+    }
+
+    function loadSubtitleFontSizePreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_SUBTITLE_FONT_SIZE;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            SUBTITLE_FONT_SIZE_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_SUBTITLE_FONT_SIZE;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                fontSize?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.fontSize !== "number") {
+                return DEFAULT_SUBTITLE_FONT_SIZE;
+            }
+
+            return parsed.fontSize;
+        } catch (err) {
+            console.error(
+                "Failed to restore subtitle font size preference:",
+                err,
+            );
+            return DEFAULT_SUBTITLE_FONT_SIZE;
         }
     }
 
@@ -2450,6 +2504,11 @@
         persistShowSubtitlePreference(enabled);
     }
 
+    function applySubtitleFontSizePreference(fontSize: number) {
+        subtitleFontSize = fontSize;
+        persistSubtitleFontSizePreference(fontSize);
+    }
+
     function applyShowAiSubtitlePreference(enabled: boolean) {
         showAiSubtitleEnabled = enabled;
         persistShowAiSubtitlePreference(enabled);
@@ -2607,6 +2666,11 @@
     async function initializeShowSubtitlePreference() {
         const storedEnabled = loadShowSubtitlePreferenceFromStorage();
         applyShowSubtitlePreference(storedEnabled);
+    }
+
+    async function initializeSubtitleFontSizePreference() {
+        const storedFontSize = loadSubtitleFontSizePreferenceFromStorage();
+        applySubtitleFontSizePreference(storedFontSize);
     }
 
     async function initializeShowAiSubtitlePreference() {
@@ -3742,7 +3806,10 @@
 
     async function handleSelectSession(session: SessionMetadata) {
         try {
-            if (session.character_id && session.character_id !== selectedContactId) {
+            if (
+                session.character_id &&
+                session.character_id !== selectedContactId
+            ) {
                 await selectContact(session.character_id, {
                     skipSessionLoading: true,
                 });
@@ -4086,7 +4153,10 @@
 
     async function addImportedContact(nextContact: ContactProfile) {
         if (nextContact.iconDataUrl) {
-            await saveStoredContactIcon(nextContact.id, nextContact.iconDataUrl);
+            await saveStoredContactIcon(
+                nextContact.id,
+                nextContact.iconDataUrl,
+            );
         }
 
         contacts = [...contacts, nextContact];
@@ -4128,7 +4198,9 @@
             const archive = await JSZip.loadAsync(archiveData);
             const contactEntry = archive.file("contact.json");
             if (!contactEntry) {
-                throw new Error("The OpenDuck archive is missing contact.json.");
+                throw new Error(
+                    "The OpenDuck archive is missing contact.json.",
+                );
             }
 
             const rawText = await contactEntry.async("text");
@@ -4141,9 +4213,9 @@
             const zipPath =
                 typeof cubismModel?.zipPath === "string"
                     ? cubismModel.zipPath
-                    : Object.keys(archive.files).find((path) =>
+                    : (Object.keys(archive.files).find((path) =>
                           path.toLowerCase().endsWith(".model3.zip"),
-                      ) ?? null;
+                      ) ?? null);
 
             if (nextContact.cubismModel?.source === "zip") {
                 if (!zipPath) {
@@ -5014,7 +5086,9 @@
     function isKokoroRuntimePreparationMessage(message: string) {
         return (
             message.includes("Kokoro") &&
-            message.includes("OpenDuck needs to finish installing Kokoro language support")
+            message.includes(
+                "OpenDuck needs to finish installing Kokoro language support",
+            )
         );
     }
 
@@ -7437,6 +7511,7 @@
             await initializeAutoLoadModelsOnStartupPreference();
             await initializeShowStatPreference();
             await initializeShowSubtitlePreference();
+            await initializeSubtitleFontSizePreference();
             await initializeShowAiSubtitlePreference();
             await initializeAiSubtitleTargetLanguagePreference();
             await initializeShowCallTimerPreference();
@@ -7464,7 +7539,8 @@
                 const lastSessionForCharacter = sessions.find(
                     (s) =>
                         s.character_id === selectedContactId ||
-                        (!s.character_id && selectedContactId === DEFAULT_CONTACT_ID),
+                        (!s.character_id &&
+                            selectedContactId === DEFAULT_CONTACT_ID),
                 );
                 if (lastSessionForCharacter) {
                     void handleSelectSession(lastSessionForCharacter);
@@ -7921,7 +7997,9 @@
                     aria-live="polite"
                     aria-atomic="true"
                 >
-                    <span class="avatar-subtitle-text"
+                    <span
+                        class="avatar-subtitle-text"
+                        style="font-size: {subtitleFontSize}rem"
                         >{activeAvatarSubtitle}</span
                     >
                 </div>
@@ -8147,6 +8225,7 @@
                     {autoLoadModelsOnStartupEnabled}
                     {showStatEnabled}
                     {showSubtitleEnabled}
+                    {subtitleFontSize}
                     {showAiSubtitleEnabled}
                     {aiSubtitleTargetLanguage}
                     {subtitleTranslationLlmConfigured}
@@ -8169,6 +8248,7 @@
                     onUpdateAutoLoadModelsOnStartup={applyAutoLoadModelsOnStartupPreference}
                     onUpdateShowStat={applyShowStatPreference}
                     onUpdateShowSubtitle={applyShowSubtitlePreference}
+                    onUpdateSubtitleFontSize={applySubtitleFontSizePreference}
                     onUpdateShowAiSubtitle={applyShowAiSubtitlePreference}
                     onUpdateAiSubtitleTargetLanguage={applyAiSubtitleTargetLanguagePreference}
                     onOpenSubtitleTranslationLlmConfig={openSubtitleTranslationLlmConfig}
