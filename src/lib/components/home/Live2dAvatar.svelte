@@ -236,18 +236,22 @@
                 (cubismModel.scale ? 0 : scaledHeight * 0.15));
     }
 
-    function destroyLive2d() {
+    function destroyLive2d(preserveApp = false) {
         resizeObserver?.disconnect();
         resizeObserver = null;
         detachMotionLoopPatch?.();
         detachMotionLoopPatch = null;
-        model = null;
 
-        if (app) {
+        if (model) {
+            model.destroy({ children: true, texture: true, baseTexture: true });
+            model = null;
+        }
+
+        if (app && !preserveApp) {
             app.destroy(false, {
                 children: true,
-                texture: false,
-                baseTexture: false,
+                texture: true,
+                baseTexture: true,
             });
             app = null;
         }
@@ -265,40 +269,42 @@
                 return;
             }
 
-            const nextApp = new PIXI.Application({
-                view: canvasEl,
-                autoStart: true,
-                backgroundAlpha: 0,
-                antialias: true,
-                resolution: window.devicePixelRatio || 1,
-                resizeTo: containerEl,
-            });
+            let nextApp = app;
+            if (!nextApp) {
+                nextApp = new PIXI.Application({
+                    view: canvasEl,
+                    autoStart: true,
+                    backgroundAlpha: 0,
+                    antialias: true,
+                    resolution: window.devicePixelRatio || 1,
+                    resizeTo: containerEl,
+                });
+                app = nextApp;
+            }
 
             if (token !== loadToken) {
-                nextApp.destroy(false, {
-                    children: true,
-                    texture: false,
-                    baseTexture: false,
-                });
                 return;
             }
 
-            app = nextApp;
             const source = await resolveLive2dSource(config);
             const nextModel = await Live2DModel.from(source, {
                 autoInteract: false,
             });
             if (token !== loadToken || !containerEl) {
-                nextModel.destroy();
-                if (app === nextApp) {
-                    nextApp.destroy(false, {
-                        children: true,
-                        texture: false,
-                        baseTexture: false,
-                    });
-                    app = null;
-                }
+                nextModel.destroy({
+                    children: true,
+                    texture: true,
+                    baseTexture: true,
+                });
                 return;
+            }
+
+            if (model) {
+                model.destroy({
+                    children: true,
+                    texture: true,
+                    baseTexture: true,
+                });
             }
 
             model = nextModel;
@@ -388,7 +394,7 @@
         );
 
         if (!containerEl || !canvasEl || !hasSource) {
-            destroyLive2d();
+            destroyLive2d(true);
             return;
         }
 
@@ -399,7 +405,13 @@
 
         return () => {
             ++loadToken;
-            destroyLive2d();
+            destroyLive2d(true);
+        };
+    });
+
+    $effect(() => {
+        return () => {
+            destroyLive2d(false);
         };
     });
 </script>
