@@ -4119,6 +4119,19 @@ async fn set_call_mode(mode: String, state: State<'_, AppState>) -> Result<(), S
 }
 
 #[tauri::command]
+async fn cancel_audio(state: State<'_, AppState>) -> Result<(), String> {
+    let mut buffer = state.audio_buffer.lock().unwrap();
+    buffer.clear();
+    let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
+    pre_buffer.clear();
+    *state.is_speaking.lock().unwrap() = false;
+    *state.silent_chunks_count.lock().unwrap() = 0;
+    *state.speaking_chunks_count.lock().unwrap() = 0;
+    *state.current_utterance_voiced_samples.lock().unwrap() = 0;
+    Ok(())
+}
+
+#[tauri::command]
 async fn commit_audio(state: State<'_, AppState>) -> Result<(), String> {
     *state.commit_audio_requested.lock().unwrap() = true;
     Ok(())
@@ -12916,6 +12929,7 @@ pub fn run() {
             attach_pasted_screen_capture,
             set_call_mode,
             commit_audio,
+            cancel_audio,
             is_main_window_visible_to_user,
             receive_audio_chunk,
             ping,

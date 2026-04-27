@@ -3194,4 +3194,23 @@ main.idle-layout {
     color: rgb(255, 255, 255);
 }
 
+.toast-bubble {
+    position: fixed;
+    bottom: 140px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(28, 28, 30, 0.9);
+    color: white;
+    padding: 10px 22px;
+    border-radius: 999px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    backdrop-filter: blur(14px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    z-index: 1000;
+    pointer-events: none;
+    letter-spacing: -0.01em;
+}
+
 /* Shared styles for the OpenDuck home page and its extracted UI components. */

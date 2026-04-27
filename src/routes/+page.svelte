@@ -467,6 +467,8 @@
     let currentSpokenResponse = $state("");
     let isSavingConversationLogEntryEdit = $state(false);
     let isClearingConversationLogImages = $state(false);
+    let toastMessage = $state<string | null>(null);
+    let toastTimeout: ReturnType<typeof window.setTimeout> | null = null;
 
     const popupActionsBusy = $derived(
         isSavingConversationLogEntryEdit || isClearingConversationLogImages,
@@ -1226,6 +1228,17 @@
 
         callStagePhase = phase;
         callStageMessage = message;
+    }
+
+    function showToast(message: string) {
+        if (toastTimeout) {
+            clearTimeout(toastTimeout);
+        }
+        toastMessage = message;
+        toastTimeout = setTimeout(() => {
+            toastMessage = null;
+            toastTimeout = null;
+        }, 2000);
     }
 
     function formatProcessingAudioLatency(latencyMs: number) {
@@ -4955,6 +4968,14 @@
             return;
         }
 
+        if (isSpacePressed) {
+            event.preventDefault();
+            isSpacePressed = false;
+            void handleCancelPtt();
+            showToast("Cancelled");
+            return;
+        }
+
         if (assistantSpeaking) {
             void handleInterruptTts();
             return;
@@ -6665,6 +6686,28 @@
         } catch (err) {
             console.error("Failed to commit audio:", err);
         }
+    }
+
+    async function handleCancelPtt() {
+        if (!calling) return;
+        micMuted = true;
+        syncCaptureCancel();
+        void invoke("set_call_muted", { muted: true }).catch((err) =>
+            console.error("Failed to sync call muted state", err),
+        );
+        try {
+            await invoke("cancel_audio");
+        } catch (err) {
+            console.error("Failed to cancel audio:", err);
+        }
+    }
+
+    function syncCaptureCancel() {
+        if (!captureProcessor) {
+            return;
+        }
+
+        captureProcessor.port.postMessage({ type: "cancel" });
     }
 
     function toggleMic() {
@@ -8684,12 +8727,16 @@
                         <div class="tooltip-bubble control-tooltip">
                             <span
                                 >{callMode === "push_to_talk"
-                                    ? "Push to Talk"
+                                    ? isSpacePressed
+                                        ? "Press ESC to cancel"
+                                        : "Push to Talk"
                                     : muteButtonLabel}</span
                             >
                             <span class="tooltip-shortcut"
                                 >{callMode === "push_to_talk"
-                                    ? "Space"
+                                    ? isSpacePressed
+                                        ? "ESC"
+                                        : "Space"
                                     : "U"}</span
                             >
                         </div>
@@ -8853,5 +8900,11 @@
 
     {#if showOnboarding}
         <Onboarding onComplete={handleOnboardingComplete} />
+    {/if}
+
+    {#if toastMessage}
+        <div class="toast-bubble" transition:fade={{ duration: 150 }}>
+            {toastMessage}
+        </div>
     {/if}
 </div>

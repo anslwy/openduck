@@ -132,6 +132,12 @@ class AudioProcessor extends AudioWorkletProcessor {
         return;
       }
 
+      if (event.data?.type === "cancel") {
+        this.muted = true;
+        this.postMuteDrainQuantaRemaining = 0;
+        return;
+      }
+
       if (event.data?.type !== "set-end-of-utterance-silence-ms") {
         return;
       }
