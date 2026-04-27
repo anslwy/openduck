@@ -415,6 +415,7 @@ struct AppState {
     speaking_chunks_count: Mutex<usize>,
     current_utterance_voiced_samples: Mutex<usize>,
     is_speaking: Mutex<bool>,
+    commit_audio_requested: Mutex<bool>,
     next_utterance_id: AtomicU64,
     live_transcription: Mutex<LiveTranscriptionState>,
     runtime_setup_lock: AsyncMutex<()>,
@@ -4108,6 +4109,12 @@ fn start_live_transcription_loop(
 }
 
 #[tauri::command]
+async fn commit_audio(state: State<'_, AppState>) -> Result<(), String> {
+    *state.commit_audio_requested.lock().unwrap() = true;
+    Ok(())
+}
+
+#[tauri::command]
 async fn receive_audio_chunk(
     payload: AudioPayload,
     state: State<'_, AppState>,
@@ -4145,6 +4152,15 @@ async fn receive_audio_chunk(
 
     let mut detected_speech = false;
     let mut live_transcription_utterance_id: Option<u64> = None;
+    let force_commit = {
+        let mut requested = state.commit_audio_requested.lock().unwrap();
+        if *requested {
+            *requested = false;
+            true
+        } else {
+            false
+        }
+    };
     {
         let mut silent_count = state.silent_chunks_count.lock().unwrap();
         let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
@@ -4199,7 +4215,7 @@ async fn receive_audio_chunk(
             state.current_utterance_voiced_samples.lock().unwrap();
         let mut is_speaking = state.is_speaking.lock().unwrap();
 
-        if *is_speaking {
+        if force_commit || *is_speaking {
             buffer.extend_from_slice(&prepared_chunk.samples);
 
             let silence_chunks_required = required_silence_chunks(
@@ -4208,7 +4224,7 @@ async fn receive_audio_chunk(
                 configured_silence_ms,
             );
 
-            if *silent_count >= silence_chunks_required {
+            if force_commit || *silent_count >= silence_chunks_required {
                 endpoint_voiced_samples = *current_utterance_voiced_samples;
                 endpoint_audio = Some(std::mem::take(&mut *buffer));
                 {
@@ -4238,6 +4254,10 @@ async fn receive_audio_chunk(
     }
 
     if let Some(endpoint_audio) = endpoint_audio {
+        if endpoint_voiced_samples == 0 {
+            emit_call_stage(&app_handle, "listening", "Listening");
+            return Ok(());
+        }
         info!(
             "Silence detected; endpointing with configured {} ms silence before transcription.",
             configured_silence_ms
@@ -12671,6 +12691,7 @@ pub fn run() {
             speaking_chunks_count: Mutex::new(0),
             current_utterance_voiced_samples: Mutex::new(0),
             is_speaking: Mutex::new(false),
+            commit_audio_requested: Mutex::new(false),
             next_utterance_id: AtomicU64::new(1),
             live_transcription: Mutex::new(LiveTranscriptionState::default()),
             runtime_setup_lock: AsyncMutex::new(()),
@@ -12805,6 +12826,7 @@ pub fn run() {
             clear_pending_screen_capture,
             remove_pending_screen_capture_at,
             attach_pasted_screen_capture,
+            commit_audio,
             is_main_window_visible_to_user,
             receive_audio_chunk,
             ping,

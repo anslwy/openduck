@@ -37,6 +37,7 @@
         AppUpdateStatus,
         AiSubtitleTargetLanguage,
         BuildInfo,
+        CallMode,
     } from "$lib/openduck/types";
     import ShortcutCapture from "./ShortcutCapture.svelte";
 
@@ -54,6 +55,7 @@
         installAvailableUpdate,
         restartToApplyUpdate,
         closeAboutPopup,
+        callMode,
         globalShortcut,
         globalShortcutEntireScreen,
         globalShortcutToggleMute,
@@ -77,6 +79,7 @@
         autoContinueMaxCount,
         llmContextTurnLimit,
         llmImageHistoryLimit,
+        onUpdateCallMode,
         onUpdateGlobalShortcut,
         onUpdateGlobalShortcutEntireScreen,
         onUpdateGlobalShortcutToggleMute,
@@ -111,6 +114,7 @@
         installAvailableUpdate: () => void;
         restartToApplyUpdate: () => void;
         closeAboutPopup: () => void;
+        callMode: CallMode;
         globalShortcut: string;
         globalShortcutEntireScreen: string;
         globalShortcutToggleMute: string;
@@ -134,6 +138,7 @@
         autoContinueMaxCount: number | null;
         llmContextTurnLimit: number | null;
         llmImageHistoryLimit: number | null;
+        onUpdateCallMode: (mode: CallMode) => void;
         onUpdateGlobalShortcut: (shortcut: string) => void;
         onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
         onUpdateGlobalShortcutToggleMute: (shortcut: string) => void;
@@ -482,6 +487,28 @@
 
     const settingsData = $derived([
         {
+            id: "call-mode",
+            type: "select",
+            label: "Mode",
+            detail: callMode === "natural" 
+                ? "The AI listens and responds naturally based on silence detection. Best for hands-free conversations." 
+                : "The AI only listens when you hold Space or the PTT button. Best for noisy environments or precise control.",
+            value: callMode,
+            options: [
+                {
+                    value: "natural",
+                    label: "Natural",
+                    detail: "The AI listens and responds naturally based on silence detection. Best for hands-free conversations.",
+                },
+                {
+                    value: "push_to_talk",
+                    label: "Push to talk",
+                    detail: "The AI only listens when you hold Space or the PTT button. Best for noisy environments or precise control.",
+                },
+            ],
+            onUpdate: (val: string) => onUpdateCallMode(val as CallMode),
+        },
+        {
             id: "pop-sound",
             type: "toggle",
             label: "Enable Pop Sound (Screenshots / Processing Audio / Finished Response)",
@@ -550,32 +577,32 @@
             label: "AI Subtitle Translation",
             value: aiSubtitleTargetLanguage,
             options: [
-                { value: "none", label: "Do Not Translate" },
-                { value: "ar", label: "Arabic" },
-                { value: "bn", label: "Bengali" },
-                { value: "zh", label: "Chinese (Simplified)" },
-                { value: "tw", label: "Chinese (Traditional)" },
-                { value: "en", label: "English" },
-                { value: "fr", label: "French" },
-                { value: "de", label: "German" },
-                { value: "gu", label: "Gujarati" },
-                { value: "hi", label: "Hindi" },
-                { value: "id", label: "Indonesian" },
-                { value: "it", label: "Italian" },
-                { value: "jp", label: "Japanese" },
-                { value: "ko", label: "Korean" },
-                { value: "mr", label: "Marathi" },
-                { value: "fa", label: "Persian" },
-                { value: "pt", label: "Portuguese" },
-                { value: "pa", label: "Punjabi" },
-                { value: "ru", label: "Russian" },
-                { value: "es", label: "Spanish" },
-                { value: "ta", label: "Tamil" },
-                { value: "te", label: "Telugu" },
-                { value: "th", label: "Thai" },
-                { value: "tr", label: "Turkish" },
-                { value: "ur", label: "Urdu" },
-                { value: "vi", label: "Vietnamese" },
+                { value: "none", label: "Do Not Translate", detail: undefined },
+                { value: "ar", label: "Arabic", detail: undefined },
+                { value: "bn", label: "Bengali", detail: undefined },
+                { value: "zh", label: "Chinese (Simplified)", detail: undefined },
+                { value: "tw", label: "Chinese (Traditional)", detail: undefined },
+                { value: "en", label: "English", detail: undefined },
+                { value: "fr", label: "French", detail: undefined },
+                { value: "de", label: "German", detail: undefined },
+                { value: "gu", label: "Gujarati", detail: undefined },
+                { value: "hi", label: "Hindi", detail: undefined },
+                { value: "id", label: "Indonesian", detail: undefined },
+                { value: "it", label: "Italian", detail: undefined },
+                { value: "jp", label: "Japanese", detail: undefined },
+                { value: "ko", label: "Korean", detail: undefined },
+                { value: "mr", label: "Marathi", detail: undefined },
+                { value: "fa", label: "Persian", detail: undefined },
+                { value: "pt", label: "Portuguese", detail: undefined },
+                { value: "pa", label: "Punjabi", detail: undefined },
+                { value: "ru", label: "Russian", detail: undefined },
+                { value: "es", label: "Spanish", detail: undefined },
+                { value: "ta", label: "Tamil", detail: undefined },
+                { value: "te", label: "Telugu", detail: undefined },
+                { value: "th", label: "Thai", detail: undefined },
+                { value: "tr", label: "Turkish", detail: undefined },
+                { value: "ur", label: "Urdu", detail: undefined },
+                { value: "vi", label: "Vietnamese", detail: undefined },
             ],
             actionLabel: subtitleTranslationLlmConfigured
                 ? "Edit translation LLM"
@@ -627,6 +654,7 @@
             minLabel: minimumEndOfUtteranceSilenceLabel,
             maxLabel: maximumEndOfUtteranceSilenceLabel,
             onUpdate: onUpdateEndOfUtteranceSilenceMs,
+            hidden: callMode === "push_to_talk",
         },
         {
             id: "auto-continue",
@@ -647,6 +675,7 @@
                         ? DEFAULT_AUTO_CONTINUE_SILENCE_MS
                         : val,
                 ),
+            hidden: callMode === "push_to_talk",
         },
         {
             id: "max-continues",
@@ -676,6 +705,7 @@
                               Math.max(MIN_AUTO_CONTINUE_MAX_COUNT, val),
                           ),
                 ),
+            hidden: callMode === "push_to_talk",
         },
         {
             id: "context-turns",
@@ -773,7 +803,9 @@
     ]);
 
     const filteredSettings = $derived(
-        settingsData.filter((s) => matchesSearch(s.label, s.detail)),
+        settingsData.filter(
+            (s) => matchesSearch(s.label, s.detail) && !s.hidden,
+        ),
     );
 
     const hasMatches = $derived(filteredSettings.length > 0);
@@ -905,13 +937,21 @@
                 {#each filteredSettings as setting (setting.id)}
                     {#if setting.type === "toggle"}
                         <div class="about-metadata-row">
-                            <span class="about-metadata-label"
-                                >{setting.label}</span
-                            >
+                            <div class="about-slider-header">
+                                <span class="about-metadata-label"
+                                    >{setting.label}</span
+                                >
+                                {#if setting.detail}
+                                    <span class="about-slider-detail"
+                                        >{setting.detail}</span
+                                    >
+                                {/if}
+                            </div>
                             <button
                                 type="button"
                                 class="quantize-toggle"
                                 class:active={setting.value}
+                                title={setting.detail}
                                 onclick={() => setting.onUpdate(!setting.value)}
                             >
                                 <span class="quantize-dot"></span>
@@ -996,31 +1036,48 @@
                             </div>
                         </div>
                     {:else if setting.type === "select"}
-                        <div class="about-metadata-row">
-                            <span class="about-metadata-label"
-                                >{setting.label}</span
-                            >
-                            <div class="about-select-row">
-                                <div
-                                    class="about-select-control"
-                                    class:active={setting.value !== "none"}
+                        <div class="about-metadata-row select-row">
+                            <div class="about-slider-header">
+                                <span class="about-metadata-label"
+                                    >{setting.label}</span
                                 >
-                                    <select
-                                        class="about-select"
-                                        value={setting.value}
-                                        onchange={(event) =>
-                                            setting.onUpdate(
-                                                (
-                                                    event.currentTarget as HTMLSelectElement
-                                                ).value,
-                                            )}
+                                {#if setting.detail}
+                                    <span class="about-slider-detail"
+                                        >{setting.detail}</span
                                     >
-                                        {#each setting.options as option}
-                                            <option value={option.value}
-                                                >{option.label}</option
-                                            >
-                                        {/each}
-                                    </select>
+                                {/if}
+                            </div>
+                            <div class="about-select-row">
+                                <div class="tooltip-shell about-select-tooltip-shell">
+                                    <div
+                                        class="about-select-control"
+                                        class:active={setting.value !== "none"}
+                                    >
+                                        <select
+                                            class="about-select"
+                                            value={setting.value}
+                                            onchange={(event) =>
+                                                setting.onUpdate(
+                                                    (
+                                                        event.currentTarget as HTMLSelectElement
+                                                    ).value,
+                                                )}
+                                        >
+                                            {#each setting.options as option}
+                                                <option
+                                                    value={option.value}
+                                                    title={option.detail ||
+                                                        setting.detail}
+                                                    >{option.label}</option
+                                                >
+                                            {/each}
+                                        </select>
+                                    </div>
+                                    {#if setting.detail}
+                                        <div class="tooltip-bubble">
+                                            {setting.detail}
+                                        </div>
+                                    {/if}
                                 </div>
                                 {#if setting.onAction}
                                     <button
@@ -1538,6 +1595,11 @@
         outline: none;
         border-color: rgba(255, 205, 64, 0.3);
         box-shadow: 0 0 0 4px rgba(255, 205, 64, 0.06);
+    }
+
+    .about-select-tooltip-shell {
+        position: relative;
+        width: 100%;
     }
 
     @media (max-width: 720px) {

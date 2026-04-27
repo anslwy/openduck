@@ -1,5 +1,6 @@
 // Shared static configuration for contacts, model defaults, and selectable presets on the home page.
 import type {
+  CallMode,
   CsmModelVariant,
   GemmaVariant,
   KokoroLanguage,
@@ -49,6 +50,7 @@ export const LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY =
   "openduck.llm-context-turn-limit.v1";
 export const LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY =
   "openduck.llm-image-history-limit.v1";
+export const CALL_MODE_STORAGE_KEY = "openduck.call-mode.v1";
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
 export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY =
   "openduck.global-shortcut-entire.v1";
@@ -56,6 +58,7 @@ export const GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY =
   "openduck.global-shortcut-toggle-mute.v1";
 export const GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY =
   "openduck.global-shortcut-interrupt.v1";
+export const DEFAULT_CALL_MODE: CallMode = "natural";
 export const DEFAULT_GEMMA_VARIANT: GemmaVariant = "e4b";
 
 export const DEFAULT_CSM_MODEL: CsmModelVariant = "kokoro_82m";

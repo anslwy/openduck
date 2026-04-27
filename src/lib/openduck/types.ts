@@ -298,6 +298,8 @@ export type AppUpdateInfo = {
     releaseNotesUrl?: string | null;
 };
 
+export type CallMode = "natural" | "push_to_talk";
+
 export type StoredModelPreferences = {
     version: 1;
     gemmaVariant: GemmaVariant;

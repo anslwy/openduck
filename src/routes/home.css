@@ -2035,6 +2035,12 @@ main.idle-layout {
     background: #ff453a;
 }
 
+.icon-btn.ptt-btn.active {
+    background: #34c759;
+    color: #ffffff;
+    transform: scale(1.05);
+}
+
 .icon-btn:disabled {
     cursor: not-allowed;
     opacity: 0.46;

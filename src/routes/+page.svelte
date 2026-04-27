@@ -92,11 +92,13 @@
         SUBTITLE_FONT_SIZE_STORAGE_KEY,
         SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
         AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
+        CALL_MODE_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
         GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
         GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY,
         GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY,
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
+        DEFAULT_CALL_MODE,
         DEFAULT_SHOW_AI_SUBTITLE,
         DEFAULT_KEEP_SCREEN_ON,
         DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE,
@@ -131,6 +133,7 @@
         AssistantResponseEvent,
         AssistantTranslationsEvent,
         BuildInfo,
+        CallMode,
         CallStageEvent,
         CallStagePhase,
         ContactGender,
@@ -267,7 +270,9 @@
     };
 
     let calling = $state(false);
+    let callMode = $state<CallMode>(DEFAULT_CALL_MODE);
     let micMuted = $state(false);
+    let isSpacePressed = $state(false);
     let time = $state(0);
     let callStartedAtMs = $state<number | null>(null);
     let isGemmaDownloaded = $state(false);
@@ -1507,7 +1512,7 @@
             autoUnmuteOnPastedScreenshotEnabled &&
             micMuted
         ) {
-            setMicMuted(false);
+        setMicMuted(callMode === "push_to_talk");
         }
     }
 
@@ -2468,6 +2473,53 @@
     function applyAutoUnmuteOnPastedScreenshotPreference(enabled: boolean) {
         autoUnmuteOnPastedScreenshotEnabled = enabled;
         persistAutoUnmuteOnPastedScreenshotPreference(enabled);
+    }
+
+    function applyCallModePreference(mode: CallMode) {
+        callMode = mode;
+        if (calling) {
+            setMicMuted(mode === "push_to_talk");
+        }
+        if (typeof window !== "undefined") {
+            window.localStorage.setItem(
+                CALL_MODE_STORAGE_KEY,
+                JSON.stringify({ version: 1, mode }),
+            );
+        }
+    }
+
+    function loadCallModePreferenceFromStorage(): CallMode {
+        if (typeof window === "undefined") {
+            return DEFAULT_CALL_MODE;
+        }
+
+        const rawPayload = window.localStorage.getItem(CALL_MODE_STORAGE_KEY);
+        if (!rawPayload) {
+            return DEFAULT_CALL_MODE;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                mode?: unknown;
+            };
+            if (
+                parsed.version !== 1 ||
+                (parsed.mode !== "natural" && parsed.mode !== "push_to_talk")
+            ) {
+                return DEFAULT_CALL_MODE;
+            }
+
+            return parsed.mode as CallMode;
+        } catch (err) {
+            console.error("Failed to restore call mode preference:", err);
+            return DEFAULT_CALL_MODE;
+        }
+    }
+
+    async function initializeCallModePreference() {
+        const storedMode = loadCallModePreferenceFromStorage();
+        callMode = storedMode;
     }
 
     function applyAutoCheckAppUpdatesPreference(enabled: boolean) {
@@ -6412,6 +6464,7 @@
         showSessionsPopup = false;
         resetConversationLog();
         resetScreenCaptureStatus();
+        setMicMuted(callMode === "push_to_talk");
         calling = true;
         syncKeepAwakeState();
         activeExpression = null;
@@ -6464,6 +6517,7 @@
         closeConversationPopup();
         showSessionsPopup = false;
         resetScreenCaptureStatus();
+        setMicMuted(callMode === "push_to_talk");
         calling = true;
         syncKeepAwakeState();
         activeExpression = null;
@@ -6551,7 +6605,28 @@
         );
     }
 
+    async function handleStartPtt() {
+        if (!calling) return;
+        if (assistantSpeaking) {
+            void handleInterruptTts();
+        }
+        setMicMuted(false);
+    }
+
+    async function handleStopPtt() {
+        if (!calling) return;
+        setMicMuted(true);
+        try {
+            await invoke("commit_audio");
+        } catch (err) {
+            console.error("Failed to commit audio:", err);
+        }
+    }
+
     function toggleMic() {
+        if (callMode === "push_to_talk") {
+            return;
+        }
         setMicMuted(!micMuted);
     }
 
@@ -7014,6 +7089,37 @@
     }
 
     onMount(() => {
+        window.addEventListener("keyup", (event) => {
+            if (event.code === "Space") {
+                if (callMode === "push_to_talk" && calling) {
+                    event.preventDefault();
+                    if (isSpacePressed) {
+                        isSpacePressed = false;
+                        handleStopPtt();
+                    }
+                }
+            }
+        });
+        window.addEventListener("keydown", (event) => {
+            if (event.code === "Space") {
+                if (callMode === "push_to_talk" && calling) {
+                    const target = event.target as HTMLElement;
+                    if (
+                        target.tagName === "INPUT" ||
+                        target.tagName === "TEXTAREA" ||
+                        target.isContentEditable
+                    ) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    if (!isSpacePressed) {
+                        isSpacePressed = true;
+                        handleStartPtt();
+                    }
+                }
+            }
+        });
         window.addEventListener("visibilitychange", () => {
             windowVisible = document.visibilityState === "visible";
             syncKeepAwakeState();
@@ -7488,6 +7594,7 @@
             }
 
             await loadBuildInfo();
+            await initializeCallModePreference();
             await initializeAppUpdatePreference();
             const restoredContacts = await loadContactsFromStorage();
             contacts = restoredContacts.contacts;
@@ -8213,6 +8320,7 @@
                     installAvailableUpdate={installAppUpdate}
                     {restartToApplyUpdate}
                     {closeAboutPopup}
+                    {callMode}
                     {globalShortcut}
                     {globalShortcutEntireScreen}
                     {globalShortcutToggleMute}
@@ -8236,6 +8344,7 @@
                     {autoContinueMaxCount}
                     {llmContextTurnLimit}
                     {llmImageHistoryLimit}
+                    onUpdateCallMode={applyCallModePreference}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
                     onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
                     onUpdateGlobalShortcutToggleMute={applyGlobalShortcutToggleMutePreference}
@@ -8419,44 +8528,25 @@
                         </div>
                     </div>
                     <div class="tooltip-shell control-tooltip-shell">
-                        <button
-                            class="icon-btn mute-btn"
-                            class:active={!micMuted}
-                            class:muted={micMuted}
-                            type="button"
-                            onclick={toggleMic}
-                            aria-label={muteButtonLabel}
-                            aria-keyshortcuts="u"
-                            title={muteButtonTitle}
-                        >
-                            {#if micMuted}
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    width="22"
-                                    height="22"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2.5"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    ><line x1="1" y1="1" x2="23" y2="23" /><path
-                                        d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"
-                                    /><path
-                                        d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"
-                                    /><line
-                                        x1="12"
-                                        y1="19"
-                                        x2="12"
-                                        y2="23"
-                                    /><line
-                                        x1="8"
-                                        y1="23"
-                                        x2="16"
-                                        y2="23"
-                                    /></svg
-                                >
-                            {:else}
+                        {#if callMode === "push_to_talk"}
+                            <button
+                                class="icon-btn ptt-btn"
+                                class:active={!micMuted || isSpacePressed}
+                                type="button"
+                                onmousedown={handleStartPtt}
+                                onmouseup={handleStopPtt}
+                                onmouseleave={handleStopPtt}
+                                ontouchstart={(e) => {
+                                    e.preventDefault();
+                                    handleStartPtt();
+                                }}
+                                ontouchend={(e) => {
+                                    e.preventDefault();
+                                    handleStopPtt();
+                                }}
+                                aria-label="Push to Talk"
+                                title="Push to Talk (Space)"
+                            >
                                 <svg
                                     xmlns="http://www.w3.org/2000/svg"
                                     width="22"
@@ -8468,26 +8558,91 @@
                                     stroke-linecap="round"
                                     stroke-linejoin="round"
                                     ><path
-                                        d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"
-                                    /><path
-                                        d="M19 10v2a7 7 0 0 1-14 0v-2"
-                                    /><line
-                                        x1="12"
-                                        y1="19"
-                                        x2="12"
-                                        y2="23"
-                                    /><line
-                                        x1="8"
-                                        y1="23"
-                                        x2="16"
-                                        y2="23"
-                                    /></svg
+                                        d="M18 6a3 3 0 0 0-3-3H9a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V6Z"
+                                    /><path d="M10 9h4" /><path
+                                        d="M10 12h4"
+                                    /><path d="M12 3V1" /></svg
                                 >
-                            {/if}
-                        </button>
+                            </button>
+                        {:else}
+                            <button
+                                class="icon-btn mute-btn"
+                                class:active={!micMuted}
+                                class:muted={micMuted}
+                                type="button"
+                                onclick={toggleMic}
+                                aria-label={muteButtonLabel}
+                                aria-keyshortcuts="u"
+                                title={muteButtonTitle}
+                            >
+                                {#if micMuted}
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        width="22"
+                                        height="22"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2.5"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        ><line x1="1" y1="1" x2="23" y2="23" /><path
+                                            d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"
+                                        /><path
+                                            d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"
+                                        /><line
+                                            x1="12"
+                                            y1="19"
+                                            x2="12"
+                                            y2="23"
+                                        /><line
+                                            x1="8"
+                                            y1="23"
+                                            x2="16"
+                                            y2="23"
+                                        /></svg
+                                    >
+                                {:else}
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        width="22"
+                                        height="22"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2.5"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        ><path
+                                            d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"
+                                        /><path
+                                            d="M19 10v2a7 7 0 0 1-14 0v-2"
+                                        /><line
+                                            x1="12"
+                                            y1="19"
+                                            x2="12"
+                                            y2="23"
+                                        /><line
+                                            x1="8"
+                                            y1="23"
+                                            x2="16"
+                                            y2="23"
+                                        /></svg
+                                    >
+                                {/if}
+                            </button>
+                        {/if}
                         <div class="tooltip-bubble control-tooltip">
-                            <span>{muteButtonLabel}</span>
-                            <span class="tooltip-shortcut">U</span>
+                            <span
+                                >{callMode === "push_to_talk"
+                                    ? "Push to Talk"
+                                    : muteButtonLabel}</span
+                            >
+                            <span class="tooltip-shortcut"
+                                >{callMode === "push_to_talk"
+                                    ? "Space"
+                                    : "U"}</span
+                            >
                         </div>
                     </div>
                     <div class="tooltip-shell control-tooltip-shell">
