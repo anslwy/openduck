@@ -2488,6 +2488,9 @@
 
     function applyCallModePreference(mode: CallMode) {
         callMode = mode;
+        void invoke("set_call_mode", { mode }).catch((err) => {
+            console.error("Failed to sync call mode:", err);
+        });
         if (calling) {
             setMicMuted(mode === "push_to_talk");
         }
@@ -2531,6 +2534,9 @@
     async function initializeCallModePreference() {
         const storedMode = loadCallModePreferenceFromStorage();
         callMode = storedMode;
+        void invoke("set_call_mode", { mode: storedMode }).catch((err) => {
+            console.error("Failed to initialize call mode:", err);
+        });
     }
 
     function applyAutoCheckAppUpdatesPreference(enabled: boolean) {

@@ -481,6 +481,7 @@ struct AppState {
     tray_pong_playback_enabled: Mutex<bool>,
     tray_pong_playback_hydrated: Mutex<bool>,
     tray_pong_playback_modified_before_hydration: Mutex<bool>,
+    call_mode: Mutex<String>,
     sleep_assertion_child: Mutex<Option<Child>>,
     end_of_utterance_silence_ms: Mutex<u32>,
     auto_continue_silence_ms: Mutex<Option<u32>>,
@@ -4112,6 +4113,12 @@ fn start_live_transcription_loop(
 }
 
 #[tauri::command]
+async fn set_call_mode(mode: String, state: State<'_, AppState>) -> Result<(), String> {
+    *state.call_mode.lock().unwrap() = mode;
+    Ok(())
+}
+
+#[tauri::command]
 async fn commit_audio(state: State<'_, AppState>) -> Result<(), String> {
     *state.commit_audio_requested.lock().unwrap() = true;
     Ok(())
@@ -4227,7 +4234,8 @@ async fn receive_audio_chunk(
                 configured_silence_ms,
             );
 
-            if force_commit || *silent_count >= silence_chunks_required {
+            let is_ptt = *state.call_mode.lock().unwrap() == "push_to_talk";
+            if force_commit || (!is_ptt && *silent_count >= silence_chunks_required) {
                 endpoint_voiced_samples = *current_utterance_voiced_samples;
                 endpoint_audio = Some(std::mem::take(&mut *buffer));
                 {
@@ -12833,6 +12841,7 @@ pub fn run() {
             tray_pong_playback_enabled: Mutex::new(true),
             tray_pong_playback_hydrated: Mutex::new(false),
             tray_pong_playback_modified_before_hydration: Mutex::new(false),
+            call_mode: Mutex::new("natural".to_string()),
             sleep_assertion_child: Mutex::new(None),
             end_of_utterance_silence_ms: Mutex::new(END_OF_UTTERANCE_SILENCE_MS),
             auto_continue_silence_ms: Mutex::new(DEFAULT_AUTO_CONTINUE_SILENCE_MS),
@@ -12905,6 +12914,7 @@ pub fn run() {
             clear_pending_screen_capture,
             remove_pending_screen_capture_at,
             attach_pasted_screen_capture,
+            set_call_mode,
             commit_audio,
             is_main_window_visible_to_user,
             receive_audio_chunk,
