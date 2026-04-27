@@ -1,6 +1,7 @@
 <!-- Contacts management modal for selecting, editing, importing, and exporting voice personas. -->
 <script lang="ts">
     import type { ContactProfile } from "$lib/openduck/types";
+    import ConfirmDialog from "../ui/ConfirmDialog.svelte";
 
     let {
         contacts,
@@ -72,6 +73,7 @@
     let emotionMapError = $state<string | null>(null);
     let lastSelectedContactId = $state<string | null>(null);
     let validationTimeout: ReturnType<typeof setTimeout> | null = null;
+    let showDeleteConfirm = $state(false);
 
     $effect(() => {
         if (selectedContact?.id !== lastSelectedContactId) {
@@ -516,7 +518,7 @@
                     type="button"
                     class="utility-btn"
                     disabled={contacts.length === 1}
-                    onclick={handleDeleteSelectedContact}
+                    onclick={() => (showDeleteConfirm = true)}
                 >
                     Delete
                 </button>
@@ -530,4 +532,16 @@
             </div>
         </div>
     </div>
+
+    {#if showDeleteConfirm}
+        <ConfirmDialog
+            title="Delete character?"
+            message="This action cannot be undone. Do you wish to continue?"
+            onConfirm={async () => {
+                await handleDeleteSelectedContact();
+                showDeleteConfirm = false;
+            }}
+            onCancel={() => (showDeleteConfirm = false)}
+        />
+    {/if}
 </div>
