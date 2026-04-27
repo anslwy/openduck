@@ -224,6 +224,8 @@ struct ActiveGeneration {
     id: u64,
     handle: tauri::async_runtime::JoinHandle<()>,
     cancellation_token: Arc<AtomicBool>,
+    user_text: Option<String>,
+    image_paths: Vec<PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -500,6 +502,7 @@ struct AppState {
     subtitle_translation_base_url: Mutex<String>,
     subtitle_translation_api_key: Mutex<Option<String>>,
     subtitle_translation_model_id: Mutex<String>,
+    interrupted_user_text: Mutex<Option<String>>,
     global_shortcut_look_at_screen_region: Mutex<String>,
     global_shortcut_look_at_screen_region_hydrated: Mutex<bool>,
     global_shortcut_look_at_screen_region_modified_before_hydration: Mutex<bool>,
@@ -4574,15 +4577,26 @@ fn start_response_generation(
     generation_id: u64,
     conversation_session_id: u64,
     gemma_model: String,
-    user_text: String,
+    mut user_text: String,
     latest_audio_wav_base64: Option<String>,
     latest_image_paths: Vec<PathBuf>,
 ) {
     cancel_auto_continue_timer(app_handle.state::<AppState>().inner());
 
+    let state = app_handle.state::<AppState>();
+    {
+        let mut interrupted_guard = state.interrupted_user_text.lock().unwrap();
+        if let Some(interrupted_text) = interrupted_guard.take() {
+            info!("Prepending interrupted text: {}", interrupted_text);
+            user_text = format!("{} {}", interrupted_text, user_text);
+        }
+    }
+
     let app_handle_for_task = app_handle.clone();
+    let latest_image_paths_for_active_gen = latest_image_paths.clone();
     let cancellation_token = Arc::new(AtomicBool::new(false));
     let cancellation_token_for_task = cancellation_token.clone();
+    let user_text_for_task = user_text.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let latest_image_files: Vec<TempImageFile> = latest_image_paths
             .into_iter()
@@ -4593,7 +4607,7 @@ fn start_response_generation(
             server_port,
             &gemma_model,
             ResponseGenerationMode::LatestUserTurn {
-                user_text: user_text.clone(),
+                user_text: user_text_for_task.clone(),
                 latest_audio_wav_base64: latest_audio_wav_base64.clone(),
                 latest_image_paths: latest_image_files
                     .iter()
@@ -4623,7 +4637,7 @@ fn start_response_generation(
                 let (user_entry_id, assistant_entry_id) = append_conversation_turn_with_save(
                     &app_handle_for_task,
                     app_handle_for_task.state::<AppState>().inner(),
-                    user_text.clone(),
+                    user_text_for_task.clone(),
                     response_text.clone(),
                     persisted_image_paths,
                     translations,
@@ -4642,7 +4656,7 @@ fn start_response_generation(
                         request_id: response_id,
                         user_entry_id,
                         assistant_entry_id,
-                        user_text,
+                        user_text: user_text_for_task,
                         assistant_text: response_text,
                         session_id,
                         session_title,
@@ -4670,7 +4684,10 @@ fn start_response_generation(
         generation_id,
         handle,
         cancellation_token,
+        Some(user_text),
+        latest_image_paths_for_active_gen,
     ) {
+
         warn!(
             "Skipping response generation {} because a newer generation is already active",
             generation_id
@@ -4805,6 +4822,8 @@ fn start_assistant_auto_continue_generation(
         generation_id,
         handle,
         cancellation_token,
+        None,
+        Vec::new(),
     ) {
         warn!(
             "Skipping assistant auto-continue {} because a newer generation is already active",
@@ -9092,19 +9111,72 @@ fn send_ready_signal(
 }
 
 async fn interrupt_active_generation(app_handle: &tauri::AppHandle) {
-    cancel_active_generation(app_handle, true).await;
+    let (interrupted_text, interrupted_image_paths) = cancel_active_generation(app_handle, false).await;
+    if let Some(text) = interrupted_text {
+        let filler = "[thinking]";
+        info!("Recording interruption: {}", filler);
+
+        // Append to history immediately with the filler response
+        let state = app_handle.state::<AppState>();
+        let (user_entry_id, assistant_entry_id) = append_conversation_turn_with_save(
+            app_handle,
+            state.inner(),
+            text.clone(),
+            filler.to_string(),
+            interrupted_image_paths,
+            HashMap::new(),
+        );
+
+        let (session_id, session_title) = {
+            let id_guard = state.current_session_id.lock().unwrap();
+            let title_guard = state.current_session_title.lock().unwrap();
+            (id_guard.clone().unwrap_or_default(), title_guard.clone())
+        };
+
+        emit_assistant_response(
+            app_handle,
+            AssistantResponseEvent {
+                request_id: 0, // Placeholder
+                text: filler.to_string(),
+                reasoning_text: String::new(),
+                is_final: true,
+                append_to_assistant_entry_id: None,
+                translations: HashMap::new(),
+            },
+        );
+
+        emit_conversation_context_committed(
+            app_handle,
+            ConversationContextCommittedEvent {
+                request_id: 0, // Placeholder
+                user_entry_id,
+                assistant_entry_id,
+                user_text: text,
+                assistant_text: filler.to_string(),
+                session_id,
+                session_title,
+            },
+        );
+    }
 }
 
-async fn cancel_active_generation(app_handle: &tauri::AppHandle, stop_csm_worker: bool) {
+async fn cancel_active_generation(
+    app_handle: &tauri::AppHandle,
+    stop_csm_worker: bool,
+) -> (Option<String>, Vec<PathBuf>) {
     let state = app_handle.state::<AppState>();
     let active_generation = {
         let mut active_generation_guard = state.active_generation.lock().unwrap();
         active_generation_guard.take()
     };
     let had_active_generation = active_generation.is_some();
+    let mut interrupted_user_text = None;
+    let mut interrupted_image_paths = Vec::new();
 
     if let Some(active_generation) = active_generation {
         info!("Interrupting active generation {}", active_generation.id);
+        interrupted_user_text = active_generation.user_text;
+        interrupted_image_paths = active_generation.image_paths;
         active_generation
             .cancellation_token
             .store(true, Ordering::Relaxed);
@@ -9141,6 +9213,8 @@ async fn cancel_active_generation(app_handle: &tauri::AppHandle, stop_csm_worker
             err
         );
     }
+
+    (interrupted_user_text, interrupted_image_paths)
 }
 
 fn clear_active_generation_if_matches(app_handle: &tauri::AppHandle, generation_id: u64) {
@@ -9314,6 +9388,8 @@ fn register_active_generation_if_newer(
     generation_id: u64,
     handle: tauri::async_runtime::JoinHandle<()>,
     cancellation_token: Arc<AtomicBool>,
+    user_text: Option<String>,
+    image_paths: Vec<PathBuf>,
 ) -> bool {
     let mut active_generation_guard = state.active_generation.lock().unwrap();
 
@@ -9337,6 +9413,8 @@ fn register_active_generation_if_newer(
         id: generation_id,
         handle,
         cancellation_token,
+        user_text,
+        image_paths,
     });
     true
 }
@@ -12798,6 +12876,7 @@ pub fn run() {
             subtitle_translation_model_id: Mutex::new(
                 persisted_config.subtitle_translation_llm.model_id.clone(),
             ),
+            interrupted_user_text: Mutex::new(None),
             global_shortcut_look_at_screen_region: Mutex::new("Command+Shift+L".to_string()),
             global_shortcut_look_at_screen_region_hydrated: Mutex::new(false),
             global_shortcut_look_at_screen_region_modified_before_hydration: Mutex::new(false),
