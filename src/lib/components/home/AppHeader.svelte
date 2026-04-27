@@ -1,16 +1,22 @@
 <script lang="ts">
-    let { currentSessionTitle, showSessionsPopup, calling, onToggleSessions } =
-        $props<{
-            currentSessionTitle: string | null;
-            showSessionsPopup: boolean;
-            calling: boolean;
-            onToggleSessions: () => void;
-        }>();
+    let {
+        currentSessionTitle,
+        showSessionsPopup,
+        calling,
+        onboarding,
+        onToggleSessions,
+    } = $props<{
+        currentSessionTitle: string | null;
+        showSessionsPopup: boolean;
+        calling: boolean;
+        onboarding?: boolean;
+        onToggleSessions: () => void;
+    }>();
 </script>
 
 <header class="app-header">
     <div class="header-left">
-        {#if !calling}
+        {#if !calling && !onboarding}
             <button
                 class="sessions-dropdown-btn"
                 class:active={showSessionsPopup}

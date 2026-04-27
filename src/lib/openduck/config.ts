@@ -51,6 +51,7 @@ export const LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY =
 export const LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY =
   "openduck.llm-image-history-limit.v1";
 export const CALL_MODE_STORAGE_KEY = "openduck.call-mode.v1";
+export const ONBOARDING_SEEN_STORAGE_KEY = "seenOnboarding";
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
 export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY =
   "openduck.global-shortcut-entire.v1";

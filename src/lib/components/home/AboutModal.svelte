@@ -490,9 +490,10 @@
             id: "call-mode",
             type: "select",
             label: "Mode",
-            detail: callMode === "natural" 
-                ? "The AI listens and responds naturally based on silence detection. Best for hands-free conversations." 
-                : "The AI only listens when you hold Space or the PTT button. Best for noisy environments or precise control.",
+            detail:
+                callMode === "natural"
+                    ? "The AI listens and responds naturally based on silence detection. Best for hands-free conversations."
+                    : "The AI only listens when you hold Space or the PTT button. Best for noisy environments or precise control.",
             value: callMode,
             options: [
                 {
@@ -580,8 +581,16 @@
                 { value: "none", label: "Do Not Translate", detail: undefined },
                 { value: "ar", label: "Arabic", detail: undefined },
                 { value: "bn", label: "Bengali", detail: undefined },
-                { value: "zh", label: "Chinese (Simplified)", detail: undefined },
-                { value: "tw", label: "Chinese (Traditional)", detail: undefined },
+                {
+                    value: "zh",
+                    label: "Chinese (Simplified)",
+                    detail: undefined,
+                },
+                {
+                    value: "tw",
+                    label: "Chinese (Traditional)",
+                    detail: undefined,
+                },
                 { value: "en", label: "English", detail: undefined },
                 { value: "fr", label: "French", detail: undefined },
                 { value: "de", label: "German", detail: undefined },
@@ -1048,7 +1057,9 @@
                                 {/if}
                             </div>
                             <div class="about-select-row">
-                                <div class="tooltip-shell about-select-tooltip-shell">
+                                <div
+                                    class="tooltip-shell about-select-tooltip-shell"
+                                >
                                     <div
                                         class="about-select-control"
                                         class:active={setting.value !== "none"}
@@ -1073,11 +1084,6 @@
                                             {/each}
                                         </select>
                                     </div>
-                                    {#if setting.detail}
-                                        <div class="tooltip-bubble">
-                                            {setting.detail}
-                                        </div>
-                                    {/if}
                                 </div>
                                 {#if setting.onAction}
                                     <button

@@ -24,6 +24,7 @@
     import SpeechBanner from "$lib/components/home/SpeechBanner.svelte";
     import SttBanner from "$lib/components/home/SttBanner.svelte";
     import Live2dAvatar from "$lib/components/home/Live2dAvatar.svelte";
+    import Onboarding from "$lib/components/home/Onboarding.svelte";
     import {
         createImportedContactFromRawText,
         createContactId,
@@ -97,6 +98,7 @@
         GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
         GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY,
         GLOBAL_SHORTCUT_INTERRUPT_STORAGE_KEY,
+        ONBOARDING_SEEN_STORAGE_KEY,
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,
         DEFAULT_CALL_MODE,
         DEFAULT_SHOW_AI_SUBTITLE,
@@ -269,6 +271,7 @@
         html_url?: unknown;
     };
 
+    const initialPrefs = loadModelPreferencesFromStorage();
     let calling = $state(false);
     let callMode = $state<CallMode>(DEFAULT_CALL_MODE);
     let micMuted = $state(false);
@@ -281,12 +284,12 @@
     let isLmStudioSupported = $state(false);
     let isOpenAiCompatibleSupported = $state(false);
     let ollamaModels = $state<string[]>([]);
-    let selectedOllamaModel = $state<string>("");
+    let selectedOllamaModel = $state<string>(initialPrefs.ollamaModel);
     let lmStudioModels = $state<string[]>([]);
-    let selectedLmStudioModel = $state<string>(DEFAULT_LMSTUDIO_MODEL);
+    let selectedLmStudioModel = $state<string>(initialPrefs.lmstudioModel);
     let openAiCompatibleModels = $state<string[]>([]);
     let selectedOpenAiCompatibleModel = $state<string>(
-        DEFAULT_OPENAI_COMPATIBLE_MODEL,
+        initialPrefs.openaiCompatibleModel,
     );
     let isCsmDownloaded = $state(false);
     let isCsmLoaded = $state(false);
@@ -313,13 +316,20 @@
     let gemmaDownloadProgress = $state<number | null>(null);
     let gemmaDownloadIndeterminate = $state(true);
     let gemmaDownloadError = $state<string | null>(null);
-    let selectedGemmaVariant = $state<GemmaVariant>(DEFAULT_GEMMA_VARIANT);
-    let selectedCsmModel = $state<CsmModelVariant>(DEFAULT_CSM_MODEL);
+    let selectedGemmaVariant = $state<GemmaVariant>(initialPrefs.gemmaVariant);
+    let selectedCsmModel = $state<CsmModelVariant>(initialPrefs.csmModel);
     let selectedKokoroLanguage = $state<KokoroLanguage>(
-        DEFAULT_KOKORO_LANGUAGE,
+        initialPrefs.kokoroLanguage ?? DEFAULT_KOKORO_LANGUAGE,
     );
-    let selectedSttModel = $state<SttModelVariant>(DEFAULT_STT_MODEL);
-    let selectedSttLanguage = $state<SttLanguage>(DEFAULT_STT_LANGUAGE);
+    let selectedSttModel = $state<SttModelVariant>(
+        initialPrefs.sttModel === "gemma" &&
+            isExternalGemmaVariant(initialPrefs.gemmaVariant)
+            ? DEFAULT_STT_MODEL
+            : initialPrefs.sttModel,
+    );
+    let selectedSttLanguage = $state<SttLanguage>(
+        initialPrefs.sttLanguage ?? DEFAULT_STT_LANGUAGE,
+    );
     let pendingModelPreset = $state<ModelPreset | null>(null);
     let csmDownloadMessage = $state("Preparing download...");
     let csmDownloadProgress = $state<number | null>(null);
@@ -445,6 +455,7 @@
     let appUpdateStatus = $state<AppUpdateStatus>("idle");
     let appUpdateError = $state<string | null>(null);
     let skippedAppUpdateVersion = $state<string | null>(null);
+    let showOnboarding = $state(false);
     let autoCheckAppUpdatesEnabled = $state(DEFAULT_AUTO_CHECK_APP_UPDATES);
     let suppressAutoUpdatePromptUntilNextCheck = $state(false);
     let pendingAutomaticUpdatePromptVersion = $state<string | null>(null);
@@ -2691,6 +2702,12 @@
         const storedPreference = loadAppUpdatePreferenceFromStorage();
         skippedAppUpdateVersion = storedPreference.skippedVersion;
         autoCheckAppUpdatesEnabled = storedPreference.autoCheckEnabled;
+    }
+
+    function handleOnboardingComplete() {
+        showOnboarding = false;
+        void initializeCallModePreference();
+        void restoreModelPreferences();
     }
 
     async function initializeAutoUnmuteOnPastedScreenshotPreference() {
@@ -5553,7 +5570,9 @@
             return;
         }
         try {
-            const models = await invoke<string[]>("get_ollama_models");
+            const models = (await invoke<string[]>("get_ollama_models")).filter(
+                (m) => m.trim() !== "",
+            );
             ollamaModels = models;
             const current = await invoke<string>("get_ollama_model");
 
@@ -5573,6 +5592,12 @@
                 );
                 if (matchWithoutTag) {
                     selectedOllamaModel = matchWithoutTag;
+                    await invoke("set_ollama_model", {
+                        model: selectedOllamaModel,
+                    });
+                } else {
+                    // Fallback to the first available model
+                    selectedOllamaModel = ollamaModels[0];
                     await invoke("set_ollama_model", {
                         model: selectedOllamaModel,
                     });
@@ -5602,7 +5627,9 @@
             return;
         }
         try {
-            const models = await invoke<string[]>("get_lmstudio_models");
+            const models = (
+                await invoke<string[]>("get_lmstudio_models")
+            ).filter((m) => m.trim() !== "");
             lmStudioModels = models;
             const current = await invoke<string>("get_lmstudio_model");
 
@@ -5647,11 +5674,13 @@
             return;
         }
         try {
-            const models = await invoke<string[]>(
-                "get_openai_compatible_models",
-            );
+            const models = (
+                await invoke<string[]>("get_openai_compatible_models")
+            ).filter((m) => m.trim() !== "");
             openAiCompatibleModels = models;
-            const current = await invoke<string>("get_openai_compatible_model");
+            const current = await invoke<string>(
+                "get_openai_compatible_model",
+            );
 
             if (selectedOpenAiCompatibleModel === "") {
                 selectedOpenAiCompatibleModel = current;
@@ -7089,6 +7118,10 @@
     }
 
     onMount(() => {
+        showOnboarding = !localStorage.getItem(ONBOARDING_SEEN_STORAGE_KEY);
+        if (showOnboarding) {
+            void handleUnloadAll();
+        }
         window.addEventListener("keyup", (event) => {
             if (event.code === "Space") {
                 if (callMode === "push_to_talk" && calling) {
@@ -7659,7 +7692,7 @@
             await syncLmStudioModels();
             await syncOpenAiCompatibleModels();
 
-            if (autoLoadModelsOnStartupEnabled) {
+            if (autoLoadModelsOnStartupEnabled && !showOnboarding) {
                 const sttNeeded = selectedSttModel !== "gemma";
                 const allDownloaded =
                     isGemmaDownloaded &&
@@ -7800,6 +7833,7 @@
             {currentSessionTitle}
             {showSessionsPopup}
             {calling}
+            onboarding={showOnboarding}
             onToggleSessions={toggleSessionsPopup}
         />
     {/if}
@@ -8801,4 +8835,8 @@
         bind:this={contactCubismModelZipInput}
         onchange={handleContactCubismModelZipChange}
     />
+
+    {#if showOnboarding}
+        <Onboarding onComplete={handleOnboardingComplete} />
+    {/if}
 </div>
