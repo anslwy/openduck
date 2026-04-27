@@ -2710,6 +2710,35 @@ main.idle-layout {
     .contacts-editor-actions {
         flex-wrap: wrap;
     }
+
+    main {
+        padding-bottom: 120px;
+    }
+
+    .control-bar {
+        padding: 12px 16px;
+        gap: 12px;
+    }
+
+    .info {
+        min-width: 0;
+        flex: 0 1 auto;
+    }
+
+    .actions {
+        flex-wrap: nowrap;
+        gap: 8px;
+    }
+
+    .icon-btn {
+        width: 40px;
+        height: 40px;
+    }
+
+    .end-btn,
+    .start-btn {
+        padding: 10px 20px;
+    }
 }
 
 .banner-action-row {
