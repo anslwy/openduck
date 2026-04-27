@@ -3135,6 +3135,10 @@ main.idle-layout {
     animation: pulse 1.5s 1;
 }
 
+.pulse-highlight {
+    animation: pulse 1.5s 3;
+}
+
 @keyframes pulse {
     0% {
         transform: scale(1);

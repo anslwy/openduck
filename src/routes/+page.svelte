@@ -954,16 +954,22 @@
     );
     const loadAllDisabled = $derived(loadAllBusy);
     let lastLoadAllDisabled = $state(true);
+
+    function triggerLoadAllPulse(highlight = false) {
+        const loadAllBtn = document.querySelector(".load-all-btn");
+        if (loadAllBtn) {
+            const className = highlight ? "pulse-highlight" : "pulse-animation";
+            const duration = highlight ? 4500 : 1500;
+            loadAllBtn.classList.remove("pulse-animation", "pulse-highlight");
+            void loadAllBtn.offsetWidth; // force reflow
+            loadAllBtn.classList.add(className);
+            setTimeout(() => loadAllBtn.classList.remove(className), duration);
+        }
+    }
+
     $effect(() => {
         if (lastLoadAllDisabled && !loadAllDisabled && loadAllNeedsAction) {
-            const loadAllBtn = document.querySelector(".load-all-btn");
-            if (loadAllBtn) {
-                loadAllBtn.classList.add("pulse-animation");
-                setTimeout(
-                    () => loadAllBtn.classList.remove("pulse-animation"),
-                    1500,
-                );
-            }
+            triggerLoadAllPulse();
         }
         lastLoadAllDisabled = loadAllDisabled;
     });
@@ -974,7 +980,9 @@
         isLoadingAll
             ? "Processing..."
             : loadAllNeedsAction
-              ? "Load All"
+              ? loadAllMissingDownloads.length > 0
+                  ? "Download All"
+                  : "Load All"
               : "Unload All",
     );
     const loadAllButtonTitle = $derived(
@@ -2714,6 +2722,7 @@
         showOnboarding = false;
         void initializeCallModePreference();
         void restoreModelPreferences();
+        setTimeout(() => triggerLoadAllPulse(true), 400);
     }
 
     async function initializeAutoUnmuteOnPastedScreenshotPreference() {
