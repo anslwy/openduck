@@ -22,6 +22,7 @@
         handlePlaySelectedContactRefAudio,
         handleSelectedContactNameInput,
         handleSelectedContactPromptInput,
+        handleSelectedContactMemoryInput,
         handleSelectedContactGenderInput,
         handleSelectedContactRefTextInput,
         handleSelectedContactCubismModelInput,
@@ -55,6 +56,7 @@
         handlePlaySelectedContactRefAudio: () => void;
         handleSelectedContactNameInput: (event: Event) => void;
         handleSelectedContactPromptInput: (event: Event) => void;
+        handleSelectedContactMemoryInput: (event: Event) => void;
         handleSelectedContactGenderInput: (event: Event) => void;
         handleSelectedContactRefTextInput: (event: Event) => void;
         handleSelectedContactCubismModelInput: (event: Event) => void;
@@ -281,6 +283,20 @@
                         value={selectedContact?.prompt ?? ""}
                         oninput={handleSelectedContactPromptInput}
                     ></textarea>
+                </label>
+
+                <label class="contact-field contact-field-grow">
+                    <span class="contact-field-label">Memory</span>
+                    <textarea
+                        class="contact-textarea"
+                        rows="4"
+                        placeholder="Add long-term memories or notes about the user."
+                        value={selectedContact?.memory ?? ""}
+                        oninput={handleSelectedContactMemoryInput}
+                    ></textarea>
+                    <span class="contacts-editor-hint"
+                        >These notes are included in the AI's long-term context.</span
+                    >
                 </label>
 
                 <div class="contact-field">

@@ -245,6 +245,9 @@ enum ResponseGenerationMode {
         assistant_entry_id: u64,
         assistant_text_prefix: String,
     },
+    InitialGreeting {
+        memory: Option<String>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -524,6 +527,7 @@ struct AppState {
     vad: Mutex<Option<vad::Silero>>,
     screen_capture_child: Mutex<Option<std::process::Child>>,
     ai_subtitle_target_language: Mutex<String>,
+    character_memory: Mutex<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -647,6 +651,7 @@ struct ContactExportPayload {
     ref_audio: Option<String>,
     ref_text: Option<String>,
     cubism_model: Option<serde_json::Value>,
+    memory: Option<String>,
     output_path: String,
 }
 
@@ -1674,6 +1679,7 @@ fn export_contact_profile(payload: ContactExportPayload) -> Result<ContactExport
         "refAudio": payload.ref_audio,
         "refText": payload.ref_text,
         "cubismModel": payload.cubism_model,
+        "memory": payload.memory,
     });
     let encoded = serde_json::to_vec_pretty(&export_json).map_err(|err| err.to_string())?;
 
@@ -1712,6 +1718,133 @@ async fn reset_call_session(
     clear_pending_screen_capture_inner(&app_handle, true);
     emit_call_stage(&app_handle, "idle", "");
     reset_csm_reference_context(&app_handle).await?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_character_memory(state: State<'_, AppState>, memory: Option<String>) {
+    let mut mem = state.character_memory.lock().unwrap();
+    *mem = memory.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+}
+
+#[tauri::command]
+async fn start_conversation(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let character_id = state.current_character_id.lock().unwrap().clone();
+    let session_memory = get_character_memory(&app_handle, &character_id);
+    let persistent_memory = state.character_memory.lock().unwrap().clone();
+
+    let memory = match (persistent_memory, session_memory) {
+        (Some(p), Some(s)) => Some(format!("Character notes:\n{}\n\nPrevious conversation turns:\n{}", p, s)),
+        (Some(p), None) => Some(p),
+        (None, Some(s)) => Some(s),
+        (None, None) => None,
+    };
+
+    let generation_id = state.next_generation_id.fetch_add(1, Ordering::Relaxed);
+    let conversation_session_id = current_conversation_session_id(state.inner());
+    let variant = loaded_gemma_variant(state.inner())
+        .unwrap_or_else(|| selected_gemma_variant(state.inner()));
+    let gemma_model = if variant.is_external() {
+        selected_external_llm_model(state.inner(), variant).unwrap_or_default()
+    } else {
+        variant.repo_id().unwrap_or_default().to_string()
+    };
+    let server_port = *state.server_port.lock().unwrap();
+
+    let Some(server_port) = server_port else {
+        return Err("Gemma server is not running.".to_string());
+    };
+
+    emit_call_stage(&app_handle, "thinking", "Thinking");
+
+    let app_handle_for_task = app_handle.clone();
+    let cancellation_token = Arc::new(AtomicBool::new(false));
+    let cancellation_token_for_task = cancellation_token.clone();
+
+    let handle = tauri::async_runtime::spawn(async move {
+        match stream_gemma_response_to_csm(
+            &app_handle_for_task,
+            server_port,
+            &gemma_model,
+            ResponseGenerationMode::InitialGreeting { memory },
+            cancellation_token_for_task,
+        )
+        .await
+        {
+            Ok((response_id, response_text, translations)) => {
+                if response_text.is_empty() {
+                    emit_call_stage(&app_handle_for_task, "listening", "Listening");
+                    return;
+                }
+
+                if current_conversation_session_id(app_handle_for_task.state::<AppState>().inner())
+                    != conversation_session_id
+                {
+                    return;
+                }
+
+                let (user_entry_id, assistant_entry_id) = append_conversation_turn_with_save(
+                    &app_handle_for_task,
+                    app_handle_for_task.state::<AppState>().inner(),
+                    String::new(),
+                    response_text.clone(),
+                    Vec::new(),
+                    translations,
+                );
+
+                let (session_id, session_title) = {
+                    let state = app_handle_for_task.state::<AppState>();
+                    let id_guard = state.current_session_id.lock().unwrap();
+                    let title_guard = state.current_session_title.lock().unwrap();
+                    (id_guard.clone().unwrap_or_default(), title_guard.clone())
+                };
+
+                emit_conversation_context_committed(
+                    &app_handle_for_task,
+                    ConversationContextCommittedEvent {
+                        request_id: response_id,
+                        user_entry_id,
+                        assistant_entry_id,
+                        user_text: String::new(),
+                        assistant_text: response_text,
+                        session_id,
+                        session_title,
+                    },
+                );
+            }
+            Err(err) => {
+                emit_csm_error(
+                    &app_handle_for_task,
+                    CsmErrorEvent {
+                        request_id: None,
+                        message: err.clone(),
+                    },
+                );
+                error!("Failed to start conversation: {}", err);
+                emit_call_stage(&app_handle_for_task, "listening", "Listening");
+            }
+        }
+
+        clear_active_generation_if_matches(&app_handle_for_task, generation_id);
+    });
+
+    if !register_active_generation_if_newer(
+        state.inner(),
+        generation_id,
+        handle,
+        cancellation_token,
+        None,
+        Vec::new(),
+    ) {
+        warn!(
+            "Skipping initial greeting {} because a newer generation is already active",
+            generation_id
+        );
+    }
+
     Ok(())
 }
 
@@ -5139,6 +5272,7 @@ async fn stream_gemma_response_to_csm(
         llm_context_text_chars,
         llm_context_trimmed_by_turn_limit,
         llm_image_history_limit,
+        persistent_character_memory,
     ) = {
         let state = app_handle.state::<AppState>();
         let session_id = current_conversation_session_id(state.inner());
@@ -5152,6 +5286,7 @@ async fn stream_gemma_response_to_csm(
         let llm_context_turn_limit = *state.llm_context_turn_limit.lock().unwrap();
         let selection = select_conversation_turns_for_llm_context(&turns, llm_context_turn_limit);
         let image_history_limit = *state.llm_image_history_limit.lock().unwrap();
+        let persistent_character_memory = state.character_memory.lock().unwrap().clone();
         (
             session_id,
             selection.turns,
@@ -5160,6 +5295,7 @@ async fn stream_gemma_response_to_csm(
             selection.total_text_chars,
             selection.trimmed_by_turn_limit,
             image_history_limit,
+            persistent_character_memory,
         )
     };
     let has_latest_audio = matches!(
@@ -5178,6 +5314,7 @@ async fn stream_gemma_response_to_csm(
             latest_image_paths, ..
         } => load_image_data_urls_from_paths(latest_image_paths.iter().map(PathBuf::as_path)),
         ResponseGenerationMode::AssistantAutoContinue { .. } => Vec::new(),
+        ResponseGenerationMode::InitialGreeting { .. } => Vec::new(),
     };
     let total_image_count = conversation_turn_image_urls
         .iter()
@@ -5203,8 +5340,8 @@ async fn stream_gemma_response_to_csm(
     let has_any_image_context = retained_image_count > 0;
     if conversation_turns.len() != total_turn_count {
         let effective_turn_limit = llm_context_turn_limit
-            .map(|limit| limit.max(MIN_LLM_CONTEXT_TURN_LIMIT))
-            .map(|limit| limit.to_string())
+            .map(|limit: usize| limit.max(MIN_LLM_CONTEXT_TURN_LIMIT))
+            .map(|limit: usize| limit.to_string())
             .unwrap_or_else(|| "unlimited".to_string());
         let trim_reason = if llm_context_trimmed_by_turn_limit {
             format!("turn limit ({effective_turn_limit})")
@@ -5229,11 +5366,24 @@ async fn stream_gemma_response_to_csm(
                     .lock()
                     .unwrap()
                     .clone(),
+                persistent_character_memory,
                 has_latest_audio,
                 has_any_image_context,
             ),
         }],
     }];
+
+    if let ResponseGenerationMode::InitialGreeting { memory } = &mode {
+        let prompt = if let Some(mem) = memory {
+            format!("You are starting a new conversation with the user. You have the following context from previous interactions (which may include character notes and previous conversation turns):\n{}\nUse this context to greet the user naturally and ask a follow-up question or mention something you talked about before to kick off the conversation. Keep it natural and spoken. Do not mention that you have 'context' or 'memory', just talk naturally like a returning friend.", mem)
+        } else {
+            "You are meeting the user for the first time. Get to know them. Start the conversation naturally with a warm greeting and ask them something about themselves.".to_string()
+        };
+        messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: vec![ChatContent::Text { text: prompt }],
+        });
+    }
 
     for (turn, image_urls) in conversation_turns
         .iter()
@@ -5279,6 +5429,7 @@ async fn stream_gemma_response_to_csm(
                 Some(*assistant_entry_id),
             )
         }
+        ResponseGenerationMode::InitialGreeting { .. } => (None, None),
     };
 
     let mut request = ChatRequest {
@@ -6239,10 +6390,14 @@ fn combine_assistant_message_text(
 
 fn build_llm_system_prompt(
     base_prompt: &str,
+    memory: Option<String>,
     include_audio_context: bool,
     include_image_context: bool,
 ) -> String {
     let mut sections = vec![base_prompt.to_string()];
+    if let Some(mem) = memory {
+        sections.push(format!("Memory of previous conversations with this user:\n{}", mem));
+    }
     if include_audio_context {
         sections.push(AUDIO_CONTEXT_SYSTEM_PROMPT.to_string());
     }
@@ -7940,15 +8095,15 @@ mod tests {
         let base_prompt = "Base prompt";
 
         assert_eq!(
-            build_llm_system_prompt(base_prompt, false, false),
+            build_llm_system_prompt(base_prompt, None, false, false),
             "Base prompt"
         );
         assert_eq!(
-            build_llm_system_prompt(base_prompt, true, false),
+            build_llm_system_prompt(base_prompt, None, true, false),
             format!("Base prompt\n\n{AUDIO_CONTEXT_SYSTEM_PROMPT}")
         );
         assert_eq!(
-            build_llm_system_prompt(base_prompt, false, true),
+            build_llm_system_prompt(base_prompt, None, false, true),
             format!("Base prompt\n\n{IMAGE_CONTEXT_SYSTEM_PROMPT}")
         );
     }
@@ -11546,6 +11701,41 @@ fn rename_session(
     Ok(())
 }
 
+fn get_character_memory(app_handle: &AppHandle, character_id: &str) -> Option<String> {
+    let sessions = get_sessions(app_handle.clone()).ok()?;
+    let latest_session_id = sessions
+        .iter()
+        .filter(|s| s.character_id.as_deref() == Some(character_id))
+        .map(|s| &s.id)
+        .next()?;
+
+    let session_file = resolve_session_file(app_handle, latest_session_id).ok()?;
+    let content = std::fs::read_to_string(session_file).ok()?;
+    let data: SessionData = serde_json::from_str(&content).ok()?;
+
+    if data.turns.is_empty() {
+        return None;
+    }
+
+    // Take the last 3 turns as memory
+    let memory_turns = data.turns.iter().rev().take(3).rev();
+    let mut memory_text = String::new();
+    for turn in memory_turns {
+        if !turn.user_text.trim().is_empty() {
+            memory_text.push_str(&format!("User: {}\n", turn.user_text));
+        }
+        if !turn.assistant_text.trim().is_empty() {
+            memory_text.push_str(&format!("Assistant: {}\n", turn.assistant_text));
+        }
+    }
+
+    if memory_text.trim().is_empty() {
+        return None;
+    }
+
+    Some(memory_text)
+}
+
 fn extract_snippet(text: &str, query: &str) -> String {
     let text_chars: Vec<char> = text.chars().collect();
     let query_lower = query.to_lowercase();
@@ -12919,6 +13109,7 @@ pub fn run() {
             vad: Mutex::new(None),
             screen_capture_child: Mutex::new(None),
             ai_subtitle_target_language: Mutex::new("none".to_string()),
+            character_memory: Mutex::new(None),
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -12940,10 +13131,12 @@ pub fn run() {
             restart_app,
             refresh_runtime_caches,
             set_voice_system_prompt,
+            set_character_memory,
             set_current_character_id,
             set_csm_reference_voice,
             export_contact_profile,
             reset_call_session,
+            start_conversation,
             ensure_runtime_dependencies,
             interrupt_tts,
             start_call_timer,

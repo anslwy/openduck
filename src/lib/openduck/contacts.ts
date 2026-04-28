@@ -48,6 +48,7 @@ type ImportedContactProfile = {
   refAudio?: unknown;
   refText?: unknown;
   cubismModel?: unknown;
+  memory?: unknown;
 };
 
 function arrayBufferLooksLikeZip(buffer: ArrayBuffer) {
@@ -216,6 +217,7 @@ function normalizeImportedContactProfile(
     refAudio: typeof record.refAudio === "string" ? record.refAudio : null,
     refText: typeof record.refText === "string" ? record.refText : null,
     cubismModel: normalizeCubismModel(record.cubismModel),
+    memory: typeof record.memory === "string" ? record.memory : null,
   };
 }
 

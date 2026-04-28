@@ -520,6 +520,9 @@
     let selectedContactPromptSyncTimeout: ReturnType<
         typeof window.setTimeout
     > | null = null;
+    let selectedContactMemorySyncTimeout: ReturnType<
+        typeof window.setTimeout
+    > | null = null;
     let selectedContactVoiceReferenceSyncTimeout: ReturnType<
         typeof window.setTimeout
     > | null = null;
@@ -1012,6 +1015,7 @@
     const selectedContactName = $derived(
         getContactDisplayName(selectedContact),
     );
+    const selectedContactMemory = $derived(selectedContact?.memory || "");
     const selectedContactPrompt = $derived.by(() => {
         const basePrompt =
             selectedContact?.prompt.trim() || DEFAULT_CONTACT_PROMPT;
@@ -1442,24 +1446,27 @@
         const userEntryIdInLog = pendingConversationUserLogEntryId;
         const assistantEntryIdInLog = activeAssistantConversationEntryId;
 
-        if (userEntryIdInLog == null || assistantEntryIdInLog == null) {
+        if (assistantEntryIdInLog == null) {
             return;
         }
 
-        const userEntry = conversationLogEntries.find(
-            (e) => e.id === userEntryIdInLog,
-        );
+        const userEntry =
+            userEntryIdInLog != null
+                ? conversationLogEntries.find((e) => e.id === userEntryIdInLog)
+                : null;
         const assistantEntry = conversationLogEntries.find(
             (e) => e.id === assistantEntryIdInLog,
         );
 
-        if (!userEntry || !assistantEntry) {
-            // One or both entries were deleted from the UI before they could be context-backed.
-            // Still update the IDs so we can delete them from the backend.
+        if (!assistantEntry) {
+            return;
+        }
+
+        if (userEntryIdInLog != null && !userEntry) {
             void invoke("delete_conversation_context_entry", {
                 entryId: payload.userEntryId,
             });
-        } else {
+        } else if (userEntry) {
             // Sync any edits that happened while the turn was being processed.
             if (userEntry.text !== payload.userText) {
                 console.log(
@@ -1472,21 +1479,23 @@
                     clearImages: false,
                 });
             }
-            if (assistantEntry.text !== payload.assistantText) {
-                console.log(
-                    "Syncing edited assistant text to backend",
-                    assistantEntry.text,
-                );
-                void invoke("update_conversation_context_entry", {
-                    entryId: payload.assistantEntryId,
-                    text: assistantEntry.text,
-                    clearImages: false,
-                });
-            }
+        }
+
+        // Sync assistant edits
+        if (assistantEntry.text !== payload.assistantText) {
+            console.log(
+                "Syncing edited assistant text to backend",
+                assistantEntry.text,
+            );
+            void invoke("update_conversation_context_entry", {
+                entryId: payload.assistantEntryId,
+                text: assistantEntry.text,
+                clearImages: false,
+            });
         }
 
         conversationLogEntries = conversationLogEntries.map((entry) => {
-            if (entry.id === userEntryIdInLog) {
+            if (userEntryIdInLog != null && entry.id === userEntryIdInLog) {
                 return {
                     ...entry,
                     contextEntryId: payload.userEntryId,
@@ -1505,7 +1514,9 @@
             return entry;
         });
 
-        pendingConversationUserLogEntryId = null;
+        if (userEntryIdInLog != null) {
+            pendingConversationUserLogEntryId = null;
+        }
         pruneConversationLogContextBackedEntries();
     }
 
@@ -3526,6 +3537,27 @@
         }, 160);
     }
 
+    async function syncSelectedContactMemory() {
+        try {
+            await invoke("set_character_memory", {
+                memory: selectedContactMemory,
+            });
+        } catch (err) {
+            console.error("Failed to sync the selected contact memory:", err);
+        }
+    }
+
+    function queueSelectedContactMemorySync() {
+        if (selectedContactMemorySyncTimeout) {
+            clearTimeout(selectedContactMemorySyncTimeout);
+        }
+
+        selectedContactMemorySyncTimeout = window.setTimeout(() => {
+            selectedContactMemorySyncTimeout = null;
+            void syncSelectedContactMemory();
+        }, 160);
+    }
+
     function resolveContactVoicePreset(
         contact: Pick<ContactProfile, "gender"> | null | undefined,
     ): ContactGender {
@@ -4117,6 +4149,7 @@
         selectedContactId = contactId;
         persistContactsMetadata();
         queueSelectedContactPromptSync();
+        queueSelectedContactMemorySync();
         queueSelectedContactVoiceReferenceSync();
 
         if (
@@ -4152,6 +4185,7 @@
             refAudio: null,
             refText: null,
             cubismModel: null,
+            memory: null,
         };
 
         contacts = [...contacts, nextContact];
@@ -4159,6 +4193,7 @@
         persistContactsMetadata();
         showContactsPopup = true;
         queueSelectedContactPromptSync();
+        queueSelectedContactMemorySync();
         queueSelectedContactVoiceReferenceSync();
     }
 
@@ -4208,6 +4243,19 @@
             prompt: nextPrompt,
         }));
         queueSelectedContactPromptSync();
+    }
+
+    function handleSelectedContactMemoryInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextMemory = (event.currentTarget as HTMLTextAreaElement).value;
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            memory: nextMemory,
+        }));
+        queueSelectedContactMemorySync();
     }
 
     function handleSelectedContactGenderInput(event: Event) {
@@ -4269,6 +4317,7 @@
         selectedContactId = nextContact.id;
         showContactsPopup = true;
         queueSelectedContactPromptSync();
+        queueSelectedContactMemorySync();
         queueSelectedContactVoiceReferenceSync();
     }
 
@@ -4888,6 +4937,7 @@
                         refAudio: selectedContact.refAudio,
                         refText: selectedContact.refText,
                         cubismModel: selectedContact.cubismModel ?? null,
+                        memory: selectedContact.memory,
                         outputPath,
                     },
                 },
@@ -6522,6 +6572,7 @@
         }
 
         await syncSelectedContactPrompt();
+        await syncSelectedContactMemory();
         await syncSelectedContactVoiceReference();
 
         closeContactsPopup();
@@ -6548,6 +6599,9 @@
         await startAudioCapture();
         if (calling) {
             void playCallStartPong();
+            void invoke("start_conversation").catch((err) => {
+                console.error("Failed to start conversation:", err);
+            });
         }
         void invoke("ping").catch((err) => {
             console.error("Backend ping failed", err);
@@ -6576,6 +6630,7 @@
         }
 
         await syncSelectedContactPrompt();
+        await syncSelectedContactMemory();
         await syncSelectedContactVoiceReference();
 
         closeContactsPopup();
@@ -7696,6 +7751,7 @@
             persistContactsMetadata();
             await initializeOpenDuckContactImports();
             await syncSelectedContactPrompt();
+            await syncSelectedContactMemory();
             await syncSelectedContactVoiceReference();
             await restoreModelPreferences();
             await syncOllamaConfig();
@@ -8305,6 +8361,7 @@
                     {handlePlaySelectedContactRefAudio}
                     {handleSelectedContactNameInput}
                     {handleSelectedContactPromptInput}
+                    {handleSelectedContactMemoryInput}
                     {handleSelectedContactGenderInput}
                     {handleSelectedContactRefTextInput}
                     {handleSelectedContactCubismModelInput}

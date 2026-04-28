@@ -234,6 +234,7 @@ export type StoredContactProfile = {
     refAudio?: string | null;
     refText?: string | null;
     cubismModel?: CubismModelConfig | null;
+    memory?: string | null;
 };
 
 export type ContactGender = "male" | "female";
