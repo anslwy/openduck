@@ -8878,9 +8878,35 @@
                 showUpdatePrompt}
         >
             <div class="info">
-                <span class="username"
-                    >{selectedContact?.name.trim() || "OpenDuck"}</span
-                >
+                <div class="username-row">
+                    <span class="username"
+                        >{selectedContact?.name.trim() || "OpenDuck"}</span
+                    >
+                    {#if calling}
+                        <button
+                            type="button"
+                            class="icon-btn info-btn"
+                            class:active={showContactsPopup}
+                            onclick={toggleContactsPopup}
+                            aria-label="Character info"
+                        >
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="3"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                ><circle cx="12" cy="12" r="10" /><path
+                                    d="M12 16v-4"
+                                /><path d="M12 8h.01" /></svg
+                            >
+                        </button>
+                    {/if}
+                </div>
                 {#if showCallTimerEnabled}
                     <span class="timer"
                         >{calling
@@ -9002,35 +9028,6 @@
                         </button>
                         <div class="tooltip-bubble control-tooltip">
                             <span>Conversation Log</span>
-                        </div>
-                    </div>
-                    <div class="tooltip-shell control-tooltip-shell">
-                        <button
-                            type="button"
-                            class="icon-btn contacts-btn"
-                            class:active={showContactsPopup}
-                            onclick={toggleContactsPopup}
-                            aria-label="Toggle contacts"
-                            aria-controls="contacts-popup"
-                            aria-expanded={showContactsPopup}
-                        >
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                width="22"
-                                height="22"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2.2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                ><path
-                                    d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"
-                                /><circle cx="12" cy="7" r="4" /></svg
-                            >
-                        </button>
-                        <div class="tooltip-bubble control-tooltip">
-                            <span>Contacts</span>
                         </div>
                     </div>
                     <div class="tooltip-shell control-tooltip-shell">

@@ -728,6 +728,36 @@ main.idle-layout {
     letter-spacing: -0.01em;
 }
 
+.username-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.icon-btn.info-btn {
+    width: 24px;
+    height: 24px;
+    background: rgba(255, 255, 255, 0);
+    color: rgba(255, 255, 255, 0.6);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+    transform: translate(-5px, 1px);
+}
+
+.icon-btn.info-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.icon-btn.info-btn.active {
+    background: #ffdf63;
+    color: #2f2500;
+}
+
 .timer {
     font-size: 1rem;
     opacity: 0.6;
