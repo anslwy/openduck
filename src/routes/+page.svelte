@@ -8699,6 +8699,7 @@
                     {handleDeleteSelectedContact}
                     {handleExportSelectedContact}
                     {refAudioPlaying}
+                    {calling}
                 />
             </div>
         {/if}
@@ -9001,6 +9002,35 @@
                         </button>
                         <div class="tooltip-bubble control-tooltip">
                             <span>Conversation Log</span>
+                        </div>
+                    </div>
+                    <div class="tooltip-shell control-tooltip-shell">
+                        <button
+                            type="button"
+                            class="icon-btn contacts-btn"
+                            class:active={showContactsPopup}
+                            onclick={toggleContactsPopup}
+                            aria-label="Toggle contacts"
+                            aria-controls="contacts-popup"
+                            aria-expanded={showContactsPopup}
+                        >
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="22"
+                                height="22"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2.2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                ><path
+                                    d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"
+                                /><circle cx="12" cy="7" r="4" /></svg
+                            >
+                        </button>
+                        <div class="tooltip-bubble control-tooltip">
+                            <span>Contacts</span>
                         </div>
                     </div>
                     <div class="tooltip-shell control-tooltip-shell">

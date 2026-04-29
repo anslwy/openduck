@@ -1294,6 +1294,10 @@ main.idle-layout {
     overflow: hidden;
 }
 
+.contacts-popup-body.is-calling {
+    grid-template-columns: 1fr;
+}
+
 .contacts-sidebar {
     display: flex;
     flex-direction: column;

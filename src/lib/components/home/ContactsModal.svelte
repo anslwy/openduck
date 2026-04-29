@@ -39,6 +39,7 @@
         handleDeleteSelectedContact,
         handleExportSelectedContact,
         refAudioPlaying,
+        calling,
     } = $props<{
         contacts: ContactProfile[];
         selectedContact: ContactProfile | null;
@@ -77,6 +78,7 @@
         handleDeleteSelectedContact: () => Promise<void>;
         handleExportSelectedContact: (includeMemory: boolean) => Promise<void>;
         refAudioPlaying: boolean;
+        calling: boolean;
     }>();
 
     let emotionMapText = $state("");
@@ -192,49 +194,51 @@
         </button>
     </div>
 
-    <div class="contacts-popup-body">
-        <div class="contacts-sidebar">
-            <div class="contacts-list">
-                {#each contacts as contact (contact.id)}
+    <div class="contacts-popup-body" class:is-calling={calling}>
+        {#if !calling}
+            <div class="contacts-sidebar">
+                <div class="contacts-list">
+                    {#each contacts as contact (contact.id)}
+                        <button
+                            type="button"
+                            class="contact-list-item"
+                            class:active={contact.id === selectedContact?.id}
+                            onclick={() => selectContact(contact.id)}
+                        >
+                            <span class="contact-list-avatar" aria-hidden="true">
+                                <img
+                                    src={contact.iconDataUrl ?? "/icon.png"}
+                                    alt=""
+                                />
+                            </span>
+                            <span class="contact-list-name"
+                                >{getContactDisplayName(contact)}</span
+                            >
+                            {#if contact.cubismModel}
+                                <span class="contact-list-badge">Live2D</span>
+                            {/if}
+                        </button>
+                    {/each}
+                </div>
+
+                <div class="contacts-sidebar-actions">
                     <button
                         type="button"
-                        class="contact-list-item"
-                        class:active={contact.id === selectedContact?.id}
-                        onclick={() => selectContact(contact.id)}
+                        class="utility-btn"
+                        onclick={triggerContactImport}
                     >
-                        <span class="contact-list-avatar" aria-hidden="true">
-                            <img
-                                src={contact.iconDataUrl ?? "/icon.png"}
-                                alt=""
-                            />
-                        </span>
-                        <span class="contact-list-name"
-                            >{getContactDisplayName(contact)}</span
-                        >
-                        {#if contact.cubismModel}
-                            <span class="contact-list-badge">Live2D</span>
-                        {/if}
+                        Import
                     </button>
-                {/each}
+                    <button
+                        type="button"
+                        class="utility-btn"
+                        onclick={createNewContact}
+                    >
+                        Add
+                    </button>
+                </div>
             </div>
-
-            <div class="contacts-sidebar-actions">
-                <button
-                    type="button"
-                    class="utility-btn"
-                    onclick={triggerContactImport}
-                >
-                    Import
-                </button>
-                <button
-                    type="button"
-                    class="utility-btn"
-                    onclick={createNewContact}
-                >
-                    Add
-                </button>
-            </div>
-        </div>
+        {/if}
 
         <div class="contacts-editor">
             <div class="contacts-editor-scroll">
