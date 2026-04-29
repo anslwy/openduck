@@ -273,11 +273,15 @@
 
     const initialPrefs = loadModelPreferencesFromStorage();
     let calling = $state(false);
+    let isFirstSentenceReady = $state(false);
     let callMode = $state<CallMode>(DEFAULT_CALL_MODE);
     let micMuted = $state(false);
     let isSpacePressed = $state(false);
     let time = $state(0);
     let callStartedAtMs = $state<number | null>(null);
+    let callTimerInterval = $state<ReturnType<typeof window.setInterval> | null>(
+        null,
+    );
     let isGemmaDownloaded = $state(false);
     let isGemmaLoaded = $state(false);
     let isOllamaSupported = $state(false);
@@ -364,7 +368,6 @@
     > | null = null;
     let modelMemoryPollInterval: ReturnType<typeof window.setInterval> | null =
         null;
-    let callTimerInterval: ReturnType<typeof window.setInterval> | null = null;
     let playbackIdleTimeout: ReturnType<typeof window.setTimeout> | null = null;
     let eventUnlisteners: UnlistenFn[] = [];
     let activeTtsRequestId: number | null = null;
@@ -387,6 +390,10 @@
     let cachedPongPlaybackSampleRate = $state<number | null>(null);
     let activePongSource = $state<AudioBufferSourceNode | null>(null);
     let activePongGainNode = $state<GainNode | null>(null);
+    let cachedConnectingSoundSamples = $state<Float32Array | null>(null);
+    let cachedConnectingSoundSampleRate = $state<number | null>(null);
+    let activeConnectingSoundSource = $state<AudioBufferSourceNode | null>(null);
+    let activeConnectingSoundGainNode = $state<GainNode | null>(null);
     let pongPlaybackEnabled = $state(true);
     let keepScreenOnEnabled = $state(true);
     let autoUnmuteOnPastedScreenshotEnabled = $state(
@@ -572,6 +579,14 @@
     const modelsReady = $derived(
         isGemmaLoaded && isCsmLoaded && effectiveSttLoaded,
     );
+    $effect(() => {
+        if (modelsReady) {
+            void invoke("initialize_vad_command").catch((err) => {
+                console.error("Failed to initialize VAD:", err);
+            });
+        }
+    });
+
     const gemmaVariantDisabled = $derived(
         isPreparingRuntime ||
             isGemmaLoaded ||
@@ -1079,6 +1094,7 @@
     const MAX_CONTEXT_BACKED_CONVERSATION_LOG_ENTRIES = 48;
     const PONG_VOLUME = 0.7;
     const pongUrl = "/pop.mp3";
+    const connectingSoundUrl = "/connecting-sound.m4a";
     const screenCaptureTitle = $derived(
         screenCapturePhase === "capturing"
             ? "Select a Screen Region"
@@ -1440,7 +1456,10 @@
         }
 
         if (payload.sessionTitle) {
-            currentSessionTitle = payload.sessionTitle;
+            if (currentSessionTitle !== payload.sessionTitle) {
+                currentSessionTitle = payload.sessionTitle;
+                void loadSessions();
+            }
         }
 
         const userEntryIdInLog = pendingConversationUserLogEntryId;
@@ -3538,12 +3557,19 @@
     }
 
     async function syncSelectedContactMemory() {
+        if (!selectedContact) {
+            return;
+        }
+
         try {
             await invoke("set_character_memory", {
-                memory: selectedContactMemory,
+                characterId: selectedContact.id,
+                memories: selectedContact.memories || [],
+                lastClearAt: selectedContact.lastMemoryClearAt ?? null,
+                memoryEnabled: selectedContact.memoryEnabled !== false,
             });
         } catch (err) {
-            console.error("Failed to sync the selected contact memory:", err);
+            console.error("Failed to sync character memory:", err);
         }
     }
 
@@ -4245,15 +4271,72 @@
         queueSelectedContactPromptSync();
     }
 
-    function handleSelectedContactMemoryInput(event: Event) {
+    function handleDeleteContactMemory(memoryId: string) {
         if (!selectedContact) {
             return;
         }
 
-        const nextMemory = (event.currentTarget as HTMLTextAreaElement).value;
         updateContactById(selectedContact.id, (contact) => ({
             ...contact,
-            memory: nextMemory,
+            memories: (contact.memories || []).filter((m) => m.id !== memoryId),
+        }));
+        queueSelectedContactMemorySync();
+    }
+
+    function handleClearAllMemories() {
+        if (!selectedContact) {
+            return;
+        }
+
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            memories: [],
+            lastMemoryClearAt: Date.now(),
+        }));
+        queueSelectedContactMemorySync();
+    }
+
+    function handleAddContactMemory(text: string) {
+        if (!selectedContact || !text.trim()) {
+            return;
+        }
+
+        const newMemory: MemoryItem = {
+            id: crypto.randomUUID(),
+            text: text.trim(),
+            createdAt: Date.now(),
+        };
+
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            memories: [newMemory, ...(contact.memories || [])],
+        }));
+        queueSelectedContactMemorySync();
+    }
+
+    function handleUpdateContactMemory(memoryId: string, text: string) {
+        if (!selectedContact || !text.trim()) {
+            return;
+        }
+
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            memories: (contact.memories || []).map((m) =>
+                m.id === memoryId ? { ...m, text: text.trim() } : m,
+            ),
+        }));
+        queueSelectedContactMemorySync();
+    }
+
+    function handleSelectedContactMemoryToggleInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextEnabled = (event.currentTarget as HTMLInputElement).checked;
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            memoryEnabled: nextEnabled,
         }));
         queueSelectedContactMemorySync();
     }
@@ -4845,7 +4928,10 @@
         persistContactsMetadata();
     }
 
-    async function createOpenDuckContactArchiveBase64(contact: ContactProfile) {
+    async function createOpenDuckContactArchiveBase64(
+        contact: ContactProfile,
+        includeMemory: boolean,
+    ) {
         const { default: JSZip } = await import("jszip");
         const archive = new JSZip();
         const cubismModel = contact.cubismModel
@@ -4888,6 +4974,9 @@
                     refAudio: contact.refAudio,
                     refText: contact.refText,
                     cubismModel,
+                    memories: includeMemory ? (Array.isArray(contact.memories) ? [...contact.memories] : []) : null,
+                    memoryEnabled: contact.memoryEnabled,
+                    lastMemoryClearAt: contact.lastMemoryClearAt,
                 },
                 null,
                 2,
@@ -4900,7 +4989,7 @@
         });
     }
 
-    async function handleExportSelectedContact() {
+    async function handleExportSelectedContact(includeMemory: boolean) {
         if (!selectedContact) {
             return;
         }
@@ -4927,6 +5016,7 @@
                         archiveDataBase64:
                             await createOpenDuckContactArchiveBase64(
                                 selectedContact,
+                                includeMemory,
                             ),
                         name: getContactDisplayName(selectedContact),
                         prompt:
@@ -4937,7 +5027,9 @@
                         refAudio: selectedContact.refAudio,
                         refText: selectedContact.refText,
                         cubismModel: selectedContact.cubismModel ?? null,
-                        memory: selectedContact.memory,
+                        memories: includeMemory ? (selectedContact.memories || []) : [],
+                        memoryEnabled: selectedContact.memoryEnabled,
+                        lastMemoryClearAt: selectedContact.lastMemoryClearAt,
                         outputPath,
                     },
                 },
@@ -6401,6 +6493,97 @@
         }
     }
 
+    async function getConnectingSoundSamples() {
+        if (!captureContext) {
+            return null;
+        }
+
+        if (
+            cachedConnectingSoundSamples &&
+            cachedConnectingSoundSampleRate === captureContext.sampleRate
+        ) {
+            return cachedConnectingSoundSamples;
+        }
+
+        const response = await fetch(connectingSoundUrl);
+        if (!response.ok) {
+            throw new Error(
+                `Failed to fetch connecting-sound.m4a (${response.status})`,
+            );
+        }
+
+        const audioBytes = await response.arrayBuffer();
+        const decodedAudio = await captureContext.decodeAudioData(
+            audioBytes.slice(0),
+        );
+        const playbackSamples = mixAudioBufferToMono(decodedAudio);
+
+        cachedConnectingSoundSamples = playbackSamples;
+        cachedConnectingSoundSampleRate = captureContext.sampleRate;
+        return playbackSamples;
+    }
+
+    async function playConnectingSound() {
+        if (!calling || !captureContext) {
+            return;
+        }
+
+        try {
+            if (captureContext.state === "suspended") {
+                await captureContext.resume();
+            }
+
+            const samples = await getConnectingSoundSamples();
+            if (!samples || samples.length === 0 || !captureContext) {
+                return;
+            }
+
+            stopConnectingSound();
+
+            const audioBuffer = captureContext.createBuffer(
+                1,
+                samples.length,
+                captureContext.sampleRate,
+            );
+            audioBuffer.copyToChannel(samples, 0);
+
+            const source = captureContext.createBufferSource();
+            const gainNode = captureContext.createGain();
+            gainNode.gain.value = PONG_VOLUME;
+            source.buffer = audioBuffer;
+            source.loop = true;
+            source.connect(gainNode);
+            if (playbackProcessor) {
+                gainNode.connect(playbackProcessor);
+            } else {
+                gainNode.connect(captureContext.destination);
+            }
+
+            activeConnectingSoundSource = source;
+            activeConnectingSoundGainNode = gainNode;
+            source.start();
+        } catch (err) {
+            console.error("Failed to play connecting sound:", err);
+        }
+    }
+
+    function stopConnectingSound() {
+        if (activeConnectingSoundSource) {
+            try {
+                activeConnectingSoundSource.stop();
+            } catch {
+                // Ignore stop errors when the source already finished.
+            }
+            activeConnectingSoundSource.disconnect();
+            activeConnectingSoundSource = null;
+        }
+
+        if (activeConnectingSoundGainNode) {
+            activeConnectingSoundGainNode.disconnect();
+            activeConnectingSoundGainNode = null;
+        }
+    }
+
     async function playTrayPong() {
         if (!pongPlaybackEnabled || !captureContext) {
             return false;
@@ -6430,7 +6613,11 @@
             gainNode.gain.value = PONG_VOLUME;
             source.buffer = audioBuffer;
             source.connect(gainNode);
-            gainNode.connect(captureContext.destination);
+            if (playbackProcessor) {
+                gainNode.connect(playbackProcessor);
+            } else {
+                gainNode.connect(captureContext.destination);
+            }
             source.onended = () => {
                 if (activePongSource === source) {
                     activePongSource = null;
@@ -6482,7 +6669,11 @@
             gainNode.gain.value = PONG_VOLUME;
             source.buffer = audioBuffer;
             source.connect(gainNode);
-            gainNode.connect(captureContext.destination);
+            if (playbackProcessor) {
+                gainNode.connect(playbackProcessor);
+            } else {
+                gainNode.connect(captureContext.destination);
+            }
             source.onended = () => {
                 if (activePongSource === source) {
                     activePongSource = null;
@@ -6566,6 +6757,30 @@
         }
     }
 
+    function startCallTimer() {
+        if (callTimerInterval) {
+            clearInterval(callTimerInterval);
+        }
+
+        callStartedAtMs = Date.now();
+        syncCallElapsedTime();
+
+        callTimerInterval = window.setInterval(() => {
+            if (!calling || callStartedAtMs == null) {
+                if (callTimerInterval) {
+                    clearInterval(callTimerInterval);
+                    callTimerInterval = null;
+                }
+                return;
+            }
+            syncCallElapsedTime();
+        }, 1000);
+
+        void invoke("start_call_timer", { muted: micMuted }).catch((err) => {
+            console.error("Failed to start tray call timer", err);
+        });
+    }
+
     async function handleStartCall() {
         if (!modelsReady) {
             return;
@@ -6582,9 +6797,10 @@
         resetScreenCaptureStatus();
         setMicMuted(callMode === "push_to_talk");
         calling = true;
+        isFirstSentenceReady = false;
         syncKeepAwakeState();
         activeExpression = null;
-        callStartedAtMs = Date.now();
+        callStartedAtMs = null;
         resetProcessingAudioLatencies();
         clearLiveTranscriptSubtitle();
         syncCallElapsedTime();
@@ -6592,13 +6808,10 @@
         syncTtsPlaybackState(false);
         setCallStage("listening", "Listening");
 
-        void invoke("start_call_timer", { muted: micMuted }).catch((err) => {
-            console.error("Failed to start tray call timer", err);
-            alert("Failed to start tray call timer: " + String(err));
-        });
         await startAudioCapture();
         if (calling) {
             void playCallStartPong();
+            void playConnectingSound();
             void invoke("start_conversation").catch((err) => {
                 console.error("Failed to start conversation:", err);
             });
@@ -6607,21 +6820,6 @@
             console.error("Backend ping failed", err);
             alert("Backend ping failed: " + String(err));
         });
-
-        if (callTimerInterval) {
-            clearInterval(callTimerInterval);
-        }
-
-        callTimerInterval = window.setInterval(() => {
-            if (!calling || callStartedAtMs == null) {
-                if (callTimerInterval) {
-                    clearInterval(callTimerInterval);
-                    callTimerInterval = null;
-                }
-                return;
-            }
-            syncCallElapsedTime();
-        }, 1000);
     }
 
     async function handleResumeCall() {
@@ -6639,20 +6837,16 @@
         resetScreenCaptureStatus();
         setMicMuted(callMode === "push_to_talk");
         calling = true;
+        isFirstSentenceReady = true;
         syncKeepAwakeState();
         activeExpression = null;
-        callStartedAtMs = Date.now();
         resetProcessingAudioLatencies();
         clearLiveTranscriptSubtitle();
-        syncCallElapsedTime();
+        startCallTimer();
         activeTtsRequestId = null;
         syncTtsPlaybackState(false);
         setCallStage("listening", "Listening");
 
-        void invoke("start_call_timer", { muted: micMuted }).catch((err) => {
-            console.error("Failed to start tray call timer", err);
-            alert("Failed to start tray call timer: " + String(err));
-        });
         await startAudioCapture();
         if (calling) {
             void playCallStartPong();
@@ -6661,25 +6855,13 @@
             console.error("Backend ping failed", err);
             alert("Backend ping failed: " + String(err));
         });
-
-        if (callTimerInterval) {
-            clearInterval(callTimerInterval);
-        }
-
-        callTimerInterval = window.setInterval(() => {
-            if (!calling || callStartedAtMs == null) {
-                if (callTimerInterval) {
-                    clearInterval(callTimerInterval);
-                    callTimerInterval = null;
-                }
-                return;
-            }
-            syncCallElapsedTime();
-        }, 1000);
     }
 
     async function handleEndCall() {
+        const characterIdAtEnd = selectedContactId;
         calling = false;
+        isFirstSentenceReady = false;
+        stopConnectingSound();
         syncKeepAwakeState();
         activeExpression = null;
         stopPlayback();
@@ -6692,6 +6874,41 @@
         clearLiveTranscriptSubtitle();
         setCallStage("idle", "");
         stopCallTimerTracking();
+
+        // Memory extraction must happen before reset_call_session clears the turns
+        if (selectedContact?.memoryEnabled !== false) {
+            try {
+                const existingMemoryTexts = (selectedContact?.memories || []).map(m => m.text);
+                const extractedMemories = await invoke<string[]>(
+                    "extract_memories_from_current_session",
+                    { existingMemories: existingMemoryTexts }
+                );
+                if (extractedMemories.length > 0) {
+                    console.log("Extracted new memories:", extractedMemories);
+                    updateContactById(characterIdAtEnd, (contact) => {
+                        const existingMemories = contact.memories || [];
+                        const newMemories = extractedMemories.map((text) => ({
+                            id: Math.random().toString(36).substring(2, 9),
+                            text,
+                            createdAt: Date.now(),
+                        }));
+                        return {
+                            ...contact,
+                            memories: [...newMemories, ...existingMemories].slice(
+                                0,
+                                100,
+                            ), // Cap at 100 memories
+                        };
+                    });
+                    // Sync to backend character_memory state if it's the currently selected character
+                    if (selectedContactId === characterIdAtEnd) {
+                        void syncSelectedContactMemory();
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to extract memories:", err);
+            }
+        }
 
         try {
             await invoke("reset_call_session");
@@ -7295,6 +7512,12 @@
                         ({ payload }) => {
                             if (!calling) {
                                 return;
+                            }
+
+                            if (calling && !isFirstSentenceReady) {
+                                isFirstSentenceReady = true;
+                                stopConnectingSound();
+                                startCallTimer();
                             }
 
                             const shouldPreserveSpokenResponse =
@@ -8361,7 +8584,11 @@
                     {handlePlaySelectedContactRefAudio}
                     {handleSelectedContactNameInput}
                     {handleSelectedContactPromptInput}
-                    {handleSelectedContactMemoryInput}
+                    {handleSelectedContactMemoryToggleInput}
+                    {handleDeleteContactMemory}
+                    {handleClearAllMemories}
+                    {handleAddContactMemory}
+                    {handleUpdateContactMemory}
                     {handleSelectedContactGenderInput}
                     {handleSelectedContactRefTextInput}
                     {handleSelectedContactCubismModelInput}
@@ -8558,7 +8785,9 @@
                 {#if showCallTimerEnabled}
                     <span class="timer"
                         >{calling
-                            ? formattedTime
+                            ? isFirstSentenceReady
+                                ? formattedTime
+                                : "Connecting"
                             : modelsReady
                               ? "Ready"
                               : "Pending"}</span

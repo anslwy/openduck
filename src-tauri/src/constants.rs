@@ -108,6 +108,7 @@ pub(crate) const STT_WHISPER_SPECIAL_TOKENS_MAP_FILE: &str = "special_tokens_map
 pub(crate) const STT_WHISPER_TOKENIZER_FILE: &str = "tokenizer.json";
 pub(crate) const STT_WHISPER_TOKENIZER_CONFIG_FILE: &str = "tokenizer_config.json";
 pub(crate) const STT_WHISPER_VOCAB_FILE: &str = "vocab.json";
+pub(crate) const CALL_START_GRACE_PERIOD_MS: u64 = 3000;
 pub(crate) const SILENCE_THRESHOLD: f32 = 0.02;
 pub(crate) const END_OF_UTTERANCE_SILENCE_MS: u32 = 2000;
 pub(crate) const MIN_END_OF_UTTERANCE_SILENCE_MS: u32 = 500;

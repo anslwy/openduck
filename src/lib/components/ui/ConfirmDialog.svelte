@@ -1,7 +1,16 @@
 <script lang="ts">
-    let { title, message, onConfirm, onCancel } = $props<{
+    let {
+        title,
+        message,
+        btnConfirm,
+        btnCancel,
+        onConfirm,
+        onCancel,
+    } = $props<{
         title: string;
         message: string;
+        btnConfirm?: string;
+        btnCancel?: string;
         onConfirm: () => void;
         onCancel: () => void;
     }>();
@@ -13,10 +22,10 @@
         <p class="confirm-message">{message}</p>
         <div class="confirm-actions">
             <button type="button" class="confirm-btn cancel" onclick={onCancel}>
-                Cancel
+                {btnCancel || "Cancel"}
             </button>
             <button type="button" class="confirm-btn confirm" onclick={onConfirm}>
-                Confirm
+                {btnConfirm || "Confirm"}
             </button>
         </div>
     </div>

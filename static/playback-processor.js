@@ -137,12 +137,16 @@ class PlaybackProcessor extends AudioWorkletProcessor {
   }
 
   process(inputs, outputs) {
+    const input = inputs[0]?.[0];
     const output = outputs[0]?.[0];
     if (!output) {
       return true;
     }
 
     output.fill(0);
+    if (input) {
+      output.set(input);
+    }
     let lipSyncSumSquares = 0;
     let lipSyncPeak = 0;
 

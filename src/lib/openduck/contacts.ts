@@ -49,6 +49,9 @@ type ImportedContactProfile = {
   refText?: unknown;
   cubismModel?: unknown;
   memory?: unknown;
+  memories?: unknown;
+  memoryEnabled?: unknown;
+  lastMemoryClearAt?: unknown;
 };
 
 function arrayBufferLooksLikeZip(buffer: ArrayBuffer) {
@@ -209,6 +212,26 @@ function normalizeImportedContactProfile(
       ? record.iconDataUrl
       : null;
 
+  let memories = Array.isArray(record.memories)
+    ? record.memories
+        .filter((m) => m && typeof m === "object" && typeof m.text === "string")
+        .map((m) => ({
+          id: typeof m.id === "string" ? m.id : Math.random().toString(36).substring(2, 9),
+          text: m.text,
+          createdAt: typeof m.createdAt === "number" ? m.createdAt : Date.now(),
+        }))
+    : null;
+
+  if (!memories && typeof record.memory === "string" && record.memory.trim()) {
+    memories = [
+      {
+        id: Math.random().toString(36).substring(2, 9),
+        text: record.memory.trim(),
+        createdAt: Date.now(),
+      },
+    ];
+  }
+
   return {
     name,
     prompt,
@@ -217,7 +240,9 @@ function normalizeImportedContactProfile(
     refAudio: typeof record.refAudio === "string" ? record.refAudio : null,
     refText: typeof record.refText === "string" ? record.refText : null,
     cubismModel: normalizeCubismModel(record.cubismModel),
-    memory: typeof record.memory === "string" ? record.memory : null,
+    memories,
+    memoryEnabled: typeof record.memoryEnabled === "boolean" ? record.memoryEnabled : true,
+    lastMemoryClearAt: typeof record.lastMemoryClearAt === "number" ? record.lastMemoryClearAt : null,
   };
 }
 
@@ -384,6 +409,9 @@ function createStoredContactProfile(
     refAudio: contact.refAudio,
     refText: contact.refText,
     cubismModel: contact.cubismModel ?? null,
+    memories: contact.memories ?? null,
+    lastMemoryClearAt: contact.lastMemoryClearAt ?? null,
+    memoryEnabled: contact.memoryEnabled ?? null,
   };
 }
 
@@ -461,6 +489,8 @@ export function createDefaultContact(): ContactProfile {
     refAudio: null,
     refText: null,
     cubismModel: null,
+    memories: null,
+    memoryEnabled: true,
   };
 }
 
@@ -515,6 +545,9 @@ function normalizeStoredContactProfile(
     refAudio: typeof record.refAudio === "string" ? record.refAudio : null,
     refText: typeof record.refText === "string" ? record.refText : null,
     cubismModel: normalizeCubismModel(record.cubismModel),
+    memories: Array.isArray(record.memories) ? record.memories : null,
+    lastMemoryClearAt: typeof record.lastMemoryClearAt === "number" ? record.lastMemoryClearAt : null,
+    memoryEnabled: typeof record.memoryEnabled === "boolean" ? record.memoryEnabled : null,
   };
 }
 

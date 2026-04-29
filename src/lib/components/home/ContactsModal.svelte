@@ -22,7 +22,11 @@
         handlePlaySelectedContactRefAudio,
         handleSelectedContactNameInput,
         handleSelectedContactPromptInput,
-        handleSelectedContactMemoryInput,
+        handleSelectedContactMemoryToggleInput,
+        handleDeleteContactMemory,
+        handleClearAllMemories,
+        handleAddContactMemory,
+        handleUpdateContactMemory,
         handleSelectedContactGenderInput,
         handleSelectedContactRefTextInput,
         handleSelectedContactCubismModelInput,
@@ -56,7 +60,11 @@
         handlePlaySelectedContactRefAudio: () => void;
         handleSelectedContactNameInput: (event: Event) => void;
         handleSelectedContactPromptInput: (event: Event) => void;
-        handleSelectedContactMemoryInput: (event: Event) => void;
+        handleSelectedContactMemoryToggleInput: (event: Event) => void;
+        handleDeleteContactMemory: (memoryId: string) => void;
+        handleClearAllMemories: () => void;
+        handleAddContactMemory: (text: string) => void;
+        handleUpdateContactMemory: (memoryId: string, text: string) => void;
         handleSelectedContactGenderInput: (event: Event) => void;
         handleSelectedContactRefTextInput: (event: Event) => void;
         handleSelectedContactCubismModelInput: (event: Event) => void;
@@ -67,7 +75,7 @@
         handleSelectedContactCubismOffsetYInput: (event: Event) => void;
         handleSelectedContactCubismZoomInput: (event: Event) => void;
         handleDeleteSelectedContact: () => Promise<void>;
-        handleExportSelectedContact: () => Promise<void>;
+        handleExportSelectedContact: (includeMemory: boolean) => Promise<void>;
         refAudioPlaying: boolean;
     }>();
 
@@ -76,6 +84,22 @@
     let lastSelectedContactId = $state<string | null>(null);
     let validationTimeout: ReturnType<typeof setTimeout> | null = null;
     let showDeleteConfirm = $state(false);
+    let showMemoriesManager = $state(false);
+    let showMemoryDeleteConfirm = $state(false);
+    let showClearAllMemoriesConfirm = $state(false);
+    let showExportMemoryConfirm = $state(false);
+    let memoryToDeleteId = $state<string | null>(null);
+    let memorySearchQuery = $state("");
+    let isAddingMemory = $state(false);
+    let editingMemoryId = $state<string | null>(null);
+    let memoryInputText = $state("");
+
+    const filteredMemories = $derived.by(() => {
+        const memories = selectedContact?.memories || [];
+        if (!memorySearchQuery.trim()) return memories;
+        const query = memorySearchQuery.toLowerCase();
+        return memories.filter((m) => m.text.toLowerCase().includes(query));
+    });
 
     $effect(() => {
         if (selectedContact?.id !== lastSelectedContactId) {
@@ -285,19 +309,43 @@
                     ></textarea>
                 </label>
 
-                <label class="contact-field contact-field-grow">
-                    <span class="contact-field-label">Memory</span>
-                    <textarea
-                        class="contact-textarea"
-                        rows="4"
-                        placeholder="Add long-term memories or notes about the user."
-                        value={selectedContact?.memory ?? ""}
-                        oninput={handleSelectedContactMemoryInput}
-                    ></textarea>
-                    <span class="contacts-editor-hint"
-                        >These notes are included in the AI's long-term context.</span
-                    >
-                </label>
+                <div class="contact-field">
+                    <div class="contact-memory-row">
+                        <div class="contact-memory-info">
+                            <span class="contact-field-label">Memory</span>
+                            <span class="contacts-editor-hint"
+                                >{selectedContact?.memories?.length || 0} saved memories</span
+                            >
+                        </div>
+                        <button
+                            type="button"
+                            class="manage-memories-btn"
+                            onclick={() => (showMemoriesManager = true)}
+                        >
+                            Manage
+                        </button>
+                    </div>
+                    <div class="contact-memory-toggle-field">
+                        <div class="contact-memory-toggle-info">
+                            <span class="contact-memory-toggle-label"
+                                >Reference saved memories</span
+                            >
+                            <span class="contacts-editor-hint"
+                                >Let {selectedContact?.name || "this character"} save and use memories when
+                                responding.</span
+                            >
+                        </div>
+                        <label class="ios-toggle">
+                            <input
+                                type="checkbox"
+                                checked={selectedContact?.memoryEnabled !==
+                                    false}
+                                onchange={handleSelectedContactMemoryToggleInput}
+                            />
+                            <span class="ios-toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
 
                 <div class="contact-field">
                     <span class="contact-field-label"
@@ -541,13 +589,36 @@
                 <button
                     type="button"
                     class="download-btn"
-                    onclick={handleExportSelectedContact}
+                    onclick={() => {
+                        if (selectedContact?.memories?.length) {
+                            showExportMemoryConfirm = true;
+                        } else {
+                            handleExportSelectedContact(false);
+                        }
+                    }}
                 >
                     Export
                 </button>
             </div>
         </div>
     </div>
+
+    {#if showExportMemoryConfirm}
+        <ConfirmDialog
+            title="Export with memory?"
+            message="Do you want to include the saved memories in the exported file?"
+            btnConfirm="With Memory"
+            btnCancel="Without Memory"
+            onConfirm={async () => {
+                showExportMemoryConfirm = false;
+                await handleExportSelectedContact(true);
+            }}
+            onCancel={async () => {
+                showExportMemoryConfirm = false;
+                await handleExportSelectedContact(false);
+            }}
+        />
+    {/if}
 
     {#if showDeleteConfirm}
         <ConfirmDialog
@@ -559,5 +630,240 @@
             }}
             onCancel={() => (showDeleteConfirm = false)}
         />
+    {/if}
+
+    {#if showMemoryDeleteConfirm}
+        <ConfirmDialog
+            title="Delete memory?"
+            message="This action cannot be undone. Do you wish to continue?"
+            onConfirm={() => {
+                if (memoryToDeleteId) {
+                    handleDeleteContactMemory(memoryToDeleteId);
+                }
+                showMemoryDeleteConfirm = false;
+                memoryToDeleteId = null;
+            }}
+            onCancel={() => {
+                showMemoryDeleteConfirm = false;
+                memoryToDeleteId = null;
+            }}
+        />
+    {/if}
+
+    {#if showClearAllMemoriesConfirm}
+        <ConfirmDialog
+            title="Clear all memories?"
+            message="This action cannot be undone. All saved memories for this character will be permanently deleted."
+            onConfirm={() => {
+                handleClearAllMemories();
+                showClearAllMemoriesConfirm = false;
+            }}
+            onCancel={() => (showClearAllMemoriesConfirm = false)}
+        />
+    {/if}
+
+    {#if showMemoriesManager}
+        <div class="memories-manager-overlay">
+            <button
+                type="button"
+                class="memories-manager-backdrop"
+                onclick={() => (showMemoriesManager = false)}
+                aria-label="Close memories"
+            ></button>
+            <div class="memories-manager-popup">
+                <div class="memories-manager-header">
+                    <div class="memories-manager-title-row">
+                        <span class="memories-manager-title"
+                            >Saved memories</span
+                        >
+                        <div class="memories-manager-title-actions">
+                            <button
+                                type="button"
+                                class="memories-add-btn"
+                                onclick={() => {
+                                    isAddingMemory = true;
+                                    editingMemoryId = null;
+                                    memoryInputText = "";
+                                }}
+                            >
+                                Add memory
+                            </button>
+                            {#if selectedContact && selectedContact.memories && selectedContact.memories.length > 0}
+                                <button
+                                    type="button"
+                                    class="memories-clear-all-btn"
+                                    onclick={() =>
+                                        (showClearAllMemoriesConfirm = true)}
+                                >
+                                    Clear all
+                                </button>
+                            {/if}
+                            <button
+                                type="button"
+                                class="conversation-close-btn"
+                                onclick={() => (showMemoriesManager = false)}
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.2"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    ><line x1="18" y1="6" x2="6" y2="18" /><line
+                                        x1="6"
+                                        y1="6"
+                                        x2="18"
+                                        y2="18"
+                                    /></svg
+                                >
+                            </button>
+                        </div>
+                    </div>
+                    <p class="memories-manager-description">
+                        OpenDuck remembers and automatically manages useful
+                        information from calls, making responses more relevant
+                        and personal.
+                    </p>
+                </div>
+
+                {#if isAddingMemory || editingMemoryId}
+                    <div class="memory-edit-box">
+                        <textarea
+                            class="memory-edit-textarea"
+                            placeholder="Type a memory to save..."
+                            bind:value={memoryInputText}
+                            rows="3"
+                        ></textarea>
+                        <div class="memory-edit-actions">
+                            <button
+                                type="button"
+                                class="utility-btn"
+                                onclick={() => {
+                                    isAddingMemory = false;
+                                    editingMemoryId = null;
+                                    memoryInputText = "";
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                class="memory-save-btn"
+                                disabled={!memoryInputText.trim()}
+                                onclick={() => {
+                                    if (editingMemoryId) {
+                                        handleUpdateContactMemory(
+                                            editingMemoryId,
+                                            memoryInputText,
+                                        );
+                                    } else {
+                                        handleAddContactMemory(memoryInputText);
+                                    }
+                                    isAddingMemory = false;
+                                    editingMemoryId = null;
+                                    memoryInputText = "";
+                                }}
+                            >
+                                {editingMemoryId ? "Update" : "Save"}
+                            </button>
+                        </div>
+                    </div>
+                {/if}
+
+                <div class="memories-list">
+                    {#if filteredMemories.length === 0}
+                        <div class="memories-empty">
+                            {memorySearchQuery
+                                ? "No matching memories found."
+                                : "No memories saved yet."}
+                        </div>
+                    {:else}
+                        {#each filteredMemories as memory (memory.id)}
+                            <div class="memory-item">
+                                <div class="memory-content">
+                                    <div class="memory-text">{memory.text}</div>
+                                    <div class="memory-meta">
+                                        Saved on {new Date(
+                                            memory.createdAt,
+                                        ).toLocaleDateString(undefined, {
+                                            year: "numeric",
+                                            month: "long",
+                                            day: "numeric",
+                                        })}
+                                    </div>
+                                </div>
+                                <div class="memory-item-actions">
+                                    <button
+                                        type="button"
+                                        class="memory-action-btn"
+                                        onclick={() => {
+                                            editingMemoryId = memory.id;
+                                            isAddingMemory = false;
+                                            memoryInputText = memory.text;
+                                        }}
+                                        title="Edit memory"
+                                    >
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            ><path
+                                                d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"
+                                            /><path
+                                                d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
+                                            /></svg
+                                        >
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="memory-delete-btn"
+                                        onclick={() => {
+                                            memoryToDeleteId = memory.id;
+                                            showMemoryDeleteConfirm = true;
+                                        }}
+                                        title="Delete memory"
+                                    >
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            width="16"
+                                            height="16"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            stroke-width="2"
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            ><polyline points="3 6 5 6 21 6" /><path
+                                                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                                            /><line
+                                                x1="10"
+                                                y1="11"
+                                                x2="10"
+                                                y2="17"
+                                            /><line
+                                                x1="14"
+                                                y1="11"
+                                                x2="14"
+                                                y2="17"
+                                            /></svg
+                                        >
+                                    </button>
+                                </div>
+                            </div>
+                        {/each}
+                    {/if}
+                </div>
+            </div>
+        </div>
     {/if}
 </div>

@@ -234,7 +234,15 @@ export type StoredContactProfile = {
     refAudio?: string | null;
     refText?: string | null;
     cubismModel?: CubismModelConfig | null;
-    memory?: string | null;
+    memories?: MemoryItem[] | null;
+    lastMemoryClearAt?: number | null;
+    memoryEnabled?: boolean | null;
+};
+
+export type MemoryItem = {
+    id: string;
+    text: string;
+    createdAt: number;
 };
 
 export type ContactGender = "male" | "female";

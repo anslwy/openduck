@@ -17,7 +17,7 @@ use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::Menu;
@@ -146,6 +146,14 @@ struct ModelMemoryUsageEntry {
 struct ModelMemoryUsageSnapshot {
     total_bytes: u64,
     models: Vec<ModelMemoryUsageEntry>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MemoryItem {
+    pub(crate) id: String,
+    pub(crate) text: String,
+    pub(crate) created_at: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -527,7 +535,10 @@ struct AppState {
     vad: Mutex<Option<vad::Silero>>,
     screen_capture_child: Mutex<Option<std::process::Child>>,
     ai_subtitle_target_language: Mutex<String>,
-    character_memory: Mutex<Option<String>>,
+    last_memory_clear_at: Mutex<HashMap<String, u64>>,
+    memory_enabled: Mutex<bool>,
+    last_extracted_assistant_entry_id: AtomicU64,
+    character_memory: Mutex<Vec<MemoryItem>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -651,7 +662,7 @@ struct ContactExportPayload {
     ref_audio: Option<String>,
     ref_text: Option<String>,
     cubism_model: Option<serde_json::Value>,
-    memory: Option<String>,
+    memories: Option<Vec<serde_json::Value>>,
     output_path: String,
 }
 
@@ -1067,6 +1078,14 @@ fn ai_subtitle_target_language_name(target_lang: &str) -> Option<&'static str> {
 #[tauri::command]
 fn ping() {
     info!("Backend: ping command received");
+}
+
+#[tauri::command]
+async fn initialize_vad_command(
+    state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    ensure_vad(&app_handle, state.inner())
 }
 
 #[tauri::command]
@@ -1679,7 +1698,7 @@ fn export_contact_profile(payload: ContactExportPayload) -> Result<ContactExport
         "refAudio": payload.ref_audio,
         "refText": payload.ref_text,
         "cubismModel": payload.cubism_model,
-        "memory": payload.memory,
+        "memories": payload.memories,
     });
     let encoded = serde_json::to_vec_pretty(&export_json).map_err(|err| err.to_string())?;
 
@@ -1722,9 +1741,192 @@ async fn reset_call_session(
 }
 
 #[tauri::command]
-fn set_character_memory(state: State<'_, AppState>, memory: Option<String>) {
-    let mut mem = state.character_memory.lock().unwrap();
-    *mem = memory.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+fn set_character_memory(
+    state: State<'_, AppState>,
+    character_id: String,
+    memories: Vec<MemoryItem>,
+    last_clear_at: Option<u64>,
+    memory_enabled: bool,
+) {
+    {
+        let mut mem = state.character_memory.lock().unwrap();
+        *mem = memories;
+    }
+
+    {
+        let mut enabled = state.memory_enabled.lock().unwrap();
+        *enabled = memory_enabled;
+    }
+
+    if let Some(t) = last_clear_at {
+        let mut clear_map = state.last_memory_clear_at.lock().unwrap();
+        clear_map.insert(character_id, t);
+        state
+            .last_extracted_assistant_entry_id
+            .store(0, Ordering::Relaxed);
+    }
+}
+
+#[tauri::command]
+async fn extract_memories_from_current_session(
+    _app_handle: AppHandle,
+    state: State<'_, AppState>,
+    existing_memories: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if !*state.memory_enabled.lock().unwrap() {
+        return Ok(Vec::new());
+    }
+
+    let (turns, last_assistant_entry_id) = {
+        let turns_guard = state.conversation_turns.lock().unwrap();
+        let last_id = state
+            .last_extracted_assistant_entry_id
+            .load(Ordering::Relaxed);
+
+        if turns_guard.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut turns_to_process = Vec::new();
+        let mut found_last = last_id == 0;
+        let mut last_processed_id = last_id;
+
+        for turn in turns_guard.iter() {
+            if !found_last {
+                if turn.assistant_entry_id == last_id {
+                    found_last = true;
+                }
+                continue;
+            }
+            turns_to_process.push(turn.clone());
+            last_processed_id = turn.assistant_entry_id;
+        }
+
+        if !found_last {
+            turns_to_process = turns_guard.iter().cloned().collect();
+            last_processed_id = turns_guard
+                .back()
+                .map(|t| t.assistant_entry_id)
+                .unwrap_or(0);
+        }
+
+        if turns_to_process.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        (turns_to_process, last_processed_id)
+    };
+
+    let mut conversation_text = String::new();
+    for turn in turns {
+        if !turn.user_text.trim().is_empty() {
+            conversation_text.push_str(&format!("User: {}\n", turn.user_text));
+        }
+        if !turn.assistant_text.trim().is_empty() {
+            conversation_text.push_str(&format!("Assistant: {}\n", turn.assistant_text));
+        }
+    }
+
+    if conversation_text.trim().is_empty() {
+        state
+            .last_extracted_assistant_entry_id
+            .store(last_assistant_entry_id, Ordering::Relaxed);
+        return Ok(Vec::new());
+    }
+
+    let variant = loaded_gemma_variant(state.inner())
+        .unwrap_or_else(|| selected_gemma_variant(state.inner()));
+    
+    let model_name = if variant.is_external() {
+        selected_external_llm_model(state.inner(), variant).unwrap_or_default()
+    } else {
+        variant.repo_id().unwrap_or_default().to_string()
+    };
+
+    let server_port = *state.server_port.lock().unwrap();
+    
+    let (base_url, api_key) = if variant.is_external() {
+        (
+            external_llm_base_url(state.inner(), variant)
+                .ok_or_else(|| format!("Missing {} base URL.", variant.label()))?,
+            external_llm_api_key(state.inner(), variant),
+        )
+    } else {
+        let port = server_port.ok_or_else(|| "LLM server is not running.".to_string())?;
+        (server_base_url(port), None)
+    };
+
+    let mut extraction_prompt = format!(
+        "Extract 1-3 concise, important long-term memories or facts about the user from the following conversation. Focus on personal details, preferences, or major life events mentioned. Each memory should be a single short sentence. Reply with the memories ONLY, one per line. If nothing new or important was mentioned, reply with 'none'.\n\nConversation:\n{}",
+        conversation_text
+    );
+
+    if !existing_memories.is_empty() {
+        extraction_prompt.push_str(&format!(
+            "\n\nExisting memories (DO NOT extract these again, only extract NEW information):\n{}",
+            existing_memories.join("\n")
+        ));
+    }
+
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: vec![ChatContent::Text {
+            text: extraction_prompt,
+        }],
+    }];
+
+    let request = ChatRequest {
+        model: model_name,
+        messages,
+        stream: false,
+    };
+
+    let client = reqwest::Client::new();
+    let mut request_builder = client
+        .post(format!(
+            "{}/v1/chat/completions",
+            base_url.trim_end_matches('/')
+        ))
+        .json(&request);
+
+    if let Some(api_key) = api_key.as_ref() {
+        request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let response = request_builder
+        .send()
+        .await
+        .map_err(|e| format!("Failed to call LLM for memory extraction: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("LLM returned error {status}: {body}"));
+    }
+
+    let payload = response
+        .json::<ChatCompletionResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse extraction response: {e}"))?;
+
+    let extracted_text_value = payload
+        .choices
+        .into_iter()
+        .next()
+        .and_then(|choice| choice.message.content)
+        .ok_or_else(|| "LLM extraction response did not include content".to_string())?;
+
+    let extracted_text = extract_chat_content_text(extracted_text_value);
+    let memories: Vec<String> = extracted_text
+        .lines()
+        .map(|l| l.trim().trim_start_matches("- ").to_string())
+        .filter(|l| !l.is_empty() && l.to_lowercase() != "none")
+        .collect();
+
+    state
+        .last_extracted_assistant_entry_id
+        .store(last_assistant_entry_id, Ordering::Relaxed);
+    Ok(memories)
 }
 
 #[tauri::command]
@@ -1733,14 +1935,31 @@ async fn start_conversation(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let character_id = state.current_character_id.lock().unwrap().clone();
-    let session_memory = get_character_memory(&app_handle, &character_id);
-    let persistent_memory = state.character_memory.lock().unwrap().clone();
+    let last_clear_at = state
+        .last_memory_clear_at
+        .lock()
+        .unwrap()
+        .get(&character_id)
+        .cloned();
+    let session_memory = get_character_memory(&app_handle, &character_id, last_clear_at);
+    let persistent_memories = state.character_memory.lock().unwrap().clone();
+    let memory_enabled = *state.memory_enabled.lock().unwrap();
 
-    let memory = match (persistent_memory, session_memory) {
-        (Some(p), Some(s)) => Some(format!("Character notes:\n{}\n\nPrevious conversation turns:\n{}", p, s)),
-        (Some(p), None) => Some(p),
-        (None, Some(s)) => Some(s),
-        (None, None) => None,
+    let persistent_memory_text = if !memory_enabled || persistent_memories.is_empty() {
+        None
+    } else {
+        Some(persistent_memories.iter().map(|m| format!("- {}", m.text)).collect::<Vec<_>>().join("\n"))
+    };
+
+    let memory = if memory_enabled {
+        match (persistent_memory_text, session_memory) {
+            (Some(p), Some(s)) => Some(format!("Character notes:\n{}\n\nPrevious conversation turns:\n{}", p, s)),
+            (Some(p), None) => Some(p),
+            (None, Some(s)) => Some(s),
+            (None, None) => None,
+        }
+    } else {
+        None
     };
 
     let generation_id = state.next_generation_id.fetch_add(1, Ordering::Relaxed);
@@ -4288,8 +4507,16 @@ async fn receive_audio_chunk(
     let configured_silence_ms = *state.end_of_utterance_silence_ms.lock().unwrap();
     let active_stt_model = selected_stt_model(state.inner());
 
+    let in_grace_period = {
+        let started_at_guard = state.call_started_at.lock().unwrap();
+        match *started_at_guard {
+            None => true,
+            Some(t) => t.elapsed() < Duration::from_millis(CALL_START_GRACE_PERIOD_MS),
+        }
+    };
+
     let mut is_really_speaking = false;
-    if prepared_chunk.rms > SILENCE_THRESHOLD {
+    if prepared_chunk.rms > SILENCE_THRESHOLD && !in_grace_period {
         is_really_speaking = true;
 
         if let Ok(_) = ensure_vad(&app_handle, state.inner()) {
@@ -4308,6 +4535,7 @@ async fn receive_audio_chunk(
 
     let mut detected_speech = false;
     let mut live_transcription_utterance_id: Option<u64> = None;
+
     let force_commit = {
         let mut requested = state.commit_audio_requested.lock().unwrap();
         if *requested {
@@ -4400,12 +4628,16 @@ async fn receive_audio_chunk(
             }
         } else {
             let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
-            pre_buffer.extend(prepared_chunk.samples.iter().copied());
-            let max_pre_buffer_samples =
-                (capture_sample_rate as u64 * PRE_SPEECH_BUFFER_MS as u64 / 1000) as usize;
-            if pre_buffer.len() > max_pre_buffer_samples {
-                let to_remove = pre_buffer.len() - max_pre_buffer_samples;
-                pre_buffer.drain(..to_remove);
+            if in_grace_period {
+                pre_buffer.clear();
+            } else {
+                pre_buffer.extend(prepared_chunk.samples.iter().copied());
+                let max_pre_buffer_samples =
+                    (capture_sample_rate as u64 * PRE_SPEECH_BUFFER_MS as u64 / 1000) as usize;
+                if pre_buffer.len() > max_pre_buffer_samples {
+                    let to_remove = pre_buffer.len() - max_pre_buffer_samples;
+                    pre_buffer.drain(..to_remove);
+                }
             }
         }
     }
@@ -5286,7 +5518,13 @@ async fn stream_gemma_response_to_csm(
         let llm_context_turn_limit = *state.llm_context_turn_limit.lock().unwrap();
         let selection = select_conversation_turns_for_llm_context(&turns, llm_context_turn_limit);
         let image_history_limit = *state.llm_image_history_limit.lock().unwrap();
-        let persistent_character_memory = state.character_memory.lock().unwrap().clone();
+        let memory_enabled = *state.memory_enabled.lock().unwrap();
+        let persistent_memories = state.character_memory.lock().unwrap();
+        let persistent_character_memory = if !memory_enabled || persistent_memories.is_empty() {
+            None
+        } else {
+            Some(persistent_memories.iter().map(|m| format!("- {}", m.text)).collect::<Vec<_>>().join("\n"))
+        };
         (
             session_id,
             selection.turns,
@@ -5377,7 +5615,7 @@ async fn stream_gemma_response_to_csm(
         let prompt = if let Some(mem) = memory {
             format!("You are starting a new conversation with the user. You have the following context from previous interactions (which may include character notes and previous conversation turns):\n{}\nUse this context to greet the user naturally and ask a follow-up question or mention something you talked about before to kick off the conversation. Keep it natural and spoken. Do not mention that you have 'context' or 'memory', just talk naturally like a returning friend.", mem)
         } else {
-            "You are meeting the user for the first time. Get to know them. Start the conversation naturally with a warm greeting and ask them something about themselves.".to_string()
+            "You are meeting the user for the first time. Get to know them. Start the conversation naturally with a warm greeting and ask them something about themselves to kick off a new friendship.".to_string()
         };
         messages.push(ChatMessage {
             role: "user".to_string(),
@@ -9698,13 +9936,22 @@ fn append_conversation_turn_with_save(
         if title_guard.is_none() {
             let turns = state.conversation_turns.lock().unwrap();
             if turns.len() == 1 {
-                let first_sentence = turns[0]
-                    .user_text
+                let text_for_title = if !turns[0].user_text.trim().is_empty() {
+                    &turns[0].user_text
+                } else {
+                    &turns[0].assistant_text
+                };
+                // Clean up emotion tags like [smile], *smile*, (smile)
+                let cleaned_text = text_for_title
+                    .replace(|c| c == '[' || c == ']' || c == '*' || c == '(' || c == ')', " ");
+                let first_sentence = cleaned_text
                     .split(|c| c == '.' || c == '?' || c == '!')
                     .next()
-                    .unwrap_or(&turns[0].user_text)
+                    .unwrap_or(&cleaned_text)
                     .trim();
-                *title_guard = Some(first_sentence.chars().take(100).collect());
+                if !first_sentence.is_empty() {
+                    *title_guard = Some(first_sentence.chars().take(100).collect());
+                }
             }
         }
     }
@@ -9883,6 +10130,7 @@ fn reset_call_session_state(state: &AppState) {
         }
     }
     state.next_conversation_entry_id.store(1, Ordering::Relaxed);
+    state.last_extracted_assistant_entry_id.store(0, Ordering::Relaxed);
     reset_auto_continue_tracker(state);
 
     {
@@ -10772,8 +11020,10 @@ fn resolve_capture_sample_rate(sample_rate: Option<u32>) -> u32 {
 fn ensure_vad(app_handle: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
     let mut vad = state.vad.lock().unwrap();
     if vad.is_none() {
+        info!("Initializing VAD model...");
         let model_path = resolve_resource_file(app_handle, "silero_vad.onnx")?;
         *vad = Some(vad::Silero::new(vad::SampleRate::SixteenkHz, model_path)?);
+        info!("VAD model initialized successfully");
     }
     Ok(())
 }
@@ -11663,6 +11913,16 @@ async fn load_session(
     state
         .next_conversation_entry_id
         .store(max_id + 1, Ordering::Relaxed);
+
+    let last_assistant_id = data
+        .turns
+        .last()
+        .map(|t| t.assistant_entry_id)
+        .unwrap_or(0);
+    state
+        .last_extracted_assistant_entry_id
+        .store(last_assistant_id, Ordering::Relaxed);
+
     reset_auto_continue_tracker(state.inner());
 
     Ok(data.turns)
@@ -11701,11 +11961,16 @@ fn rename_session(
     Ok(())
 }
 
-fn get_character_memory(app_handle: &AppHandle, character_id: &str) -> Option<String> {
+fn get_character_memory(
+    app_handle: &AppHandle,
+    character_id: &str,
+    last_clear_at: Option<u64>,
+) -> Option<String> {
     let sessions = get_sessions(app_handle.clone()).ok()?;
     let latest_session_id = sessions
         .iter()
         .filter(|s| s.character_id.as_deref() == Some(character_id))
+        .filter(|s| last_clear_at.map_or(true, |t| s.updated_at > t))
         .map(|s| &s.id)
         .next()?;
 
@@ -13109,7 +13374,10 @@ pub fn run() {
             vad: Mutex::new(None),
             screen_capture_child: Mutex::new(None),
             ai_subtitle_target_language: Mutex::new("none".to_string()),
-            character_memory: Mutex::new(None),
+            last_memory_clear_at: Mutex::new(HashMap::new()),
+            memory_enabled: Mutex::new(true),
+            last_extracted_assistant_entry_id: AtomicU64::new(0),
+            character_memory: Mutex::new(Vec::new()),
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -13123,6 +13391,7 @@ pub fn run() {
             cancel_audio,
             is_main_window_visible_to_user,
             receive_audio_chunk,
+            initialize_vad_command,
             ping,
             get_build_info,
             initialize_openduck_contact_imports,
@@ -13136,6 +13405,7 @@ pub fn run() {
             set_csm_reference_voice,
             export_contact_profile,
             reset_call_session,
+            extract_memories_from_current_session,
             start_conversation,
             ensure_runtime_dependencies,
             interrupt_tts,

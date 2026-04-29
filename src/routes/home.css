@@ -1645,6 +1645,421 @@ main.idle-layout {
     align-self: flex-start;
 }
 
+.contact-memory-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.contact-memory-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.manage-memories-btn {
+    background: #ffffff;
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.memories-manager-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.memories-manager-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    border: none;
+    width: 100%;
+    height: 100%;
+    cursor: default;
+    backdrop-filter: blur(4px);
+}
+
+.memories-manager-popup {
+    position: relative;
+    background: #1a1a1c;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 20px;
+    width: 100%;
+    max-width: 520px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 30px 60px rgba(0, 0, 0, 0.7);
+    overflow: hidden;
+}
+
+.memories-manager-header {
+    padding: 24px 28px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: #202022;
+}
+
+.memories-manager-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.memories-manager-title-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.memories-clear-all-btn {
+    background: rgba(255, 69, 58, 0.1);
+    border: 1px solid rgba(255, 69, 58, 0.2);
+    border-radius: 8px;
+    color: #ff453a;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.memories-clear-all-btn:hover {
+    background: rgba(255, 69, 58, 0.2);
+    border-color: rgba(255, 69, 58, 0.3);
+}
+
+.memories-add-btn {
+    background: rgba(255, 246, 214, 0.1);
+    border: 1px solid rgba(255, 246, 214, 0.2);
+    border-radius: 8px;
+    color: #ffcd40;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.memories-add-btn:hover {
+    background: rgba(255, 246, 214, 0.2);
+    border-color: rgba(255, 246, 214, 0.3);
+}
+
+.contact-memory-toggle-field {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 16px;
+    margin-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.contact-memory-toggle-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-right: 12px;
+}
+
+.contact-memory-toggle-label {
+    font-size: 15px;
+    font-weight: 600;
+    color: rgba(255, 246, 214, 0.92);
+}
+
+/* iOS Style Toggle */
+.ios-toggle {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.ios-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.ios-toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(255, 255, 255, 0.1);
+    transition: 0.3s;
+    border-radius: 24px;
+}
+
+.ios-toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 2px;
+    bottom: 2px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.ios-toggle input:checked + .ios-toggle-slider {
+    background-color: #ffcd40;
+}
+
+.ios-toggle input:checked + .ios-toggle-slider:before {
+    transform: translateX(20px);
+}
+
+.memories-manager-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff6d6;
+    letter-spacing: -0.01em;
+}
+
+.memories-manager-description {
+    font-size: 13.5px;
+    color: rgba(255, 255, 255, 0.55);
+    line-height: 1.6;
+    margin: 6px 0 20px 0;
+}
+
+.memories-search-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.memories-search-input-wrapper .search-icon {
+    position: absolute;
+    left: 14px;
+    color: rgba(255, 255, 255, 0.4);
+    pointer-events: none;
+}
+
+.memories-search-input {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 11px 14px 11px 42px;
+    color: white;
+    font-size: 14.5px;
+    outline: none;
+    transition: all 0.2s ease;
+}
+
+.memories-search-input:focus {
+    background: rgba(0, 0, 0, 0.3);
+    border-color: rgba(255, 246, 214, 0.4);
+    box-shadow: 0 0 0 3px rgba(255, 246, 214, 0.08);
+}
+
+.memories-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+}
+
+.memory-edit-box {
+    padding: 16px 28px;
+    background: rgba(255, 246, 214, 0.2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.memory-edit-textarea {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 12px;
+    color: white;
+    font-size: 14.5px;
+    line-height: 1.5;
+    outline: none;
+    resize: none;
+    transition: all 0.2s ease;
+}
+
+.memory-edit-textarea:focus {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 246, 214, 0.4);
+    box-shadow: 0 0 0 3px rgba(255, 246, 214, 0.08);
+}
+
+.memory-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.memory-save-btn {
+    background: #ffcd40;
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 13.5px;
+    font-weight: 650;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.memory-save-btn:hover:not(:disabled) {
+    background: #ffdb70;
+    transform: translateY(-1px);
+}
+
+.memory-save-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.memories-empty {
+    padding: 80px 40px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.35);
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.memory-item {
+    display: flex;
+    align-items: flex-start;
+    padding: 18px 28px;
+    gap: 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    transition: background 0.2s ease;
+}
+
+.memory-item:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.memory-item:last-child {
+    border-bottom: none;
+}
+
+.memory-content {
+    flex: 1;
+}
+
+.memory-item-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.memory-action-btn {
+    background: none;
+    border: none;
+    color: white;
+    padding: 4px;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.memory-action-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: white;
+}
+
+.memory-text {
+    font-size: 15px;
+    line-height: 1.6;
+    margin-bottom: 6px;
+    word-break: break-word;
+}
+
+.memory-meta {
+    font-size: 12.5px;
+    color: rgba(255, 255, 255, 0.4);
+    font-weight: 500;
+}
+
+.memory-delete-btn {
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.3);
+    cursor: pointer;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+}
+
+.memory-item:hover .memory-delete-btn {
+    opacity: 1;
+}
+
+.memory-delete-btn:hover {
+    background: rgba(255, 68, 68, 0.15);
+    color: #ff5555;
+}
+
+.memory-item {
+    display: flex;
+    align-items: flex-start;
+    padding: 12px 20px;
+    gap: 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    transition: background 0.2s ease;
+}
+
+.memory-item:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.memory-item:last-child {
+    border-bottom: none;
+}
+
+.memory-content {
+    flex: 1;
+}
+
+.memory-text {
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 4px;
+    word-break: break-word;
+    color: white;
+}
+
+.memory-meta {
+    font-size: 12px;
+    color: white;
+}
+
+.memory-delete-btn {
+    background: none;
+    border: none;
+    color: var(--text-color-secondary);
+    padding: 4px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+    color: white;
+}
+
 .conversation-popup-header {
     display: flex;
     align-items: center;
