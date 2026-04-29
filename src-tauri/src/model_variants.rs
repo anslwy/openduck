@@ -193,6 +193,20 @@ impl KokoroLanguage {
         }
     }
 
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::AmericanEnglish => "American English",
+            Self::BritishEnglish => "British English",
+            Self::Japanese => "Japanese",
+            Self::MandarinChinese => "Mandarin Chinese",
+            Self::Spanish => "Spanish",
+            Self::French => "French",
+            Self::Hindi => "Hindi",
+            Self::Italian => "Italian",
+            Self::BrazilianPortuguese => "Brazilian Portuguese",
+        }
+    }
+
     pub(crate) fn female_voice(self) -> &'static str {
         match self {
             Self::AmericanEnglish => KOKORO_AMERICAN_ENGLISH_FEMALE_VOICE,

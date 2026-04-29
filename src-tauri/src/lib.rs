@@ -5505,6 +5505,7 @@ async fn stream_gemma_response_to_csm(
         llm_context_trimmed_by_turn_limit,
         llm_image_history_limit,
         persistent_character_memory,
+        kokoro_language,
     ) = {
         let state = app_handle.state::<AppState>();
         let session_id = current_conversation_session_id(state.inner());
@@ -5523,7 +5524,19 @@ async fn stream_gemma_response_to_csm(
         let persistent_character_memory = if !memory_enabled || persistent_memories.is_empty() {
             None
         } else {
-            Some(persistent_memories.iter().map(|m| format!("{}: {}", format_timeago(m.created_at), m.text)).collect::<Vec<_>>().join("\n"))
+            Some(
+                persistent_memories
+                    .iter()
+                    .map(|m| format!("{}: {}", format_timeago(m.created_at), m.text))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        };
+        let selected_csm = selected_csm_model(state.inner());
+        let kokoro_language = if selected_csm == CsmModelVariant::Kokoro82m {
+            Some(selected_kokoro_language(state.inner()))
+        } else {
+            None
         };
         (
             session_id,
@@ -5534,6 +5547,7 @@ async fn stream_gemma_response_to_csm(
             selection.trimmed_by_turn_limit,
             image_history_limit,
             persistent_character_memory,
+            kokoro_language,
         )
     };
     let has_latest_audio = matches!(
@@ -5607,6 +5621,7 @@ async fn stream_gemma_response_to_csm(
                 persistent_character_memory,
                 has_latest_audio,
                 has_any_image_context,
+                kokoro_language,
             ),
         }],
     }];
@@ -6632,10 +6647,22 @@ fn build_llm_system_prompt(
     memory: Option<String>,
     include_audio_context: bool,
     include_image_context: bool,
+    kokoro_language: Option<KokoroLanguage>,
 ) -> String {
     let mut sections = vec![base_prompt.to_string()];
+
+    if let Some(lang) = kokoro_language {
+        sections.push(format!(
+            "IMPORTANT: You must speak in {} ONLY. Do not use any other languages.",
+            lang.label()
+        ));
+    }
+
     if let Some(mem) = memory {
-        sections.push(format!("Memory of previous conversations with this user:\n{}", mem));
+        sections.push(format!(
+            "Memory of previous conversations with this user:\n{}",
+            mem
+        ));
     }
     if include_audio_context {
         sections.push(AUDIO_CONTEXT_SYSTEM_PROMPT.to_string());
@@ -7593,9 +7620,10 @@ mod tests {
         resolve_capture_sample_rate, samples_duration_ms, sanitize_for_voice_output,
         select_conversation_turns_for_llm_context,
         should_flush_incomplete_streamed_response_segment, suppress_playback_echo,
-        write_data_url_to_temp_file, AudioPayload, ConversationTurn, ParsedGemmaStreamEvent,
-        AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE, IMAGE_CONTEXT_SYSTEM_PROMPT,
-        MAX_SPOKEN_CJK_CHARS_PER_SEGMENT_HARD_LIMIT, MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
+        write_data_url_to_temp_file, AudioPayload, ConversationTurn, KokoroLanguage,
+        ParsedGemmaStreamEvent, AUDIO_CONTEXT_SYSTEM_PROMPT, DEFAULT_SAMPLE_RATE,
+        IMAGE_CONTEXT_SYSTEM_PROMPT, MAX_SPOKEN_CJK_CHARS_PER_SEGMENT_HARD_LIMIT,
+        MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
     use crate::constants::{
         DEFAULT_LLM_CONTEXT_TURN_LIMIT, END_OF_UTTERANCE_SILENCE_MS, MAX_AUTO_CONTINUE_SILENCE_MS,
@@ -8334,16 +8362,30 @@ mod tests {
         let base_prompt = "Base prompt";
 
         assert_eq!(
-            build_llm_system_prompt(base_prompt, None, false, false),
+            build_llm_system_prompt(base_prompt, None, false, false, None),
             "Base prompt"
         );
         assert_eq!(
-            build_llm_system_prompt(base_prompt, None, true, false),
+            build_llm_system_prompt(base_prompt, None, true, false, None),
             format!("Base prompt\n\n{AUDIO_CONTEXT_SYSTEM_PROMPT}")
         );
         assert_eq!(
-            build_llm_system_prompt(base_prompt, None, false, true),
+            build_llm_system_prompt(base_prompt, None, false, true, None),
             format!("Base prompt\n\n{IMAGE_CONTEXT_SYSTEM_PROMPT}")
+        );
+    }
+
+    #[test]
+    fn llm_system_prompt_includes_language_instruction() {
+        let base_prompt = "Base prompt";
+        let lang = KokoroLanguage::Japanese;
+
+        assert_eq!(
+            build_llm_system_prompt(base_prompt, None, false, false, Some(lang)),
+            format!(
+                "Base prompt\n\nIMPORTANT: You must speak in {} ONLY. Do not use any other languages.",
+                lang.label()
+            )
         );
     }
 
