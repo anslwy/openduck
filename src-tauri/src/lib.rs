@@ -1948,7 +1948,7 @@ async fn start_conversation(
     let persistent_memory_text = if !memory_enabled || persistent_memories.is_empty() {
         None
     } else {
-        Some(persistent_memories.iter().map(|m| format!("- {}", m.text)).collect::<Vec<_>>().join("\n"))
+        Some(persistent_memories.iter().map(|m| format!("{}: {}", format_timeago(m.created_at), m.text)).collect::<Vec<_>>().join("\n"))
     };
 
     let memory = if memory_enabled {
@@ -5523,7 +5523,7 @@ async fn stream_gemma_response_to_csm(
         let persistent_character_memory = if !memory_enabled || persistent_memories.is_empty() {
             None
         } else {
-            Some(persistent_memories.iter().map(|m| format!("- {}", m.text)).collect::<Vec<_>>().join("\n"))
+            Some(persistent_memories.iter().map(|m| format!("{}: {}", format_timeago(m.created_at), m.text)).collect::<Vec<_>>().join("\n"))
         };
         (
             session_id,
@@ -5617,6 +5617,7 @@ async fn stream_gemma_response_to_csm(
         } else {
             "You are meeting the user for the first time. Get to know them. Start the conversation naturally with a warm greeting and ask them something about themselves to kick off a new friendship.".to_string()
         };
+        println!("InitialGreeting prompt: {}", prompt.to_string());
         messages.push(ChatMessage {
             role: "user".to_string(),
             content: vec![ChatContent::Text { text: prompt }],
@@ -10085,6 +10086,42 @@ fn clear_pending_screen_capture_state(state: &AppState) -> bool {
         remove_temp_image_file(&previous_path);
     }
     had_pending
+}
+
+fn format_timeago(created_at_ms: u64) -> String {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_millis() as u64;
+
+    if created_at_ms >= now_ms {
+        return "just now".to_string();
+    }
+
+    let diff_ms = now_ms - created_at_ms;
+    let diff_secs = diff_ms / 1000;
+    let diff_mins = diff_secs / 60;
+    let diff_hours = diff_mins / 60;
+    let diff_days = diff_hours / 24;
+
+    if diff_days >= 365 {
+        let years = diff_days / 365;
+        format!("{} year{} ago", years, if years > 1 { "s" } else { "" })
+    } else if diff_days >= 30 {
+        let months = diff_days / 30;
+        format!("{} month{} ago", months, if months > 1 { "s" } else { "" })
+    } else if diff_days >= 7 {
+        let weeks = diff_days / 7;
+        format!("{} week{} ago", weeks, if weeks > 1 { "s" } else { "" })
+    } else if diff_days >= 1 {
+        format!("{} day{} ago", diff_days, if diff_days > 1 { "s" } else { "" })
+    } else if diff_hours >= 1 {
+        format!("{} hour{} ago", diff_hours, if diff_hours > 1 { "s" } else { "" })
+    } else if diff_mins >= 1 {
+        format!("{} minute{} ago", diff_mins, if diff_mins > 1 { "s" } else { "" })
+    } else {
+        "just now".to_string()
+    }
 }
 
 fn current_conversation_session_id(state: &AppState) -> u64 {
