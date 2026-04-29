@@ -92,6 +92,7 @@
         SHOW_CALL_TIMER_STORAGE_KEY,
         SUBTITLE_FONT_SIZE_STORAGE_KEY,
         SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
+        SHOW_ADVANCED_MODELS_STORAGE_KEY,
         AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
         CALL_MODE_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
@@ -106,6 +107,7 @@
         DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE,
         DEFAULT_SHOW_CALL_TIMER,
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
+        DEFAULT_SHOW_ADVANCED_MODELS,
         DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP,
         DEFAULT_AUTO_CHECK_APP_UPDATES,
         DEFAULT_GLOBAL_SHORTCUT,
@@ -208,6 +210,11 @@
         enabled: boolean;
     };
 
+    type StoredShowAdvancedModelsPreference = {
+        version: 1;
+        enabled: boolean;
+    };
+
     type StoredAiSubtitleTargetLanguagePreference = {
         version: 1;
         targetLanguage: AiSubtitleTargetLanguage;
@@ -279,9 +286,9 @@
     let isSpacePressed = $state(false);
     let time = $state(0);
     let callStartedAtMs = $state<number | null>(null);
-    let callTimerInterval = $state<ReturnType<typeof window.setInterval> | null>(
-        null,
-    );
+    let callTimerInterval = $state<ReturnType<
+        typeof window.setInterval
+    > | null>(null);
     let isGemmaDownloaded = $state(false);
     let isGemmaLoaded = $state(false);
     let isOllamaSupported = $state(false);
@@ -392,7 +399,9 @@
     let activePongGainNode = $state<GainNode | null>(null);
     let cachedConnectingSoundSamples = $state<Float32Array | null>(null);
     let cachedConnectingSoundSampleRate = $state<number | null>(null);
-    let activeConnectingSoundSource = $state<AudioBufferSourceNode | null>(null);
+    let activeConnectingSoundSource = $state<AudioBufferSourceNode | null>(
+        null,
+    );
     let activeConnectingSoundGainNode = $state<GainNode | null>(null);
     let pongPlaybackEnabled = $state(true);
     let keepScreenOnEnabled = $state(true);
@@ -405,6 +414,7 @@
     let showSubtitleEnabled = $state(true);
     let subtitleFontSize = $state(DEFAULT_SUBTITLE_FONT_SIZE);
     let showAiSubtitleEnabled = $state(DEFAULT_SHOW_AI_SUBTITLE);
+    let showAdvancedModels = $state(DEFAULT_SHOW_ADVANCED_MODELS);
     let aiSubtitleTargetLanguage = $state<AiSubtitleTargetLanguage>(
         DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE,
     );
@@ -1574,7 +1584,7 @@
             autoUnmuteOnPastedScreenshotEnabled &&
             micMuted
         ) {
-        setMicMuted(callMode === "push_to_talk");
+            setMicMuted(callMode === "push_to_talk");
         }
     }
 
@@ -1712,6 +1722,21 @@
         };
         window.localStorage.setItem(
             SHOW_STAT_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function persistShowAdvancedModelsPreference(enabled: boolean) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredShowAdvancedModelsPreference = {
+            version: 1,
+            enabled,
+        };
+        window.localStorage.setItem(
+            SHOW_ADVANCED_MODELS_STORAGE_KEY,
             JSON.stringify(payload),
         );
     }
@@ -2180,6 +2205,34 @@
         }
     }
 
+    function loadShowAdvancedModelsPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_SHOW_ADVANCED_MODELS;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            SHOW_ADVANCED_MODELS_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_SHOW_ADVANCED_MODELS;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return DEFAULT_SHOW_ADVANCED_MODELS;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error("Failed to restore show advanced models preference:", err);
+            return DEFAULT_SHOW_ADVANCED_MODELS;
+        }
+    }
+
     function loadShowSubtitlePreferenceFromStorage() {
         if (typeof window === "undefined") {
             return true;
@@ -2619,6 +2672,11 @@
         persistShowStatPreference(enabled);
     }
 
+    function applyShowAdvancedModelsPreference(enabled: boolean) {
+        showAdvancedModels = enabled;
+        persistShowAdvancedModelsPreference(enabled);
+    }
+
     function applyShowSubtitlePreference(enabled: boolean) {
         showSubtitleEnabled = enabled;
         persistShowSubtitlePreference(enabled);
@@ -2788,6 +2846,11 @@
     async function initializeShowStatPreference() {
         const storedEnabled = loadShowStatPreferenceFromStorage();
         applyShowStatPreference(storedEnabled);
+    }
+
+    async function initializeShowAdvancedModelsPreference() {
+        const storedEnabled = loadShowAdvancedModelsPreferenceFromStorage();
+        applyShowAdvancedModelsPreference(storedEnabled);
     }
 
     async function initializeShowSubtitlePreference() {
@@ -4974,7 +5037,11 @@
                     refAudio: contact.refAudio,
                     refText: contact.refText,
                     cubismModel,
-                    memories: includeMemory ? (Array.isArray(contact.memories) ? [...contact.memories] : []) : null,
+                    memories: includeMemory
+                        ? Array.isArray(contact.memories)
+                            ? [...contact.memories]
+                            : []
+                        : null,
                     memoryEnabled: contact.memoryEnabled,
                     lastMemoryClearAt: contact.lastMemoryClearAt,
                 },
@@ -5027,7 +5094,9 @@
                         refAudio: selectedContact.refAudio,
                         refText: selectedContact.refText,
                         cubismModel: selectedContact.cubismModel ?? null,
-                        memories: includeMemory ? (selectedContact.memories || []) : [],
+                        memories: includeMemory
+                            ? selectedContact.memories || []
+                            : [],
                         memoryEnabled: selectedContact.memoryEnabled,
                         lastMemoryClearAt: selectedContact.lastMemoryClearAt,
                         outputPath,
@@ -5856,9 +5925,7 @@
                 await invoke<string[]>("get_openai_compatible_models")
             ).filter((m) => m.trim() !== "");
             openAiCompatibleModels = models;
-            const current = await invoke<string>(
-                "get_openai_compatible_model",
-            );
+            const current = await invoke<string>("get_openai_compatible_model");
 
             if (selectedOpenAiCompatibleModel === "") {
                 selectedOpenAiCompatibleModel = current;
@@ -6878,10 +6945,12 @@
         // Memory extraction must happen before reset_call_session clears the turns
         if (selectedContact?.memoryEnabled !== false) {
             try {
-                const existingMemoryTexts = (selectedContact?.memories || []).map(m => m.text);
+                const existingMemoryTexts = (
+                    selectedContact?.memories || []
+                ).map((m) => m.text);
                 const extractedMemories = await invoke<string[]>(
                     "extract_memories_from_current_session",
-                    { existingMemories: existingMemoryTexts }
+                    { existingMemories: existingMemoryTexts },
                 );
                 if (extractedMemories.length > 0) {
                     console.log("Extracted new memories:", extractedMemories);
@@ -6894,10 +6963,10 @@
                         }));
                         return {
                             ...contact,
-                            memories: [...newMemories, ...existingMemories].slice(
-                                0,
-                                100,
-                            ), // Cap at 100 memories
+                            memories: [
+                                ...newMemories,
+                                ...existingMemories,
+                            ].slice(0, 100), // Cap at 100 memories
                         };
                     });
                     // Sync to backend character_memory state if it's the currently selected character
@@ -7987,6 +8056,7 @@
             await initializeSelectLastSessionPreference();
             await initializeAutoLoadModelsOnStartupPreference();
             await initializeShowStatPreference();
+            await initializeShowAdvancedModelsPreference();
             await initializeShowSubtitlePreference();
             await initializeSubtitleFontSizePreference();
             await initializeShowAiSubtitlePreference();
@@ -8238,119 +8308,147 @@
                     >
                         {loadAllButtonLabel}
                     </button>
+                    <button
+                        type="button"
+                        class="utility-btn advanced-toggle-btn"
+                        class:active={showAdvancedModels}
+                        onclick={() =>
+                            applyShowAdvancedModelsPreference(
+                                !showAdvancedModels,
+                            )}
+                    >
+                        <span>Advanced</span>
+                        <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="3"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            class="dropdown-arrow"
+                            class:open={showAdvancedModels}
+                        >
+                            <path d="m6 9 6 6 6-6" />
+                        </svg>
+                    </button>
                 </div>
-                <GemmaBanner
-                    {isDownloadingGemma}
-                    {isGemmaDownloaded}
-                    {isGemmaLoaded}
-                    {selectedGemmaVariant}
-                    {gemmaVariantOptions}
-                    {gemmaVariantDisabled}
-                    {gemmaVariantTooltip}
-                    {gemmaDownloadError}
-                    {gemmaDownloadMessage}
-                    {gemmaDownloadProgress}
-                    {gemmaDownloadIndeterminate}
-                    {isCancellingGemmaDownload}
-                    {isUnloadingGemma}
-                    {isLoadingGemma}
-                    {isClearingGemmaCache}
-                    {formatDownloadPercent}
-                    {handleGemmaVariantChange}
-                    {handleCancelGemmaDownload}
-                    {handleUnloadGemma}
-                    {handleClearGemmaCache}
-                    {handleDownloadGemma}
-                    {handleLoadGemma}
-                    isExternalGemmaVariant={selectedGemmaUsesExternalProvider}
-                    externalProviderLabel={selectedExternalProviderLabel}
-                    externalProviderSupported={selectedExternalProviderSupported}
-                    externalProviderGuideText={selectedExternalProviderGuideText}
-                    externalModels={selectedExternalModels}
-                    {selectedExternalModel}
-                    handleExternalModelChange={selectedGemmaVariant ===
-                    "lmstudio"
-                        ? handleLmStudioModelChange
-                        : selectedGemmaVariant === "openai_compatible"
-                          ? handleOpenAiCompatibleModelChange
-                          : handleOllamaModelChange}
-                    {externalModelDisabled}
-                    {openExternalConfig}
-                />
-                <SttBanner
-                    {selectedGemmaVariant}
-                    {sttUsesGemma}
-                    {isGemmaLoaded}
-                    {isDownloadingStt}
-                    {isSttDownloaded}
-                    {isSttLoaded}
-                    {selectedSttModel}
-                    {sttModelOptions}
-                    {sttVariantDisabled}
-                    {sttModelTooltip}
-                    {selectedSttModelLabel}
-                    {selectedSttLanguage}
-                    {sttLanguageOptions}
-                    {sttLanguageTooltip}
-                    {selectedSttLanguageLabel}
-                    {sttNotificationMessage}
-                    {sttDownloadError}
-                    {sttDownloadMessage}
-                    {sttDownloadProgress}
-                    {sttDownloadIndeterminate}
-                    {sttLoadMessage}
-                    {isCancellingSttDownload}
-                    {isUnloadingStt}
-                    {isLoadingStt}
-                    {isClearingSttCache}
-                    {formatDownloadPercent}
-                    {handleSttModelChange}
-                    {handleSttLanguageChange}
-                    {handleCancelSttDownload}
-                    {handleUnloadStt}
-                    {handleClearSttCache}
-                    {handleDownloadStt}
-                    {handleLoadStt}
-                    isExternalGemmaVariant={selectedGemmaUsesExternalProvider}
-                    externalProviderLabel={selectedExternalProviderLabel}
-                />
-                <SpeechBanner
-                    {isDownloadingCsm}
-                    {isCsmDownloaded}
-                    {isCsmLoaded}
-                    {selectedCsmModel}
-                    {csmModelOptions}
-                    {csmVariantDisabled}
-                    {csmModelTooltip}
-                    {selectedKokoroLanguage}
-                    {kokoroLanguageOptions}
-                    {kokoroLanguageDisabled}
-                    {kokoroLanguageTooltip}
-                    {selectedKokoroLanguageLabel}
-                    {csmQuantizeAvailable}
-                    {isCsmQuantized}
-                    {isUpdatingCsmQuantize}
-                    {selectedCsmModelLabel}
-                    {csmDownloadError}
-                    {csmDownloadMessage}
-                    {csmDownloadProgress}
-                    {csmDownloadIndeterminate}
-                    {csmLoadMessage}
-                    csmNotificationMessage={csmBannerNotificationMessage}
-                    {isCancellingCsmDownload}
-                    {isUnloadingCsm}
-                    {isLoadingCsm}
-                    {isClearingCsmCache}
-                    {formatDownloadPercent}
-                    {handleCsmModelChange}
-                    {handleKokoroLanguageChange}
-                    {handleCancelCsmDownload}
-                    {handleUnloadCsm}
-                    {handleClearCsmCache}
-                    {handleDownloadCsm}
-                    {handleLoadCsm}
-                    {handleCsmQuantizeToggle}
-                />
+                {#if showAdvancedModels}
+                    <GemmaBanner
+                        {isDownloadingGemma}
+                        {isGemmaDownloaded}
+                        {isGemmaLoaded}
+                        {selectedGemmaVariant}
+                        {gemmaVariantOptions}
+                        {gemmaVariantDisabled}
+                        {gemmaVariantTooltip}
+                        {gemmaDownloadError}
+                        {gemmaDownloadMessage}
+                        {gemmaDownloadProgress}
+                        {gemmaDownloadIndeterminate}
+                        {isCancellingGemmaDownload}
+                        {isUnloadingGemma}
+                        {isLoadingGemma}
+                        {isClearingGemmaCache}
+                        {formatDownloadPercent}
+                        {handleGemmaVariantChange}
+                        {handleCancelGemmaDownload}
+                        {handleUnloadGemma}
+                        {handleClearGemmaCache}
+                        {handleDownloadGemma}
+                        {handleLoadGemma}
+                        isExternalGemmaVariant={selectedGemmaUsesExternalProvider}
+                        externalProviderLabel={selectedExternalProviderLabel}
+                        externalProviderSupported={selectedExternalProviderSupported}
+                        externalProviderGuideText={selectedExternalProviderGuideText}
+                        externalModels={selectedExternalModels}
+                        {selectedExternalModel}
+                        handleExternalModelChange={selectedGemmaVariant ===
+                        "lmstudio"
+                            ? handleLmStudioModelChange
+                            : selectedGemmaVariant === "openai_compatible"
+                              ? handleOpenAiCompatibleModelChange
+                              : handleOllamaModelChange}
+                        {externalModelDisabled}
+                        {openExternalConfig}
+                    />
+                    <SttBanner
+                        {selectedGemmaVariant}
+                        {sttUsesGemma}
+                        {isGemmaLoaded}
+                        {isDownloadingStt}
+                        {isSttDownloaded}
+                        {isSttLoaded}
+                        {selectedSttModel}
+                        {sttModelOptions}
+                        {sttVariantDisabled}
+                        {sttModelTooltip}
+                        {selectedSttModelLabel}
+                        {selectedSttLanguage}
+                        {sttLanguageOptions}
+                        {sttLanguageTooltip}
+                        {selectedSttLanguageLabel}
+                        {sttNotificationMessage}
+                        {sttDownloadError}
+                        {sttDownloadMessage}
+                        {sttDownloadProgress}
+                        {sttDownloadIndeterminate}
+                        {sttLoadMessage}
+                        {isCancellingSttDownload}
+                        {isUnloadingStt}
+                        {isLoadingStt}
+                        {isClearingSttCache}
+                        {formatDownloadPercent}
+                        {handleSttModelChange}
+                        {handleSttLanguageChange}
+                        {handleCancelSttDownload}
+                        {handleUnloadStt}
+                        {handleClearSttCache}
+                        {handleDownloadStt}
+                        {handleLoadStt}
+                        isExternalGemmaVariant={selectedGemmaUsesExternalProvider}
+                        externalProviderLabel={selectedExternalProviderLabel}
+                    />
+                    <SpeechBanner
+                        {isDownloadingCsm}
+                        {isCsmDownloaded}
+                        {isCsmLoaded}
+                        {selectedCsmModel}
+                        {csmModelOptions}
+                        {csmVariantDisabled}
+                        {csmModelTooltip}
+                        {selectedKokoroLanguage}
+                        {kokoroLanguageOptions}
+                        {kokoroLanguageDisabled}
+                        {kokoroLanguageTooltip}
+                        {selectedKokoroLanguageLabel}
+                        {csmQuantizeAvailable}
+                        {isCsmQuantized}
+                        {isUpdatingCsmQuantize}
+                        {selectedCsmModelLabel}
+                        {csmDownloadError}
+                        {csmDownloadMessage}
+                        {csmDownloadProgress}
+                        {csmDownloadIndeterminate}
+                        {csmLoadMessage}
+                        csmNotificationMessage={csmBannerNotificationMessage}
+                        {isCancellingCsmDownload}
+                        {isUnloadingCsm}
+                        {isLoadingCsm}
+                        {isClearingCsmCache}
+                        {formatDownloadPercent}
+                        {handleCsmModelChange}
+                        {handleKokoroLanguageChange}
+                        {handleCancelCsmDownload}
+                        {handleUnloadCsm}
+                        {handleClearCsmCache}
+                        {handleDownloadCsm}
+                        {handleLoadCsm}
+                        {handleCsmQuantizeToggle}
+                    />
+                {/if}
             {/if}
         </div>
     {/if}
@@ -8964,7 +9062,12 @@
                                         stroke-width="2.5"
                                         stroke-linecap="round"
                                         stroke-linejoin="round"
-                                        ><line x1="1" y1="1" x2="23" y2="23" /><path
+                                        ><line
+                                            x1="1"
+                                            y1="1"
+                                            x2="23"
+                                            y2="23"
+                                        /><path
                                             d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"
                                         /><path
                                             d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"

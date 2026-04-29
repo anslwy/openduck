@@ -2746,6 +2746,18 @@ main.idle-layout {
     border-color: rgba(255, 255, 255, 0.12);
 }
 
+.utility-btn.active {
+    background: rgba(255, 255, 255, 0.16);
+    border-color: rgba(255, 255, 255, 0.24);
+    color: #fff;
+}
+
+.advanced-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .subtitle-action-btn {
     border-radius: 999px;
     padding: 4px 10px;

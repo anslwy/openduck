@@ -50,6 +50,8 @@ export const LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY =
   "openduck.llm-context-turn-limit.v1";
 export const LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY =
   "openduck.llm-image-history-limit.v1";
+export const SHOW_ADVANCED_MODELS_STORAGE_KEY =
+  "openduck.show-advanced-models.v1";
 export const CALL_MODE_STORAGE_KEY = "openduck.call-mode.v1";
 export const ONBOARDING_SEEN_STORAGE_KEY = "seenOnboarding";
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
@@ -112,6 +114,7 @@ export const DEFAULT_SHOW_CALL_TIMER = true;
 export const DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY = true;
 export const DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP = true;
 export const DEFAULT_AUTO_CHECK_APP_UPDATES = true;
+export const DEFAULT_SHOW_ADVANCED_MODELS = true;
 
 export const MODEL_PRESETS: Record<
   Exclude<ModelPreset, "custom">,
