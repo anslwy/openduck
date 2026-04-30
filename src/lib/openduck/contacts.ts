@@ -139,6 +139,7 @@ export function normalizeCubismModel(value: unknown): CubismModelConfig | null {
   const offsetX = normalizeOptionalFiniteNumber(record.offsetX, -1000, 1000);
   const offsetY = normalizeOptionalFiniteNumber(record.offsetY, -1000, 1000);
   const zoom = normalizeOptionalFiniteNumber(record.zoom, 0.1, 10);
+  const sizeMultiplier = normalizeOptionalFiniteNumber(record.sizeMultiplier, 0.1, 10);
   const expression =
     typeof record.expression === "string" && record.expression.trim().length > 0
       ? record.expression.trim()
@@ -159,6 +160,7 @@ export function normalizeCubismModel(value: unknown): CubismModelConfig | null {
     offsetX,
     offsetY,
     zoom,
+    sizeMultiplier,
     expression,
     emotionMap,
   };
@@ -776,7 +778,7 @@ export async function loadContactsFromStorage() {
         return {
           ...contact,
           gender: contact.gender ?? builtInContact?.gender ?? null,
-          cubismModel: builtInContact?.cubismModel ?? contact.cubismModel ?? null,
+          cubismModel: contact.cubismModel ?? builtInContact?.cubismModel ?? null,
           hasCustomIcon: Boolean(iconDataUrl),
           iconDataUrl,
         };
