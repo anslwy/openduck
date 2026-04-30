@@ -468,6 +468,7 @@
     let subtitleTranslationBaseUrl = $state("");
     let subtitleTranslationHasApiKey = $state(false);
     let subtitleTranslationModelId = $state("");
+    let subtitleTranslationLlmTested = $state(false);
     let showConversationPopup = $state(false);
     let showSessionsPopup = $state(false);
     let sessions = $state<SessionMetadata[]>([]);
@@ -731,7 +732,9 @@
 
     const subtitleTranslationLlmConfigured = $derived(
         subtitleTranslationBaseUrl.trim() !== "" &&
-            subtitleTranslationModelId.trim() !== "",
+            subtitleTranslationModelId.trim() !== "" &&
+            (subtitleTranslationHasApiKey ||
+                !subtitleTranslationBaseUrl.startsWith("https://")),
     );
 
     async function syncExternalModelsForVariant(variant: ExternalGemmaVariant) {
@@ -6145,11 +6148,21 @@
         key: string,
         useSavedKey: boolean,
     ) {
-        return await invoke<string[]>("test_subtitle_translation_connection", {
-            url,
-            key: key || null,
-            useSavedKey,
-        });
+        try {
+            const models = await invoke<string[]>(
+                "test_subtitle_translation_connection",
+                {
+                    url,
+                    key: key || null,
+                    useSavedKey,
+                },
+            );
+            subtitleTranslationLlmTested = true;
+            return models;
+        } catch (err) {
+            subtitleTranslationLlmTested = false;
+            throw err;
+        }
     }
 
     async function saveSubtitleTranslationLlmConfig(
@@ -8984,17 +8997,6 @@
             />
         {/if}
 
-        {#if showSubtitleTranslationLlmConfig}
-            <SubtitleTranslationLlmConfigModal
-                baseUrl={subtitleTranslationBaseUrl}
-                hasApiKey={subtitleTranslationHasApiKey}
-                modelId={subtitleTranslationModelId}
-                onSave={saveSubtitleTranslationLlmConfig}
-                onTestConnection={testSubtitleTranslationConnection}
-                onClose={closeSubtitleTranslationLlmConfig}
-            />
-        {/if}
-
         <div
             class="control-bar"
             class:dimmed={showContactsPopup ||
@@ -9439,7 +9441,27 @@
     />
 
     {#if showOnboarding}
-        <Onboarding onComplete={handleOnboardingComplete} />
+        <Onboarding
+            aiSubtitleTargetLanguage={aiSubtitleTargetLanguage}
+            subtitleTranslationLlmConfigured={subtitleTranslationLlmConfigured}
+            subtitleTranslationLlmTested={subtitleTranslationLlmTested}
+            onOpenSubtitleTranslationLlmConfig={() =>
+                (showSubtitleTranslationLlmConfig = true)}
+            onUpdateAiSubtitleTargetLanguage={applyAiSubtitleTargetLanguagePreference}
+            onUpdateShowAiSubtitle={applyShowAiSubtitlePreference}
+            onComplete={handleOnboardingComplete}
+        />
+    {/if}
+
+    {#if showSubtitleTranslationLlmConfig}
+        <SubtitleTranslationLlmConfigModal
+            baseUrl={subtitleTranslationBaseUrl}
+            hasApiKey={subtitleTranslationHasApiKey}
+            modelId={subtitleTranslationModelId}
+            onSave={saveSubtitleTranslationLlmConfig}
+            onTestConnection={testSubtitleTranslationConnection}
+            onClose={closeSubtitleTranslationLlmConfig}
+        />
     {/if}
 
     {#if toastMessage}

@@ -1,29 +1,23 @@
 <!-- Modal for configuring a dedicated OpenAI-compatible model for AI subtitle translation. -->
 <script lang="ts">
-    let {
-        baseUrl,
-        hasApiKey,
-        modelId,
-        onSave,
-        onTestConnection,
-        onClose,
-    } = $props<{
-        baseUrl: string;
-        hasApiKey: boolean;
-        modelId: string;
-        onSave: (
-            url: string,
-            key: string,
-            clearKey: boolean,
-            modelId: string,
-        ) => Promise<void>;
-        onTestConnection: (
-            url: string,
-            key: string,
-            useSavedKey: boolean,
-        ) => Promise<string[]>;
-        onClose: () => void;
-    }>();
+    let { baseUrl, hasApiKey, modelId, onSave, onTestConnection, onClose } =
+        $props<{
+            baseUrl: string;
+            hasApiKey: boolean;
+            modelId: string;
+            onSave: (
+                url: string,
+                key: string,
+                clearKey: boolean,
+                modelId: string,
+            ) => Promise<void>;
+            onTestConnection: (
+                url: string,
+                key: string,
+                useSavedKey: boolean,
+            ) => Promise<string[]>;
+            onClose: () => void;
+        }>();
 
     let url = $state("");
     let key = $state("");
@@ -36,12 +30,6 @@
     let isSaving = $state(false);
 
     const providers = [
-        {
-            id: "inherit",
-            name: "Use current call LLM",
-            baseUrl: "",
-            helpText: "Uses the same model as your main conversation.",
-        },
         {
             id: "openai",
             name: "OpenAI",
@@ -149,8 +137,7 @@
     async function handleTestConnection() {
         const normalizedUrl = url.trim();
         const normalizedKey = key.trim();
-        const useSavedKey =
-            normalizedKey === "" && hasApiKey && !clearSavedKey;
+        const useSavedKey = normalizedKey === "" && hasApiKey && !clearSavedKey;
 
         if (!normalizedUrl) {
             connectionState = "error";
@@ -427,6 +414,11 @@
 <style>
     .subtitle-translation-config-modal {
         max-width: 540px;
+        z-index: 1101;
+    }
+
+    :global(.subtitle-translation-config-backdrop) {
+        z-index: 1100 !important;
     }
 
     .config-form {
