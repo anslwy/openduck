@@ -2878,6 +2878,13 @@ main.idle-layout {
     min-width: 170px;
 }
 
+@media (max-width: 640px) {
+    .model-preset-select {
+        min-width: 100px;
+        max-width: 140px;
+    }
+}
+
 .external-model-select {
     min-width: 140px;
 }
@@ -3368,10 +3375,31 @@ main.idle-layout {
 }
 
 .sessions-dropdown-label {
-    max-width: min(320px, 40vw);
+    max-width: 180px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+@media (min-width: 1024px) {
+    .sessions-dropdown-label {
+        max-width: 320px;
+    }
+}
+
+@media (max-width: 640px) {
+    .sessions-dropdown-label {
+        max-width: 50px;
+    }
+    .load-all-btn {
+        min-width: 0 !important;
+        padding: 6px 10px !important;
+    }
+    .utility-btn {
+        padding: 6px 10px;
+    }
 }
 
 .dropdown-arrow {
