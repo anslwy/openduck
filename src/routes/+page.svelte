@@ -5040,6 +5040,29 @@
         triggerCubismReload();
     }
 
+    function handleSelectedContactCubismSizeMultiplierInput(event: Event) {
+        if (!selectedContact) {
+            return;
+        }
+
+        const nextMultiplier = parseFloat(
+            (event.currentTarget as HTMLSelectElement).value,
+        );
+        updateContactById(selectedContact.id, (contact) => ({
+            ...contact,
+            cubismModel: contact.cubismModel
+                ? {
+                      ...contact.cubismModel,
+                      sizeMultiplier: isNaN(nextMultiplier)
+                          ? null
+                          : nextMultiplier,
+                  }
+                : null,
+        }));
+        persistContactsMetadata();
+        triggerCubismReload();
+    }
+
     function handleSelectedContactCubismEmotionMapInput(event: Event) {
         if (!selectedContact) {
             return;
@@ -8669,6 +8692,7 @@
             <div
                 class="avatar-container"
                 class:live2d-avatar-container={!!selectedContactCubismModel}
+                style="--cubism-min-width: {selectedContactCubismModel?.sizeMultiplier ? 330 * selectedContactCubismModel.sizeMultiplier + 'px' : '330px'}; --cubism-min-height: {selectedContactCubismModel?.sizeMultiplier ? 380 * selectedContactCubismModel.sizeMultiplier + 'px' : '380px'}; --cubism-absolute-min-height: {selectedContactCubismModel?.sizeMultiplier ? 250 * selectedContactCubismModel.sizeMultiplier + 'px' : '250px'}"
             >
                 {#if assistantSpeaking && !(selectedContactCubismModel && !isCubismForceHidden)}
                     <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
@@ -8831,6 +8855,7 @@
                     {handleSelectedContactCubismOffsetXInput}
                     {handleSelectedContactCubismOffsetYInput}
                     {handleSelectedContactCubismZoomInput}
+                    {handleSelectedContactCubismSizeMultiplierInput}
                     {handleDeleteSelectedContact}
                     {handleExportSelectedContact}
                     {refAudioPlaying}

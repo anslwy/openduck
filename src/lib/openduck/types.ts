@@ -261,6 +261,7 @@ export type CubismModelConfig = {
     zoom?: number | null;
     expression?: string | null;
     emotionMap?: Record<string, string> | null;
+    sizeMultiplier?: number | null;
 };
 
 export type ContactProfile = StoredContactProfile & {

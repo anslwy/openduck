@@ -37,6 +37,7 @@
         handleSelectedContactCubismOffsetXInput,
         handleSelectedContactCubismOffsetYInput,
         handleSelectedContactCubismZoomInput,
+        handleSelectedContactCubismSizeMultiplierInput,
         handleDeleteSelectedContact,
         handleExportSelectedContact,
         refAudioPlaying,
@@ -76,6 +77,7 @@
         handleSelectedContactCubismOffsetXInput: (event: Event) => void;
         handleSelectedContactCubismOffsetYInput: (event: Event) => void;
         handleSelectedContactCubismZoomInput: (event: Event) => void;
+        handleSelectedContactCubismSizeMultiplierInput: (event: Event) => void;
         handleDeleteSelectedContact: () => Promise<void>;
         handleExportSelectedContact: (includeMemory: boolean) => Promise<void>;
         refAudioPlaying: boolean;
@@ -147,6 +149,9 @@
     }
 
     const scaleOptions = Array.from({ length: 20 }, (_, i) => (i + 1) * 0.5);
+    const sizeMultiplierOptions = [
+        0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0,
+    ];
 </script>
 
 <button
@@ -576,8 +581,36 @@
                             class="contact-text-input"
                             type="number"
                             value={selectedContact?.cubismModel?.offsetY ?? 0}
-                            oninput={handleSelectedContactCubismOffsetYInput}
+                             oninput={handleSelectedContactCubismOffsetYInput}
                         />
+                    </label>
+                    <label class="contact-field">
+                        <span class="contact-field-label"
+                            >Cubism Model Size</span
+                        >
+                        <div class="contact-select-shell">
+                            <select
+                                class="contact-text-input contact-select"
+                                value={selectedContact?.cubismModel
+                                    ?.sizeMultiplier ?? 1.0}
+                                onchange={handleSelectedContactCubismSizeMultiplierInput}
+                            >
+                                {#each sizeMultiplierOptions as multiplier}
+                                    <option value={multiplier}
+                                        >{multiplier.toFixed(2)}x</option
+                                    >
+                                {/each}
+                                {#if selectedContact?.cubismModel?.sizeMultiplier && !sizeMultiplierOptions.includes(selectedContact.cubismModel.sizeMultiplier)}
+                                    <option
+                                        value={selectedContact.cubismModel
+                                            .sizeMultiplier}
+                                        >{selectedContact.cubismModel.sizeMultiplier.toFixed(
+                                            2,
+                                        )}x</option
+                                    >
+                                {/if}
+                            </select>
+                        </div>
                     </label>
                 </div>
             </div>

@@ -224,9 +224,9 @@ main.idle-layout {
 }
 
 .avatar-container.live2d-avatar-container {
-    width: min(330px, calc(100vw - 48px));
-    height: min(380px, 52vh);
-    min-height: 250px;
+    width: min(var(--cubism-min-width, 330px), calc(100vw - 48px));
+    height: min(var(--cubism-min-height, 380px), 52vh);
+    min-height: var(--cubism-absolute-min-height, 250px);
 }
 
 .avatar-shell {
