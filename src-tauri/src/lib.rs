@@ -17,7 +17,7 @@ use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::menu::Menu;
@@ -1837,7 +1837,7 @@ async fn extract_memories_from_current_session(
 
     let variant = loaded_gemma_variant(state.inner())
         .unwrap_or_else(|| selected_gemma_variant(state.inner()));
-    
+
     let model_name = if variant.is_external() {
         selected_external_llm_model(state.inner(), variant).unwrap_or_default()
     } else {
@@ -1845,7 +1845,7 @@ async fn extract_memories_from_current_session(
     };
 
     let server_port = *state.server_port.lock().unwrap();
-    
+
     let (base_url, api_key) = if variant.is_external() {
         (
             external_llm_base_url(state.inner(), variant)
