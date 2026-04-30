@@ -434,27 +434,38 @@ main.idle-layout {
 .model-tags {
     position: absolute;
     top: 40px;
+    left: 24px;
+    right: 24px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    width: min(calc(100vw - 48px), 560px);
     z-index: 8;
     isolation: isolate;
+    pointer-events: none;
     transition:
         opacity 0.22s ease,
         filter 0.22s ease,
         transform 0.22s ease;
 }
 
+@media (min-width: 1024px) {
+    .model-tags {
+        top: 40px;
+        left: 40px;
+        right: 40px;
+    }
+}
+
 .model-tags.dimmed {
     opacity: 0.22;
     filter: blur(6px);
     transform: translateY(-6px) scale(0.985);
-    pointer-events: none;
 }
 
 .runtime-setup-banner {
     width: 100%;
+    max-width: 560px;
+    pointer-events: auto;
     box-sizing: border-box;
     display: flex;
     align-items: center;
@@ -511,6 +522,10 @@ main.idle-layout {
     gap: 10px;
     width: 100%;
     margin-bottom: 12px;
+}
+
+.model-actions > * {
+    pointer-events: auto;
 }
 
 .model-preset-shell {
@@ -2569,6 +2584,8 @@ main.idle-layout {
     animation: slideDown 0.3s ease-out;
     box-sizing: border-box;
     width: 100%;
+    max-width: 560px;
+    pointer-events: auto;
     min-width: 0;
 }
 
