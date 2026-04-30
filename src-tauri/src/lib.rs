@@ -5723,7 +5723,7 @@ async fn stream_gemma_response_to_csm(
 
     if let ResponseGenerationMode::InitialGreeting { memory } = &mode {
         let prompt = if let Some(mem) = memory {
-            format!("You are starting a new conversation with the user. You have the following context from previous interactions (which may include character notes and previous conversation turns):\n{}\nUse this context to greet the user naturally and ask a follow-up question or mention something you talked about before to kick off the conversation. Keep it natural and spoken. Do not mention that you have 'context' or 'memory', just talk naturally like a returning friend.", mem)
+            format!("You are starting a new conversation with the user. You have the following context from previous interactions:\n{}\nUse this context to greet the user naturally and ask a follow-up question or mention something you talked about before to kick off the conversation. Keep it natural and spoken. Do not mention that you have 'context' or 'memory', just talk naturally like a returning friend.", mem)
         } else {
             "You are meeting the user for the first time. Get to know them. Start the conversation naturally with a warm greeting and ask them something about themselves to kick off a new friendship.".to_string()
         };
@@ -12156,17 +12156,20 @@ fn get_character_memory(
         return None;
     }
 
-    // Take the last 3 turns as memory
-    let memory_turns = data.turns.iter().rev().take(3).rev();
     let mut memory_text = String::new();
-    for turn in memory_turns {
-        if !turn.user_text.trim().is_empty() {
-            memory_text.push_str(&format!("User: {}\n", turn.user_text));
-        }
-        if !turn.assistant_text.trim().is_empty() {
-            memory_text.push_str(&format!("Assistant: {}\n", turn.assistant_text));
-        }
-    }
+
+    // Take the last 3 turns as memory
+    // Removing this for now as this causes issues with different characters sharing same memory
+    // TODO: Move this into vector database approach
+    // let memory_turns = data.turns.iter().rev().take(3).rev();
+    // for turn in memory_turns {
+    //     if !turn.user_text.trim().is_empty() {
+    //         memory_text.push_str(&format!("User: {}\n", turn.user_text));
+    //     }
+    //     if !turn.assistant_text.trim().is_empty() {
+    //         memory_text.push_str(&format!("Assistant: {}\n", turn.assistant_text));
+    //     }
+    // }
 
     if memory_text.trim().is_empty() {
         return None;
