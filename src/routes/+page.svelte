@@ -4340,6 +4340,7 @@
         }
 
         void invoke("set_current_character_id", { characterId: contactId });
+        triggerCubismReload();
     }
 
     function createNewContact() {
