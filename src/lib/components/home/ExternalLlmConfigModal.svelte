@@ -21,10 +21,85 @@
     let clearSavedKey = $state(false);
     let isSaving = $state(false);
 
+    const providers = [
+        {
+            id: "openai",
+            name: "OpenAI",
+            baseUrl: "https://api.openai.com",
+            helpText: "Get your API key from the",
+            linkText: "OpenAI Dashboard",
+            linkUrl: "https://platform.openai.com/api-keys",
+        },
+        {
+            id: "gemini",
+            name: "Gemini",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
+            helpText: "Get your API key from the",
+            linkText: "Google AI Studio",
+            linkUrl: "https://aistudio.google.com/app/apikey",
+        },
+        {
+            id: "deepseek",
+            name: "DeepSeek",
+            baseUrl: "https://api.deepseek.com",
+            helpText: "Get your API key from the",
+            linkText: "DeepSeek Platform",
+            linkUrl: "https://platform.deepseek.com/api_keys",
+        },
+        {
+            id: "groq",
+            name: "Groq",
+            baseUrl: "https://api.groq.com/openai",
+            helpText: "Get your API key from the",
+            linkText: "Groq Console",
+            linkUrl: "https://console.groq.com/keys",
+        },
+        {
+            id: "openrouter",
+            name: "OpenRouter",
+            baseUrl: "https://openrouter.ai/api",
+            helpText: "Get your API key from the",
+            linkText: "OpenRouter Settings",
+            linkUrl: "https://openrouter.ai/keys",
+        },
+        {
+            id: "mistral",
+            name: "Mistral AI",
+            baseUrl: "https://api.mistral.ai/v1",
+            helpText: "Get your API key from the",
+            linkText: "Mistral Console",
+            linkUrl: "https://console.mistral.ai/api-keys/",
+        },
+        { id: "custom", name: "Custom" },
+    ];
+
+    let selectedProviderId = $state(providers[0].id);
+    const isOpenAiCompatible = $derived(
+        providerName === "OpenAI-compatible API",
+    );
+
     $effect(() => {
         url = baseUrl;
         key = "";
         clearSavedKey = false;
+
+        if (isOpenAiCompatible) {
+            const matchingProvider = providers.find((p) => p.baseUrl === baseUrl);
+            if (matchingProvider) {
+                selectedProviderId = matchingProvider.id;
+            } else {
+                selectedProviderId = "custom";
+            }
+        }
+    });
+
+    $effect(() => {
+        if (isOpenAiCompatible && selectedProviderId !== "custom") {
+            const provider = providers.find((p) => p.id === selectedProviderId);
+            if (provider && provider.baseUrl) {
+                url = provider.baseUrl;
+            }
+        }
     });
 
     async function handleSave() {
@@ -93,17 +168,52 @@
     </div>
 
     <div class="config-form">
-        <div class="form-group">
-            <label for="external-llm-url">Base URL</label>
-            <input
-                id="external-llm-url"
-                type="text"
-                bind:value={url}
-                placeholder={urlPlaceholder}
-                class="config-input"
-            />
-            <p class="field-help">The root URL of your {providerName} service.</p>
-        </div>
+        {#if isOpenAiCompatible}
+            <div class="form-group">
+                <label for="provider-select">Provider</label>
+                <select
+                    id="provider-select"
+                    bind:value={selectedProviderId}
+                    class="config-input config-select"
+                >
+                    {#each providers as provider}
+                        <option value={provider.id}>{provider.name}</option>
+                    {/each}
+                </select>
+                {#if selectedProviderId !== "custom"}
+                    {@const provider = providers.find(
+                        (p) => p.id === selectedProviderId,
+                    )}
+                    {#if provider}
+                        <p class="field-help">
+                            {provider.helpText}
+                            <a
+                                href={provider.linkUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="help-link">{provider.linkText}</a
+                            >.
+                        </p>
+                    {/if}
+                {/if}
+            </div>
+        {/if}
+
+        {#if !isOpenAiCompatible || selectedProviderId === "custom"}
+            <div class="form-group">
+                <label for="external-llm-url">Base URL</label>
+                <input
+                    id="external-llm-url"
+                    type="text"
+                    bind:value={url}
+                    placeholder={urlPlaceholder}
+                    class="config-input"
+                />
+                <p class="field-help">
+                    The root URL of your {providerName} service.
+                </p>
+            </div>
+        {/if}
 
         <div class="form-group">
             <label for="external-llm-key">API Key (Optional)</label>
@@ -191,10 +301,28 @@
         border-color: rgba(255, 255, 255, 0.3);
     }
 
+    .config-select {
+        appearance: none;
+        -webkit-appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 12px center;
+        padding-right: 36px;
+    }
+
     .field-help {
         font-size: 0.75rem;
         color: rgba(255, 255, 255, 0.5);
         margin: 0;
+    }
+
+    .help-link {
+        color: #9ae998;
+        text-decoration: none;
+    }
+
+    .help-link:hover {
+        text-decoration: underline;
     }
 
     .checkbox-row {

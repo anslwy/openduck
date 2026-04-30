@@ -35,6 +35,66 @@
     let isTesting = $state(false);
     let isSaving = $state(false);
 
+    const providers = [
+        {
+            id: "inherit",
+            name: "Use current call LLM",
+            baseUrl: "",
+            helpText: "Uses the same model as your main conversation.",
+        },
+        {
+            id: "openai",
+            name: "OpenAI",
+            baseUrl: "https://api.openai.com",
+            helpText: "Get your API key from the",
+            linkText: "OpenAI Dashboard",
+            linkUrl: "https://platform.openai.com/api-keys",
+        },
+        {
+            id: "gemini",
+            name: "Gemini",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
+            helpText: "Get your API key from the",
+            linkText: "Google AI Studio",
+            linkUrl: "https://aistudio.google.com/app/apikey",
+        },
+        {
+            id: "deepseek",
+            name: "DeepSeek",
+            baseUrl: "https://api.deepseek.com",
+            helpText: "Get your API key from the",
+            linkText: "DeepSeek Platform",
+            linkUrl: "https://platform.deepseek.com/api_keys",
+        },
+        {
+            id: "groq",
+            name: "Groq",
+            baseUrl: "https://api.groq.com/openai",
+            helpText: "Get your API key from the",
+            linkText: "Groq Console",
+            linkUrl: "https://console.groq.com/keys",
+        },
+        {
+            id: "openrouter",
+            name: "OpenRouter",
+            baseUrl: "https://openrouter.ai/api",
+            helpText: "Get your API key from the",
+            linkText: "OpenRouter Settings",
+            linkUrl: "https://openrouter.ai/keys",
+        },
+        {
+            id: "mistral",
+            name: "Mistral AI",
+            baseUrl: "https://api.mistral.ai/v1",
+            helpText: "Get your API key from the",
+            linkText: "Mistral Console",
+            linkUrl: "https://console.mistral.ai/api-keys/",
+        },
+        { id: "custom", name: "Custom" },
+    ];
+
+    let selectedProviderId = $state(providers[0].id);
+
     $effect(() => {
         url = baseUrl;
         key = "";
@@ -43,6 +103,24 @@
         availableModels = modelId ? [modelId] : [];
         connectionState = "idle";
         connectionMessage = "";
+
+        const matchingProvider = providers.find(
+            (p) => p.id !== "custom" && p.baseUrl === baseUrl,
+        );
+        if (matchingProvider) {
+            selectedProviderId = matchingProvider.id;
+        } else {
+            selectedProviderId = "custom";
+        }
+    });
+
+    $effect(() => {
+        if (selectedProviderId !== "custom") {
+            const provider = providers.find((p) => p.id === selectedProviderId);
+            if (provider) {
+                url = provider.baseUrl;
+            }
+        }
     });
 
     function validationMessage() {
@@ -204,95 +282,131 @@
 
     <div class="config-form">
         <div class="form-group">
-            <label for="subtitle-translation-url">Base URL</label>
-            <input
-                id="subtitle-translation-url"
-                type="text"
-                bind:value={url}
-                placeholder="https://api.openai.com"
-                class="config-input"
-            />
-            <p class="field-help">
-                Clear the Base URL and choose "Use current call LLM" to keep
-                using the current call LLM for translation.
-            </p>
-        </div>
-
-        <div class="form-group">
-            <label for="subtitle-translation-key">API Key (Optional)</label>
-            <input
-                id="subtitle-translation-key"
-                type="password"
-                bind:value={key}
-                oninput={() => {
-                    if (key.trim() !== "") {
-                        clearSavedKey = false;
-                    }
-                }}
-                placeholder="Enter API key if required"
-                class="config-input"
-            />
-            <p class="field-help">
-                {#if hasApiKey}
-                    A key is already saved in your system credential store. Leave
-                    this blank to keep it, or enter a new key to replace it.
-                {:else}
-                    Required for providers like OpenAI. Optional for local
-                    servers or unauthenticated proxies.
-                {/if}
-            </p>
-            {#if hasApiKey}
-                <label class="checkbox-row">
-                    <input
-                        type="checkbox"
-                        bind:checked={clearSavedKey}
-                        disabled={key.trim() !== ""}
-                    />
-                    <span>Clear saved API key</span>
-                </label>
-            {/if}
-        </div>
-
-        <div class="form-group">
-            <div class="field-header">
-                <label for="subtitle-translation-model">Model ID</label>
-                <button
-                    type="button"
-                    class="utility-btn test-btn"
-                    onclick={handleTestConnection}
-                    disabled={isTesting}
-                >
-                    {isTesting ? "Testing..." : "Test Connection"}
-                </button>
-            </div>
+            <label for="provider-select">Provider</label>
             <select
-                id="subtitle-translation-model"
+                id="provider-select"
+                bind:value={selectedProviderId}
                 class="config-input config-select"
-                value={selectedModelId}
-                onchange={(event) =>
-                    (selectedModelId = (
-                        event.currentTarget as HTMLSelectElement
-                    ).value)}
             >
-                <option value=""
-                    >{url.trim() === ""
-                        ? "Use current call LLM"
-                        : "Select a model"}</option
-                >
-                {#each availableModels as model}
-                    <option value={model}>{model}</option>
+                {#each providers as provider}
+                    <option value={provider.id}>{provider.name}</option>
                 {/each}
             </select>
-            <p class="field-help">
-                Test Connection fetches `/v1/models` and lets you pick from the
-                returned model IDs.
-            </p>
-            {#if connectionMessage}
-                <p class="connection-status" data-state={connectionState}>
-                    {connectionMessage}
-                </p>
+            {#if selectedProviderId !== "custom"}
+                {@const provider = providers.find(
+                    (p) => p.id === selectedProviderId,
+                )}
+                {#if provider}
+                    <p class="field-help">
+                        {provider.helpText}
+                        {#if provider.linkUrl}
+                            <a
+                                href={provider.linkUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="help-link">{provider.linkText}</a
+                            >.
+                        {/if}
+                    </p>
+                {/if}
             {/if}
         </div>
+
+        {#if selectedProviderId === "custom"}
+            <div class="form-group">
+                <label for="subtitle-translation-url">Base URL</label>
+                <input
+                    id="subtitle-translation-url"
+                    type="text"
+                    bind:value={url}
+                    placeholder="https://api.openai.com"
+                    class="config-input"
+                />
+                <p class="field-help">
+                    Clear the Base URL and choose "Use current call LLM" to keep
+                    using the current call LLM for translation.
+                </p>
+            </div>
+        {/if}
+
+        {#if selectedProviderId !== "inherit"}
+            <div class="form-group">
+                <label for="subtitle-translation-key">API Key (Optional)</label>
+                <input
+                    id="subtitle-translation-key"
+                    type="password"
+                    bind:value={key}
+                    oninput={() => {
+                        if (key.trim() !== "") {
+                            clearSavedKey = false;
+                        }
+                    }}
+                    placeholder="Enter API key if required"
+                    class="config-input"
+                />
+                <p class="field-help">
+                    {#if hasApiKey}
+                        A key is already saved in your system credential store.
+                        Leave this blank to keep it, or enter a new key to
+                        replace it.
+                    {:else}
+                        Required for providers like OpenAI. Optional for local
+                        servers or unauthenticated proxies.
+                    {/if}
+                </p>
+                {#if hasApiKey}
+                    <label class="checkbox-row">
+                        <input
+                            type="checkbox"
+                            bind:checked={clearSavedKey}
+                            disabled={key.trim() !== ""}
+                        />
+                        <span>Clear saved API key</span>
+                    </label>
+                {/if}
+            </div>
+
+            <div class="form-group">
+                <div class="field-header">
+                    <label for="subtitle-translation-model">Model ID</label>
+                    <button
+                        type="button"
+                        class="utility-btn test-btn"
+                        onclick={handleTestConnection}
+                        disabled={isTesting}
+                    >
+                        {isTesting ? "Testing..." : "Test Connection"}
+                    </button>
+                </div>
+                <select
+                    id="subtitle-translation-model"
+                    class="config-input config-select"
+                    value={selectedModelId}
+                    onchange={(event) =>
+                        (selectedModelId = (
+                            event.currentTarget as HTMLSelectElement
+                        ).value)}
+                >
+                    <option value=""
+                        >{url.trim() === ""
+                            ? "Use current call LLM"
+                            : "Select a model"}</option
+                    >
+                    {#each availableModels as model}
+                        <option value={model}>{model}</option>
+                    {/each}
+                </select>
+                <p class="field-help">
+                    Test Connection fetches `/v1/models` and lets you pick from
+                    the returned model IDs.
+                </p>
+                {#if connectionMessage}
+                    <p class="connection-status" data-state={connectionState}>
+                        {connectionMessage}
+                    </p>
+                {/if}
+            </div>
+        {/if}
     </div>
 
     <div class="about-modal-actions">
@@ -359,6 +473,19 @@
     .config-select {
         appearance: none;
         -webkit-appearance: none;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 12px center;
+        padding-right: 36px;
+    }
+
+    .help-link {
+        color: #9ae998;
+        text-decoration: none;
+    }
+
+    .help-link:hover {
+        text-decoration: underline;
     }
 
     .field-help,
