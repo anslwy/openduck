@@ -497,6 +497,7 @@
     let isSavingConversationLogEntryEdit = $state(false);
     let isClearingConversationLogImages = $state(false);
     let toastMessage = $state<string | null>(null);
+    let isMemoryProcessing = $state(false);
     let toastTimeout: ReturnType<typeof window.setTimeout> | null = null;
 
     const popupActionsBusy = $derived(
@@ -7019,6 +7020,7 @@
 
         // Memory extraction must happen before reset_call_session clears the turns
         if (selectedContact?.memoryEnabled !== false) {
+            isMemoryProcessing = true;
             try {
                 const existingMemoryTexts = (
                     selectedContact?.memories || []
@@ -7066,21 +7068,20 @@
                                     memories: toSummarize.map((m) => m.text),
                                 },
                             );
-                                if (summary) {
-                                    const summaryMemory: MemoryItem = {
-                                        id: Math.random()
-                                            .toString(36)
-                                            .substring(2, 9),
-                                        text: summary,
-                                        createdAt: toSummarize[0].createdAt,
-                                        moreThan: true,
-                                    };
-                                    updateContactById(characterIdAtEnd, (c) => ({
-                                        ...c,
-                                        memories: [...keep, summaryMemory],
-                                    }));
-                                }
-
+                            if (summary) {
+                                const summaryMemory: MemoryItem = {
+                                    id: Math.random()
+                                        .toString(36)
+                                        .substring(2, 9),
+                                    text: summary,
+                                    createdAt: toSummarize[0].createdAt,
+                                    moreThan: true,
+                                };
+                                updateContactById(characterIdAtEnd, (c) => ({
+                                    ...c,
+                                    memories: [...keep, summaryMemory],
+                                }));
+                            }
                         } catch (err) {
                             console.error("Failed to summarize memories:", err);
                         }
@@ -7093,6 +7094,8 @@
                 }
             } catch (err) {
                 console.error("Failed to extract memories:", err);
+            } finally {
+                isMemoryProcessing = false;
             }
         }
 
@@ -8358,6 +8361,7 @@
             {currentSessionTitle}
             {showSessionsPopup}
             {calling}
+            {isMemoryProcessing}
             onboarding={showOnboarding}
             onToggleSessions={toggleSessionsPopup}
         />

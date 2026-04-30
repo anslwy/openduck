@@ -3293,6 +3293,31 @@ main.idle-layout {
     pointer-events: auto;
 }
 
+.memory-processing-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    position: relative;
+    color: rgba(255, 255, 255, 0.7);
+    opacity: 0.9;
+    margin-bottom: 5px;
+}
+
+.memory-processing-indicator svg {
+    animation: indicator-rotate 4s linear infinite;
+}
+
+@keyframes indicator-rotate {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 .sessions-dropdown-btn {
     background: transparent;
     border: none;
