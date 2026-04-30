@@ -52,6 +52,8 @@ export const LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY =
   "openduck.llm-image-history-limit.v1";
 export const SHOW_ADVANCED_MODELS_STORAGE_KEY =
   "openduck.show-advanced-models.v1";
+export const CHARACTER_MEMORY_LIMIT_STORAGE_KEY =
+  "openduck.character-memory-limit.v1";
 export const CALL_MODE_STORAGE_KEY = "openduck.call-mode.v1";
 export const ONBOARDING_SEEN_STORAGE_KEY = "seenOnboarding";
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
@@ -100,6 +102,10 @@ export const MIN_LLM_IMAGE_HISTORY_LIMIT = 1;
 export const MAX_LLM_IMAGE_HISTORY_LIMIT = 9;
 export const LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE =
   MAX_LLM_IMAGE_HISTORY_LIMIT + 1;
+
+export const CHARACTER_MEMORY_LIMIT_OPTIONS = [5, 10, 20, 50, 100, 500, null];
+export const DEFAULT_CHARACTER_MEMORY_LIMIT: number | null = 20;
+
 export const DEFAULT_GLOBAL_SHORTCUT = "Command+Shift+L";
 export const DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN = "Command+Shift+Option+L";
 export const DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE = "Command+Shift+Option+U";

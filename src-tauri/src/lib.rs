@@ -154,6 +154,7 @@ pub(crate) struct MemoryItem {
     pub(crate) id: String,
     pub(crate) text: String,
     pub(crate) created_at: u64,
+    pub(crate) more_than: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1930,6 +1931,92 @@ async fn extract_memories_from_current_session(
 }
 
 #[tauri::command]
+async fn summarize_memories(
+    state: State<'_, AppState>,
+    memories: Vec<String>,
+) -> Result<String, String> {
+    if memories.is_empty() {
+        return Ok(String::new());
+    }
+
+    let variant = loaded_gemma_variant(state.inner())
+        .unwrap_or_else(|| selected_gemma_variant(state.inner()));
+
+    let model_name = if variant.is_external() {
+        selected_external_llm_model(state.inner(), variant).unwrap_or_default()
+    } else {
+        variant.repo_id().unwrap_or_default().to_string()
+    };
+
+    let server_port = *state.server_port.lock().unwrap();
+
+    let (base_url, api_key) = if variant.is_external() {
+        (
+            external_llm_base_url(state.inner(), variant)
+                .ok_or_else(|| format!("Missing {} base URL.", variant.label()))?,
+            external_llm_api_key(state.inner(), variant),
+        )
+    } else {
+        let port = server_port.ok_or_else(|| "LLM server is not running.".to_string())?;
+        (server_base_url(port), None)
+    };
+
+    let prompt = format!(
+        "The following are long-term memories or facts about the user. Summarize them into a single concise sentence. Reply with the summary ONLY.\n\nMemories:\n{}",
+        memories.join("\n")
+    );
+
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: vec![ChatContent::Text { text: prompt }],
+    }];
+
+    let request = ChatRequest {
+        model: model_name,
+        messages,
+        stream: false,
+    };
+
+    let client = reqwest::Client::new();
+    let mut request_builder = client
+        .post(format!(
+            "{}/v1/chat/completions",
+            base_url.trim_end_matches('/')
+        ))
+        .json(&request);
+
+    if let Some(api_key) = api_key.as_ref() {
+        request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let response = request_builder
+        .send()
+        .await
+        .map_err(|e| format!("Failed to call LLM for memory summarization: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("LLM returned error {status}: {body}"));
+    }
+
+    let payload = response
+        .json::<ChatCompletionResponse>()
+        .await
+        .map_err(|e| format!("Failed to parse summarization response: {e}"))?;
+
+    let summary = payload
+        .choices
+        .into_iter()
+        .next()
+        .and_then(|choice| choice.message.content)
+        .map(extract_chat_content_text)
+        .ok_or_else(|| "LLM summarization response did not include content".to_string())?;
+
+    Ok(summary.trim().to_string())
+}
+
+#[tauri::command]
 async fn start_conversation(
     app_handle: AppHandle,
     state: State<'_, AppState>,
@@ -1948,7 +2035,15 @@ async fn start_conversation(
     let persistent_memory_text = if !memory_enabled || persistent_memories.is_empty() {
         None
     } else {
-        Some(persistent_memories.iter().map(|m| format!("{}: {}", format_timeago(m.created_at), m.text)).collect::<Vec<_>>().join("\n"))
+        Some(persistent_memories.iter().map(|m| {
+            let time = format_timeago(m.created_at);
+            let label = if m.more_than.unwrap_or(false) {
+                format!("More than {}", time)
+            } else {
+                time
+            };
+            format!("{}: {}", label, m.text)
+        }).collect::<Vec<_>>().join("\n"))
     };
 
     let memory = if memory_enabled {
@@ -13485,6 +13580,7 @@ pub fn run() {
             export_contact_profile,
             reset_call_session,
             extract_memories_from_current_session,
+            summarize_memories,
             start_conversation,
             ensure_runtime_dependencies,
             interrupt_tts,

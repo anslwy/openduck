@@ -243,7 +243,9 @@ export type MemoryItem = {
     id: string;
     text: string;
     createdAt: number;
+    moreThan?: boolean;
 };
+
 
 export type ContactGender = "male" | "female";
 

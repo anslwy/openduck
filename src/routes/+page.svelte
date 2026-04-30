@@ -93,6 +93,7 @@
         SUBTITLE_FONT_SIZE_STORAGE_KEY,
         SHOW_HIDDEN_WINDOW_OVERLAY_STORAGE_KEY,
         SHOW_ADVANCED_MODELS_STORAGE_KEY,
+        CHARACTER_MEMORY_LIMIT_STORAGE_KEY,
         AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
         CALL_MODE_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
@@ -108,6 +109,8 @@
         DEFAULT_SHOW_CALL_TIMER,
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
         DEFAULT_SHOW_ADVANCED_MODELS,
+        DEFAULT_CHARACTER_MEMORY_LIMIT,
+        CHARACTER_MEMORY_LIMIT_OPTIONS,
         DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP,
         DEFAULT_AUTO_CHECK_APP_UPDATES,
         DEFAULT_GLOBAL_SHORTCUT,
@@ -121,6 +124,7 @@
         formatAppUpdateInstallError,
         formatDownloadPercent,
         formatMemoryUsage,
+        formatTimeago,
         normalizeDownloadErrorMessage,
         normalizeErrorMessage,
     } from "$lib/openduck/format";
@@ -260,6 +264,11 @@
     };
 
     type StoredLlmImageHistoryLimitPreference = {
+        version: 1;
+        limit: number | null;
+    };
+
+    type StoredCharacterMemoryLimitPreference = {
         version: 1;
         limit: number | null;
     };
@@ -434,6 +443,9 @@
     );
     let llmImageHistoryLimit = $state<number | null>(
         DEFAULT_LLM_IMAGE_HISTORY_LIMIT,
+    );
+    let characterMemoryLimit = $state<number | null>(
+        DEFAULT_CHARACTER_MEMORY_LIMIT,
     );
     let globalShortcut = $state(DEFAULT_GLOBAL_SHORTCUT);
     let globalShortcutEntireScreen = $state(
@@ -1964,6 +1976,14 @@
         );
     }
 
+    function clampCharacterMemoryLimit(limit: number | null): number | null {
+        if (CHARACTER_MEMORY_LIMIT_OPTIONS.includes(limit)) {
+            return limit;
+        }
+
+        return DEFAULT_CHARACTER_MEMORY_LIMIT;
+    }
+
     function persistLlmImageHistoryLimitPreference(limit: number | null) {
         if (typeof window === "undefined") {
             return;
@@ -2525,6 +2545,40 @@
         }
     }
 
+    function loadCharacterMemoryLimitPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_CHARACTER_MEMORY_LIMIT;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            CHARACTER_MEMORY_LIMIT_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_CHARACTER_MEMORY_LIMIT;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                limit?: unknown;
+            };
+            if (
+                parsed.version !== 1 ||
+                (parsed.limit !== null && typeof parsed.limit !== "number")
+            ) {
+                return DEFAULT_CHARACTER_MEMORY_LIMIT;
+            }
+
+            return clampCharacterMemoryLimit(parsed.limit ?? null);
+        } catch (err) {
+            console.error(
+                "Failed to restore character memory limit preference:",
+                err,
+            );
+            return DEFAULT_CHARACTER_MEMORY_LIMIT;
+        }
+    }
+
     function syncEndOfUtteranceSilenceWithCaptureProcessor(
         milliseconds: number,
     ) {
@@ -2789,6 +2843,22 @@
         });
     }
 
+    function persistCharacterMemoryLimitPreference(limit: number | null) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        window.localStorage.setItem(
+            CHARACTER_MEMORY_LIMIT_STORAGE_KEY,
+            JSON.stringify({ version: 1, limit }),
+        );
+    }
+
+    function applyCharacterMemoryLimitPreference(limit: number | null) {
+        characterMemoryLimit = limit;
+        persistCharacterMemoryLimitPreference(limit);
+    }
+
     async function initializePongPlaybackPreference() {
         const storedEnabled = loadPongPlaybackPreferenceFromStorage();
         let effectiveEnabled = storedEnabled;
@@ -2846,6 +2916,11 @@
     async function initializeShowStatPreference() {
         const storedEnabled = loadShowStatPreferenceFromStorage();
         applyShowStatPreference(storedEnabled);
+    }
+
+    async function initializeCharacterMemoryLimitPreference() {
+        const storedLimit = loadCharacterMemoryLimitPreferenceFromStorage();
+        applyCharacterMemoryLimitPreference(storedLimit);
     }
 
     async function initializeShowAdvancedModelsPreference() {
@@ -6954,21 +7029,63 @@
                 );
                 if (extractedMemories.length > 0) {
                     console.log("Extracted new memories:", extractedMemories);
+
+                    const newMemories = extractedMemories.map((text) => ({
+                        id: Math.random().toString(36).substring(2, 9),
+                        text,
+                        createdAt: Date.now(),
+                    }));
+
+                    // 1. Add new memories immediately
                     updateContactById(characterIdAtEnd, (contact) => {
-                        const existingMemories = contact.memories || [];
-                        const newMemories = extractedMemories.map((text) => ({
-                            id: Math.random().toString(36).substring(2, 9),
-                            text,
-                            createdAt: Date.now(),
-                        }));
+                        const existing = contact.memories || [];
                         return {
                             ...contact,
-                            memories: [
-                                ...newMemories,
-                                ...existingMemories,
-                            ].slice(0, 100), // Cap at 100 memories
+                            memories: [...newMemories, ...existing],
                         };
                     });
+
+                    // 2. Perform compaction if necessary
+                    const contactAfterAdd = contacts.find(
+                        (c) => c.id === characterIdAtEnd,
+                    );
+                    if (
+                        contactAfterAdd &&
+                        characterMemoryLimit !== null &&
+                        contactAfterAdd.memories.length > characterMemoryLimit
+                    ) {
+                        const mergedMemories = contactAfterAdd.memories;
+                        const keepCount = Math.floor(characterMemoryLimit / 2);
+                        const keep = mergedMemories.slice(0, keepCount);
+                        const toSummarize = mergedMemories.slice(keepCount);
+
+                        try {
+                            const summary = await invoke<string>(
+                                "summarize_memories",
+                                {
+                                    memories: toSummarize.map((m) => m.text),
+                                },
+                            );
+                                if (summary) {
+                                    const summaryMemory: MemoryItem = {
+                                        id: Math.random()
+                                            .toString(36)
+                                            .substring(2, 9),
+                                        text: summary,
+                                        createdAt: toSummarize[0].createdAt,
+                                        moreThan: true,
+                                    };
+                                    updateContactById(characterIdAtEnd, (c) => ({
+                                        ...c,
+                                        memories: [...keep, summaryMemory],
+                                    }));
+                                }
+
+                        } catch (err) {
+                            console.error("Failed to summarize memories:", err);
+                        }
+                    }
+
                     // Sync to backend character_memory state if it's the currently selected character
                     if (selectedContactId === characterIdAtEnd) {
                         void syncSelectedContactMemory();
@@ -8056,6 +8173,7 @@
             await initializeSelectLastSessionPreference();
             await initializeAutoLoadModelsOnStartupPreference();
             await initializeShowStatPreference();
+            await initializeCharacterMemoryLimitPreference();
             await initializeShowAdvancedModelsPreference();
             await initializeShowSubtitlePreference();
             await initializeSubtitleFontSizePreference();
@@ -8819,6 +8937,7 @@
                     {autoContinueMaxCount}
                     {llmContextTurnLimit}
                     {llmImageHistoryLimit}
+                    {characterMemoryLimit}
                     onUpdateCallMode={applyCallModePreference}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
                     onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
@@ -8843,6 +8962,7 @@
                     onUpdateAutoContinueMaxCount={applyAutoContinueMaxCountPreference}
                     onUpdateLlmContextTurnLimit={applyLlmContextTurnLimitPreference}
                     onUpdateLlmImageHistoryLimit={applyLlmImageHistoryLimitPreference}
+                    onUpdateCharacterMemoryLimit={applyCharacterMemoryLimitPreference}
                 />
             </div>
         {/if}

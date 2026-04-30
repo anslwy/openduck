@@ -130,3 +130,20 @@ export function formatMemoryUsage(bytes: number) {
     }
     return `${bytes} B`;
 }
+
+export function formatTimeago(timestampMs: number) {
+    const now = Date.now();
+    const diff = Math.max(0, Math.floor((now - timestampMs) / 1000));
+
+    if (diff < 60) {
+        return `${diff}s`;
+    }
+    if (diff < 3600) {
+        return `${Math.floor(diff / 60)}m`;
+    }
+    if (diff < 86400) {
+        return `${Math.floor(diff / 3600)}h`;
+    }
+    const d = Math.floor(diff / 86400);
+    return `${d} ${d === 1 ? "day" : "days"}`;
+}

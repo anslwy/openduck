@@ -2,6 +2,7 @@
 <script lang="ts">
     import type { ContactProfile } from "$lib/openduck/types";
     import ConfirmDialog from "../ui/ConfirmDialog.svelte";
+    import { formatTimeago } from "$lib/openduck/format";
 
     let {
         contacts,
@@ -789,7 +790,16 @@
                         {#each filteredMemories as memory (memory.id)}
                             <div class="memory-item">
                                 <div class="memory-content">
-                                    <div class="memory-text">{memory.text}</div>
+                                    <div class="memory-text">
+                                        {#if memory.moreThan}
+                                            <span class="memory-more-than"
+                                                >More than {formatTimeago(
+                                                    memory.createdAt,
+                                                )} ago: </span
+                                            >
+                                        {/if}
+                                        {memory.text}
+                                    </div>
                                     <div class="memory-meta">
                                         Saved on {new Date(
                                             memory.createdAt,

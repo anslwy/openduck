@@ -26,6 +26,7 @@
         MIN_SUBTITLE_FONT_SIZE,
         MAX_SUBTITLE_FONT_SIZE,
         SUBTITLE_FONT_SIZE_STEP,
+        CHARACTER_MEMORY_LIMIT_OPTIONS,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
         DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
@@ -79,6 +80,7 @@
         autoContinueMaxCount,
         llmContextTurnLimit,
         llmImageHistoryLimit,
+        characterMemoryLimit,
         onUpdateCallMode,
         onUpdateGlobalShortcut,
         onUpdateGlobalShortcutEntireScreen,
@@ -103,6 +105,7 @@
         onUpdateAutoContinueMaxCount,
         onUpdateLlmContextTurnLimit,
         onUpdateLlmImageHistoryLimit,
+        onUpdateCharacterMemoryLimit,
     } = $props<{
         calling: boolean;
         buildInfo: BuildInfo | null;
@@ -138,6 +141,7 @@
         autoContinueMaxCount: number | null;
         llmContextTurnLimit: number | null;
         llmImageHistoryLimit: number | null;
+        characterMemoryLimit: number | null;
         onUpdateCallMode: (mode: CallMode) => void;
         onUpdateGlobalShortcut: (shortcut: string) => void;
         onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
@@ -164,6 +168,7 @@
         onUpdateAutoContinueMaxCount: (count: number | null) => void;
         onUpdateLlmContextTurnLimit: (limit: number | null) => void;
         onUpdateLlmImageHistoryLimit: (limit: number | null) => void;
+        onUpdateCharacterMemoryLimit: (limit: number | null) => void;
     }>();
 
     let copyState = $state<"idle" | "copied" | "failed">("idle");
@@ -481,6 +486,25 @@
         `${subtitleFontSize.toFixed(2)}x`,
     );
 
+    const characterMemoryLimitSliderValue = $derived.by(() => {
+        const index = CHARACTER_MEMORY_LIMIT_OPTIONS.indexOf(characterMemoryLimit);
+        return index === -1
+            ? CHARACTER_MEMORY_LIMIT_OPTIONS.indexOf(20)
+            : index;
+    });
+    const formattedCharacterMemoryLimit = $derived.by(() => {
+        if (characterMemoryLimit === null) {
+            return "Unlimited";
+        }
+        return `${characterMemoryLimit} memories`;
+    });
+    const characterMemoryLimitProgress = $derived.by(() => {
+        const maxIndex = CHARACTER_MEMORY_LIMIT_OPTIONS.length - 1;
+        return (characterMemoryLimitSliderValue / maxIndex) * 100;
+    });
+    const minimumCharacterMemoryLimitLabel = `${CHARACTER_MEMORY_LIMIT_OPTIONS[0]}`;
+    const maximumCharacterMemoryLimitLabel = "Unlimited";
+
     onDestroy(() => {
         clearCopyFeedback();
     });
@@ -735,12 +759,29 @@
                         ? null
                         : Math.min(
                               MAX_LLM_CONTEXT_TURN_LIMIT,
-                              Math.max(MIN_LLM_CONTEXT_TURN_LIMIT, val),
-                          ),
+                                  Math.max(MIN_LLM_CONTEXT_TURN_LIMIT, val),
+                              ),
                 ),
         },
         {
+            id: "memory-limit",
+            type: "slider",
+            label: "Long-term Memory Capacity",
+            detail: "Limits how many key facts or preferences the model can remember about you. Older memories are summarized when the limit is exceeded.",
+            value: characterMemoryLimitSliderValue,
+            min: 0,
+            max: CHARACTER_MEMORY_LIMIT_OPTIONS.length - 1,
+            step: 1,
+            displayValue: formattedCharacterMemoryLimit,
+            progress: characterMemoryLimitProgress,
+            minLabel: minimumCharacterMemoryLimitLabel,
+            maxLabel: maximumCharacterMemoryLimitLabel,
+            onUpdate: (val: number) =>
+                onUpdateCharacterMemoryLimit(CHARACTER_MEMORY_LIMIT_OPTIONS[val]),
+        },
+        {
             id: "image-history",
+
             type: "slider",
             label: "Last Images Visible to LLM",
             detail: "Caps how many recent screenshots the model can inspect across the active conversation context. Move it to Unlimited to keep every image that still fits in the context window.",
