@@ -3294,15 +3294,18 @@ main.idle-layout {
 }
 
 .memory-processing-indicator {
+    position: fixed;
+    top: 0;
+    left: 0;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
-    position: relative;
+    width: 48px;
+    height: 48px;
     color: rgba(255, 255, 255, 0.7);
     opacity: 0.9;
-    margin-bottom: 5px;
+    z-index: 9999;
+    pointer-events: none;
 }
 
 .memory-processing-indicator svg {
