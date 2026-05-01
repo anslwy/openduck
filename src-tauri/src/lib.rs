@@ -12507,7 +12507,7 @@ fn get_character_memory(
         return None;
     }
 
-    let mut memory_text = String::new();
+    let memory_text = String::new();
 
     // Take the last 3 turns as memory
     // Removing this for now as this causes issues with different characters sharing same memory

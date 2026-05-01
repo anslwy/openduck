@@ -31,7 +31,6 @@
     "targets": "all",
     "resources": [
       "resources/*.py",
-      "resources/apple-translation-helper.app",
       "resources/silero_vad.onnx",
       "../scripts/setup_python_env.sh",
       "../sample-male.mp3",

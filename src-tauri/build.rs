@@ -116,7 +116,6 @@ fn build_apple_translation_helper(manifest_dir: &Path, target: &str) {
     let helper_contents_dir = helper_app_dir.join("Contents");
     let helper_macos_dir = helper_contents_dir.join("MacOS");
     let helper_executable_path = helper_macos_dir.join("apple-translation-helper");
-    let helper_info_plist_path = helper_contents_dir.join("Info.plist");
     let build_script_path = manifest_dir.join("build.rs");
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let module_cache_path = out_dir.join("swift-module-cache");
@@ -141,7 +140,8 @@ fn build_apple_translation_helper(manifest_dir: &Path, target: &str) {
         &helper_executable_path,
         &[source_path.as_path(), build_script_path.as_path()],
     ) {
-        let status = Command::new("swiftc")
+        let mut swiftc = Command::new("swiftc");
+        swiftc
             .arg("-Osize")
             .arg("-parse-as-library")
             .arg("-target")
@@ -149,18 +149,11 @@ fn build_apple_translation_helper(manifest_dir: &Path, target: &str) {
             .arg(&source_path)
             .arg("-o")
             .arg(&helper_executable_path)
-            .env("CLANG_MODULE_CACHE_PATH", &module_cache_path)
-            .status()
-            .unwrap_or_else(|err| {
-                panic!("failed to run swiftc for Apple translation helper: {err}")
-            });
+            .env("CLANG_MODULE_CACHE_PATH", &module_cache_path);
 
-        if !status.success() {
-            panic!("failed to build Apple translation helper with swiftc");
-        }
-    }
-
-    let info_plist = r#"<?xml version="1.0" encoding="UTF-8"?>
+        // Embed the Info.plist into the binary so it can function as a standalone signed app/sidecar
+        let info_plist_path = helper_contents_dir.join("Info.plist");
+        let info_plist_content = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -181,32 +174,48 @@ fn build_apple_translation_helper(manifest_dir: &Path, target: &str) {
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>LSBackgroundOnly</key>
-  <false/>
+  <true/>
 </dict>
 </plist>
 "#;
-    write_if_changed(&helper_info_plist_path, info_plist.as_bytes());
+        write_if_changed(&info_plist_path, info_plist_content.as_bytes());
 
-    let wrapper = r#"#!/bin/bash
-set -euo pipefail
+        swiftc
+            .arg("-Xlinker")
+            .arg("-sectcreate")
+            .arg("-Xlinker")
+            .arg("__TEXT")
+            .arg("-Xlinker")
+            .arg("__info_plist")
+            .arg("-Xlinker")
+            .arg(&info_plist_path);
 
-BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+        let status = swiftc.status().unwrap_or_else(|err| {
+            panic!("failed to run swiftc for Apple translation helper: {err}")
+        });
 
-for candidate in \
-  "$BASE_DIR/../Resources/resources/apple-translation-helper.app/Contents/MacOS/apple-translation-helper" \
-  "$BASE_DIR/resources/apple-translation-helper.app/Contents/MacOS/apple-translation-helper" \
-  "$BASE_DIR/../resources/apple-translation-helper.app/Contents/MacOS/apple-translation-helper" \
-  "$BASE_DIR/../../../resources/apple-translation-helper.app/Contents/MacOS/apple-translation-helper"
-do
-  if [ -x "$candidate" ]; then
-    exec "$candidate" "$@"
-  fi
-done
+        if !status.success() {
+            panic!("failed to build Apple translation helper with swiftc");
+        }
 
-echo '{"ok":false,"error":"Apple translation helper app bundle was not found."}'
-exit 1
-"#;
-    write_if_changed(&sidecar_path, wrapper.as_bytes());
+        // Apply an ad-hoc signature with hardened runtime.
+        // Tauri's bundler will re-sign this with the real identity later, but it will preserve the hardened runtime flag.
+        let _ = Command::new("codesign")
+            .arg("-s")
+            .arg("-")
+            .arg("--options")
+            .arg("runtime")
+            .arg("--force")
+            .arg(&helper_executable_path)
+            .status();
+    }
+
+    // Instead of a bash script sidecar, use the binary itself.
+    // This ensures Tauri's bundler recognizes it as an executable and signs it properly.
+    if file_is_stale(&sidecar_path, &[&helper_executable_path]) {
+        fs::copy(&helper_executable_path, &sidecar_path)
+            .unwrap_or_else(|err| panic!("failed to copy helper binary to sidecar: {err}"));
+    }
 
     #[cfg(unix)]
     {
