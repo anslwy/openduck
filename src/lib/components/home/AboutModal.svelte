@@ -638,8 +638,8 @@
                 { value: "vi", label: "Vietnamese", detail: undefined },
             ],
             actionLabel: subtitleTranslationLlmConfigured
-                ? "Edit translation LLM"
-                : "Configure translation LLM",
+                ? "Edit translation"
+                : "Configure translation",
             actionActive: subtitleTranslationLlmConfigured,
             onAction: onOpenSubtitleTranslationLlmConfig,
             onUpdate: onUpdateAiSubtitleTargetLanguage,

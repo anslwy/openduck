@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -26,6 +27,7 @@ fn main() {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| manifest_dir.clone());
+    let target = env::var("TARGET").unwrap_or_default();
     let updater_public_key_path = manifest_dir.join("updater-public-key.pem");
 
     register_git_rerun_paths(&repo_root);
@@ -33,6 +35,7 @@ fn main() {
         "cargo:rerun-if-changed={}",
         updater_public_key_path.display()
     );
+    build_apple_translation_helper(&manifest_dir, &target);
 
     let version =
         read_env_override("OPEN_DUCK_BUILD_VERSION").unwrap_or_else(|| cargo_package_version());
@@ -93,6 +96,169 @@ fn main() {
     emit_build_env("OPEN_DUCK_UPDATER_ENDPOINT", updater_endpoint.as_deref());
 
     tauri_build::build()
+}
+
+fn build_apple_translation_helper(manifest_dir: &Path, target: &str) {
+    if !target.ends_with("apple-darwin") {
+        return;
+    }
+
+    let source_path = manifest_dir
+        .join("src")
+        .join("apple_translation_helper.swift");
+    println!("cargo:rerun-if-changed={}", source_path.display());
+
+    let sidecar_dir = manifest_dir.join("bin");
+    let sidecar_path = sidecar_dir.join(format!("apple-translation-helper-{target}"));
+    let helper_app_dir = manifest_dir
+        .join("resources")
+        .join("apple-translation-helper.app");
+    let helper_contents_dir = helper_app_dir.join("Contents");
+    let helper_macos_dir = helper_contents_dir.join("MacOS");
+    let helper_executable_path = helper_macos_dir.join("apple-translation-helper");
+    let helper_info_plist_path = helper_contents_dir.join("Info.plist");
+    let build_script_path = manifest_dir.join("build.rs");
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
+    let module_cache_path = out_dir.join("swift-module-cache");
+
+    if let Err(err) = fs::create_dir_all(&sidecar_dir) {
+        panic!("failed to create helper sidecar directory: {err}");
+    }
+    if let Err(err) = fs::create_dir_all(&helper_macos_dir) {
+        panic!("failed to create Apple translation helper app bundle: {err}");
+    }
+    if let Err(err) = fs::create_dir_all(&module_cache_path) {
+        panic!("failed to create Swift module cache directory: {err}");
+    }
+
+    let swift_target = match target {
+        "aarch64-apple-darwin" => "arm64-apple-macosx15.0",
+        "x86_64-apple-darwin" => "x86_64-apple-macosx15.0",
+        _ => return,
+    };
+
+    if file_is_stale(
+        &helper_executable_path,
+        &[source_path.as_path(), build_script_path.as_path()],
+    ) {
+        let status = Command::new("swiftc")
+            .arg("-Osize")
+            .arg("-parse-as-library")
+            .arg("-target")
+            .arg(swift_target)
+            .arg(&source_path)
+            .arg("-o")
+            .arg(&helper_executable_path)
+            .env("CLANG_MODULE_CACHE_PATH", &module_cache_path)
+            .status()
+            .unwrap_or_else(|err| {
+                panic!("failed to run swiftc for Apple translation helper: {err}")
+            });
+
+        if !status.success() {
+            panic!("failed to build Apple translation helper with swiftc");
+        }
+    }
+
+    let info_plist = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>apple-translation-helper</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.openduck.app.apple-translation-helper</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>OpenDuck Apple Translation Helper</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSBackgroundOnly</key>
+  <false/>
+</dict>
+</plist>
+"#;
+    write_if_changed(&helper_info_plist_path, info_plist.as_bytes());
+
+    let wrapper = r#"#!/bin/bash
+set -euo pipefail
+
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+for candidate in \
+  "$BASE_DIR/../Resources/resources/apple-translation-helper.app/Contents/MacOS/apple-translation-helper" \
+  "$BASE_DIR/resources/apple-translation-helper.app/Contents/MacOS/apple-translation-helper" \
+  "$BASE_DIR/../resources/apple-translation-helper.app/Contents/MacOS/apple-translation-helper" \
+  "$BASE_DIR/../../../resources/apple-translation-helper.app/Contents/MacOS/apple-translation-helper"
+do
+  if [ -x "$candidate" ]; then
+    exec "$candidate" "$@"
+  fi
+done
+
+echo '{"ok":false,"error":"Apple translation helper app bundle was not found."}'
+exit 1
+"#;
+    write_if_changed(&sidecar_path, wrapper.as_bytes());
+
+    #[cfg(unix)]
+    {
+        set_executable_permissions_if_needed(&helper_executable_path);
+        set_executable_permissions_if_needed(&sidecar_path);
+    }
+}
+
+fn modified_at(path: &Path) -> Option<SystemTime> {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+}
+
+fn file_is_stale(output: &Path, inputs: &[&Path]) -> bool {
+    let Some(output_modified) = modified_at(output) else {
+        return true;
+    };
+
+    inputs
+        .iter()
+        .filter_map(|input| modified_at(input))
+        .any(|input_modified| input_modified > output_modified)
+}
+
+fn write_if_changed(path: &Path, content: &[u8]) {
+    if fs::read(path)
+        .map(|existing| existing == content)
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    fs::write(path, content)
+        .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
+}
+
+#[cfg(unix)]
+fn set_executable_permissions_if_needed(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = fs::metadata(path)
+        .unwrap_or_else(|err| panic!("failed to inspect Apple translation helper: {err}"));
+    let current_mode = metadata.permissions().mode() & 0o777;
+
+    if current_mode == 0o755 {
+        return;
+    }
+
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)
+        .unwrap_or_else(|err| panic!("failed to chmod Apple translation helper: {err}"));
 }
 
 fn cargo_package_version() -> String {

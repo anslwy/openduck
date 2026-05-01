@@ -31,6 +31,7 @@
     "targets": "all",
     "resources": [
       "resources/*.py",
+      "resources/apple-translation-helper.app",
       "resources/silero_vad.onnx",
       "../scripts/setup_python_env.sh",
       "../sample-male.mp3",
@@ -53,7 +54,7 @@
         }
       }
     ],
-    "externalBin": ["bin/mlx-handler"],
+    "externalBin": ["bin/mlx-handler", "bin/apple-translation-helper"],
     "macOS": {
       "infoPlist": "Info.plist"
     },

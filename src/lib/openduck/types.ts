@@ -96,6 +96,24 @@ export type AiSubtitleTargetLanguage =
     | "ur"
     | "vi";
 
+export type AiSubtitleTranslationProvider =
+    | "apple"
+    | "openai_compatible";
+
+export type AppleTranslationLanguagePackStatusValue =
+    | "installed"
+    | "supported"
+    | "unsupported"
+    | "unknown";
+
+export type AppleTranslationLanguagePackStatus = {
+    status: AppleTranslationLanguagePackStatusValue;
+    sourceLanguage: string;
+    targetLanguage: string;
+    sourceIdentifier: string;
+    targetIdentifier: string;
+};
+
 export type AssistantResponseEvent = {
     request_id: number;
     text: string;

@@ -138,6 +138,8 @@
         AppUpdateStatus,
         AiSubtitleEvent,
         AiSubtitleTargetLanguage,
+        AiSubtitleTranslationProvider,
+        AppleTranslationLanguagePackStatus,
         AssistantResponseEvent,
         AssistantTranslationsEvent,
         BuildInfo,
@@ -255,6 +257,7 @@
     };
 
     type SubtitleTranslationLlmConfig = ProviderConfig & {
+        provider: AiSubtitleTranslationProvider;
         modelId: string;
     };
 
@@ -465,10 +468,18 @@
     let openAiCompatibleBaseUrl = $state("");
     let openAiCompatibleHasApiKey = $state(false);
     let showSubtitleTranslationLlmConfig = $state(false);
+    let subtitleTranslationProvider =
+        $state<AiSubtitleTranslationProvider>("openai_compatible");
     let subtitleTranslationBaseUrl = $state("");
     let subtitleTranslationHasApiKey = $state(false);
     let subtitleTranslationModelId = $state("");
     let subtitleTranslationLlmTested = $state(false);
+    let appleTranslationLanguagePackStatus =
+        $state<AppleTranslationLanguagePackStatus | null>(null);
+    let appleTranslationLanguagePackMessage = $state("");
+    let isCheckingAppleTranslationLanguagePack = $state(false);
+    let isInstallingAppleTranslationLanguagePack = $state(false);
+    let appleTranslationLanguagePackRequestId = 0;
     let showConversationPopup = $state(false);
     let showSessionsPopup = $state(false);
     let sessions = $state<SessionMetadata[]>([]);
@@ -731,10 +742,20 @@
     }
 
     const subtitleTranslationLlmConfigured = $derived(
-        subtitleTranslationBaseUrl.trim() !== "" &&
-            subtitleTranslationModelId.trim() !== "" &&
-            (subtitleTranslationHasApiKey ||
-                !subtitleTranslationBaseUrl.startsWith("https://")),
+        subtitleTranslationProvider === "apple"
+            ? aiSubtitleTargetLanguage !== "none" &&
+                  appleTranslationLanguagePackStatus?.status === "installed"
+            : subtitleTranslationBaseUrl.trim() !== "" &&
+                  subtitleTranslationModelId.trim() !== "" &&
+                  (subtitleTranslationHasApiKey ||
+                      !subtitleTranslationBaseUrl.startsWith("https://")),
+    );
+
+    const subtitleTranslationReady = $derived(
+        subtitleTranslationProvider === "apple"
+            ? aiSubtitleTargetLanguage === "none" ||
+                  appleTranslationLanguagePackStatus?.status === "installed"
+            : subtitleTranslationLlmTested,
     );
 
     async function syncExternalModelsForVariant(variant: ExternalGemmaVariant) {
@@ -6102,10 +6123,11 @@
 
     async function syncSubtitleTranslationLlmConfig() {
         try {
-            const { baseUrl, hasApiKey, modelId } =
+            const { provider, baseUrl, hasApiKey, modelId } =
                 await invoke<SubtitleTranslationLlmConfig>(
                     "get_subtitle_translation_llm_config",
                 );
+            subtitleTranslationProvider = provider;
             subtitleTranslationBaseUrl = baseUrl;
             subtitleTranslationHasApiKey = hasApiKey;
             subtitleTranslationModelId = modelId;
@@ -6114,6 +6136,99 @@
                 "Failed to sync subtitle translation LLM config:",
                 err,
             );
+        }
+    }
+
+    async function refreshAppleTranslationLanguagePackStatus(
+        targetLang: AiSubtitleTargetLanguage = aiSubtitleTargetLanguage,
+        sourceLanguage: KokoroLanguage = selectedKokoroLanguage,
+    ) {
+        if (targetLang === "none") {
+            appleTranslationLanguagePackStatus = null;
+            appleTranslationLanguagePackMessage = "";
+            return null;
+        }
+
+        const requestId = ++appleTranslationLanguagePackRequestId;
+        isCheckingAppleTranslationLanguagePack = true;
+        appleTranslationLanguagePackMessage = "";
+
+        try {
+            const status = await invoke<AppleTranslationLanguagePackStatus>(
+                "check_apple_translation_language_pack",
+                {
+                    targetLang,
+                    sourceLanguage,
+                },
+            );
+
+            if (requestId === appleTranslationLanguagePackRequestId) {
+                appleTranslationLanguagePackStatus = status;
+            }
+            return status;
+        } catch (err) {
+            if (requestId === appleTranslationLanguagePackRequestId) {
+                appleTranslationLanguagePackStatus = null;
+                appleTranslationLanguagePackMessage = normalizeErrorMessage(err);
+            }
+            return null;
+        } finally {
+            if (requestId === appleTranslationLanguagePackRequestId) {
+                isCheckingAppleTranslationLanguagePack = false;
+            }
+        }
+    }
+
+    async function installAppleTranslationLanguagePack(
+        targetLang: AiSubtitleTargetLanguage = aiSubtitleTargetLanguage,
+        sourceLanguage: KokoroLanguage = selectedKokoroLanguage,
+    ) {
+        if (targetLang === "none") {
+            return null;
+        }
+
+        const requestId = ++appleTranslationLanguagePackRequestId;
+        isInstallingAppleTranslationLanguagePack = true;
+        appleTranslationLanguagePackMessage = "";
+
+        try {
+            const status = await invoke<AppleTranslationLanguagePackStatus>(
+                "install_apple_translation_language_pack",
+                {
+                    targetLang,
+                    sourceLanguage,
+                },
+            );
+
+            if (requestId === appleTranslationLanguagePackRequestId) {
+                appleTranslationLanguagePackStatus = status;
+            }
+            return status;
+        } catch (err) {
+            if (requestId === appleTranslationLanguagePackRequestId) {
+                appleTranslationLanguagePackMessage = normalizeErrorMessage(err);
+            }
+            return null;
+        } finally {
+            if (requestId === appleTranslationLanguagePackRequestId) {
+                isInstallingAppleTranslationLanguagePack = false;
+            }
+        }
+    }
+
+    async function saveSubtitleTranslationProvider(
+        provider: AiSubtitleTranslationProvider,
+    ) {
+        subtitleTranslationProvider = provider;
+        try {
+            await invoke("set_subtitle_translation_provider", { provider });
+            await syncSubtitleTranslationLlmConfig();
+        } catch (err) {
+            console.error(
+                "Failed to save subtitle translation provider:",
+                err,
+            );
+            throw err;
         }
     }
 
@@ -6190,6 +6305,7 @@
     }
 
     async function saveSubtitleTranslationLlmConfig(
+        provider: AiSubtitleTranslationProvider,
         url: string,
         key: string,
         clearKey: boolean,
@@ -6197,6 +6313,7 @@
     ) {
         try {
             await invoke("set_subtitle_translation_llm_config", {
+                provider,
                 url,
                 key: key || null,
                 clearKey,
@@ -6227,6 +6344,34 @@
     function closeSubtitleTranslationLlmConfig() {
         showSubtitleTranslationLlmConfig = false;
     }
+
+    let lastAppleTranslationStatusKey = "";
+
+    $effect(() => {
+        const statusKey = `${subtitleTranslationProvider}:${aiSubtitleTargetLanguage}:${selectedKokoroLanguage}`;
+
+        if (
+            subtitleTranslationProvider !== "apple" ||
+            aiSubtitleTargetLanguage === "none"
+        ) {
+            if (statusKey !== lastAppleTranslationStatusKey) {
+                lastAppleTranslationStatusKey = statusKey;
+                appleTranslationLanguagePackStatus = null;
+                appleTranslationLanguagePackMessage = "";
+            }
+            return;
+        }
+
+        if (statusKey === lastAppleTranslationStatusKey) {
+            return;
+        }
+
+        lastAppleTranslationStatusKey = statusKey;
+        void refreshAppleTranslationLanguagePackStatus(
+            aiSubtitleTargetLanguage,
+            selectedKokoroLanguage,
+        );
+    });
 
     async function ensureRuntimeDependencies() {
         isPreparingRuntime = true;
@@ -9469,10 +9614,18 @@
     {#if showOnboarding}
         <Onboarding
             aiSubtitleTargetLanguage={aiSubtitleTargetLanguage}
+            subtitleTranslationProvider={subtitleTranslationProvider}
             subtitleTranslationLlmConfigured={subtitleTranslationLlmConfigured}
-            subtitleTranslationLlmTested={subtitleTranslationLlmTested}
+            subtitleTranslationLlmTested={subtitleTranslationReady}
+            appleTranslationLanguagePackStatus={appleTranslationLanguagePackStatus}
+            appleTranslationLanguagePackMessage={appleTranslationLanguagePackMessage}
+            isCheckingAppleTranslationLanguagePack={isCheckingAppleTranslationLanguagePack}
+            isInstallingAppleTranslationLanguagePack={isInstallingAppleTranslationLanguagePack}
             onOpenSubtitleTranslationLlmConfig={() =>
                 (showSubtitleTranslationLlmConfig = true)}
+            onUpdateSubtitleTranslationProvider={saveSubtitleTranslationProvider}
+            onCheckAppleTranslationLanguagePack={refreshAppleTranslationLanguagePackStatus}
+            onInstallAppleTranslationLanguagePack={installAppleTranslationLanguagePack}
             onUpdateAiSubtitleTargetLanguage={applyAiSubtitleTargetLanguagePreference}
             onUpdateShowAiSubtitle={applyShowAiSubtitlePreference}
             onComplete={handleOnboardingComplete}
@@ -9481,11 +9634,20 @@
 
     {#if showSubtitleTranslationLlmConfig}
         <SubtitleTranslationLlmConfigModal
+            provider={subtitleTranslationProvider}
             baseUrl={subtitleTranslationBaseUrl}
             hasApiKey={subtitleTranslationHasApiKey}
             modelId={subtitleTranslationModelId}
+            targetLanguage={aiSubtitleTargetLanguage}
+            sourceLanguage={selectedKokoroLanguage}
+            appleTranslationLanguagePackStatus={appleTranslationLanguagePackStatus}
+            appleTranslationLanguagePackMessage={appleTranslationLanguagePackMessage}
+            isCheckingAppleTranslationLanguagePack={isCheckingAppleTranslationLanguagePack}
+            isInstallingAppleTranslationLanguagePack={isInstallingAppleTranslationLanguagePack}
             onSave={saveSubtitleTranslationLlmConfig}
             onTestConnection={testSubtitleTranslationConnection}
+            onCheckAppleTranslationLanguagePack={refreshAppleTranslationLanguagePackStatus}
+            onInstallAppleTranslationLanguagePack={installAppleTranslationLanguagePack}
             onClose={closeSubtitleTranslationLlmConfig}
         />
     {/if}

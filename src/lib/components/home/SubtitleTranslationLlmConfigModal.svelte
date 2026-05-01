@@ -1,24 +1,64 @@
-<!-- Modal for configuring a dedicated OpenAI-compatible model for AI subtitle translation. -->
+<!-- Modal for configuring Apple or OpenAI-compatible AI subtitle translation. -->
 <script lang="ts">
-    let { baseUrl, hasApiKey, modelId, onSave, onTestConnection, onClose } =
-        $props<{
-            baseUrl: string;
-            hasApiKey: boolean;
-            modelId: string;
-            onSave: (
-                url: string,
-                key: string,
-                clearKey: boolean,
-                modelId: string,
-            ) => Promise<void>;
-            onTestConnection: (
-                url: string,
-                key: string,
-                useSavedKey: boolean,
-            ) => Promise<string[]>;
-            onClose: () => void;
-        }>();
+    import type {
+        AiSubtitleTargetLanguage,
+        AiSubtitleTranslationProvider,
+        AppleTranslationLanguagePackStatus,
+        KokoroLanguage,
+    } from "$lib/openduck/types";
 
+    let {
+        provider,
+        baseUrl,
+        hasApiKey,
+        modelId,
+        targetLanguage,
+        sourceLanguage,
+        appleTranslationLanguagePackStatus,
+        appleTranslationLanguagePackMessage,
+        isCheckingAppleTranslationLanguagePack,
+        isInstallingAppleTranslationLanguagePack,
+        onSave,
+        onTestConnection,
+        onCheckAppleTranslationLanguagePack,
+        onInstallAppleTranslationLanguagePack,
+        onClose,
+    } = $props<{
+        provider: AiSubtitleTranslationProvider;
+        baseUrl: string;
+        hasApiKey: boolean;
+        modelId: string;
+        targetLanguage: AiSubtitleTargetLanguage;
+        sourceLanguage: KokoroLanguage;
+        appleTranslationLanguagePackStatus: AppleTranslationLanguagePackStatus | null;
+        appleTranslationLanguagePackMessage: string;
+        isCheckingAppleTranslationLanguagePack: boolean;
+        isInstallingAppleTranslationLanguagePack: boolean;
+        onSave: (
+            provider: AiSubtitleTranslationProvider,
+            url: string,
+            key: string,
+            clearKey: boolean,
+            modelId: string,
+        ) => Promise<void>;
+        onTestConnection: (
+            url: string,
+            key: string,
+            useSavedKey: boolean,
+        ) => Promise<string[]>;
+        onCheckAppleTranslationLanguagePack: (
+            targetLang: AiSubtitleTargetLanguage,
+            sourceLanguage: KokoroLanguage,
+        ) => Promise<AppleTranslationLanguagePackStatus | null>;
+        onInstallAppleTranslationLanguagePack: (
+            targetLang: AiSubtitleTargetLanguage,
+            sourceLanguage: KokoroLanguage,
+        ) => Promise<AppleTranslationLanguagePackStatus | null>;
+        onClose: () => void;
+    }>();
+
+    let selectedTranslationProvider =
+        $state<AiSubtitleTranslationProvider>("openai_compatible");
     let url = $state("");
     let key = $state("");
     let clearSavedKey = $state(false);
@@ -84,6 +124,7 @@
     let selectedProviderId = $state(providers[0].id);
 
     $effect(() => {
+        selectedTranslationProvider = provider;
         url = baseUrl;
         key = "";
         clearSavedKey = false;
@@ -102,6 +143,30 @@
         }
     });
 
+    let lastAppleTranslationStatusKey = "";
+
+    $effect(() => {
+        const statusKey = `${selectedTranslationProvider}:${targetLanguage}:${sourceLanguage}`;
+
+        if (
+            selectedTranslationProvider !== "apple" ||
+            targetLanguage === "none"
+        ) {
+            lastAppleTranslationStatusKey = statusKey;
+            return;
+        }
+
+        if (lastAppleTranslationStatusKey === statusKey) {
+            return;
+        }
+
+        lastAppleTranslationStatusKey = statusKey;
+        void onCheckAppleTranslationLanguagePack(
+            targetLanguage,
+            sourceLanguage,
+        );
+    });
+
     $effect(() => {
         if (selectedProviderId !== "custom") {
             const provider = providers.find((p) => p.id === selectedProviderId);
@@ -112,6 +177,14 @@
     });
 
     function validationMessage() {
+        if (selectedTranslationProvider === "apple") {
+            if (targetLanguage === "none") {
+                return "Choose a subtitle translation language before using Apple translation.";
+            }
+
+            return null;
+        }
+
         const hasUrl = url.trim() !== "";
         const hasModel = selectedModelId.trim() !== "";
 
@@ -132,6 +205,47 @@
         }
 
         return "Request failed.";
+    }
+
+    function appleTranslationStatusText() {
+        if (targetLanguage === "none") {
+            return "Choose a subtitle translation language first.";
+        }
+
+        if (isCheckingAppleTranslationLanguagePack) {
+            return "Checking Apple language pack...";
+        }
+
+        if (appleTranslationLanguagePackMessage) {
+            return appleTranslationLanguagePackMessage;
+        }
+
+        if (!appleTranslationLanguagePackStatus) {
+            return "Apple language pack status has not been checked yet.";
+        }
+
+        if (appleTranslationLanguagePackStatus.status === "installed") {
+            return `${appleTranslationLanguagePackStatus.targetLanguage} is installed for Apple translation.`;
+        }
+
+        if (appleTranslationLanguagePackStatus.status === "supported") {
+            return `${appleTranslationLanguagePackStatus.targetLanguage} needs an Apple language pack download.`;
+        }
+
+        if (appleTranslationLanguagePackStatus.status === "unsupported") {
+            return `Apple translation does not support ${appleTranslationLanguagePackStatus.sourceLanguage} to ${appleTranslationLanguagePackStatus.targetLanguage}.`;
+        }
+
+        return "Apple language pack status is unknown.";
+    }
+
+    async function handleInstallAppleLanguagePack() {
+        connectionState = "idle";
+        connectionMessage = "";
+        await onInstallAppleTranslationLanguagePack(
+            targetLanguage,
+            sourceLanguage,
+        );
     }
 
     async function handleTestConnection() {
@@ -196,15 +310,19 @@
         const shouldClearKey =
             normalizedKey === "" &&
             (clearSavedKey ||
+                selectedTranslationProvider === "apple" ||
                 (url.trim() === "" && selectedModelId.trim() === ""));
 
         isSaving = true;
         try {
             await onSave(
-                url.trim(),
-                normalizedKey,
+                selectedTranslationProvider,
+                selectedTranslationProvider === "apple" ? "" : url.trim(),
+                selectedTranslationProvider === "apple" ? "" : normalizedKey,
                 shouldClearKey,
-                selectedModelId.trim(),
+                selectedTranslationProvider === "apple"
+                    ? ""
+                    : selectedModelId.trim(),
             );
             onClose();
         } catch (error) {
@@ -237,8 +355,8 @@
                 >AI Subtitle Translation LLM</span
             >
             <span class="about-modal-subtitle"
-                >Use a separate OpenAI-compatible model for subtitle
-                translation.</span
+                >Use Apple translation or a separate OpenAI-compatible model for
+                subtitle translation.</span
             >
         </div>
         <button
@@ -269,54 +387,117 @@
 
     <div class="config-form">
         <div class="form-group">
-            <label for="provider-select">Provider</label>
+            <label for="translation-type-select">Translation Type</label>
             <select
-                id="provider-select"
-                bind:value={selectedProviderId}
+                id="translation-type-select"
+                bind:value={selectedTranslationProvider}
                 class="config-input config-select"
             >
-                {#each providers as provider}
-                    <option value={provider.id}>{provider.name}</option>
-                {/each}
+                <option value="apple">Apple</option>
+                <option value="openai_compatible">OpenAI-compatible</option>
             </select>
-            {#if selectedProviderId !== "custom"}
-                {@const provider = providers.find(
-                    (p) => p.id === selectedProviderId,
-                )}
-                {#if provider}
-                    <p class="field-help">
-                        {provider.helpText}
-                        {#if provider.linkUrl}
-                            <a
-                                href={provider.linkUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                class="help-link">{provider.linkText}</a
-                            >.
-                        {/if}
-                    </p>
-                {/if}
-            {/if}
         </div>
 
-        {#if selectedProviderId === "custom"}
-            <div class="form-group">
-                <label for="subtitle-translation-url">Base URL</label>
-                <input
-                    id="subtitle-translation-url"
-                    type="text"
-                    bind:value={url}
-                    placeholder="https://api.openai.com"
-                    class="config-input"
-                />
-                <p class="field-help">
-                    Clear the Base URL and choose "Use current call LLM" to keep
-                    using the current call LLM for translation.
+        {#if selectedTranslationProvider === "apple"}
+            <div class="apple-pack-panel">
+                <div class="field-header">
+                    <span class="apple-pack-title">Apple Language Pack</span>
+                    <button
+                        type="button"
+                        class="utility-btn test-btn"
+                        onclick={() =>
+                            onCheckAppleTranslationLanguagePack(
+                                targetLanguage,
+                                sourceLanguage,
+                            )}
+                        disabled={isCheckingAppleTranslationLanguagePack ||
+                            targetLanguage === "none"}
+                    >
+                        {isCheckingAppleTranslationLanguagePack
+                            ? "Checking..."
+                            : "Check"}
+                    </button>
+                </div>
+                <p
+                    class="connection-status apple-pack-status"
+                    data-state={appleTranslationLanguagePackStatus?.status ===
+                    "installed"
+                        ? "success"
+                        : appleTranslationLanguagePackStatus?.status ===
+                                "unsupported" ||
+                            appleTranslationLanguagePackMessage
+                          ? "error"
+                          : "idle"}
+                >
+                    {appleTranslationStatusText()}
                 </p>
+                {#if connectionMessage}
+                    <p class="connection-status" data-state={connectionState}>
+                        {connectionMessage}
+                    </p>
+                {/if}
+                {#if targetLanguage !== "none" && appleTranslationLanguagePackStatus?.status !== "installed" && appleTranslationLanguagePackStatus?.status !== "unsupported"}
+                    <button
+                        type="button"
+                        class="utility-btn save-btn apple-install-btn"
+                        onclick={handleInstallAppleLanguagePack}
+                        disabled={isInstallingAppleTranslationLanguagePack}
+                    >
+                        {isInstallingAppleTranslationLanguagePack
+                            ? "Installing..."
+                            : "Download & Install"}
+                    </button>
+                {/if}
             </div>
-        {/if}
+        {:else}
+            <div class="form-group">
+                <label for="provider-select">Provider</label>
+                <select
+                    id="provider-select"
+                    bind:value={selectedProviderId}
+                    class="config-input config-select"
+                >
+                    {#each providers as provider}
+                        <option value={provider.id}>{provider.name}</option>
+                    {/each}
+                </select>
+                {#if selectedProviderId !== "custom"}
+                    {@const provider = providers.find(
+                        (p) => p.id === selectedProviderId,
+                    )}
+                    {#if provider}
+                        <p class="field-help">
+                            {provider.helpText}
+                            {#if provider.linkUrl}
+                                <a
+                                    href={provider.linkUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    class="help-link">{provider.linkText}</a
+                                >.
+                            {/if}
+                        </p>
+                    {/if}
+                {/if}
+            </div>
 
-        {#if selectedProviderId !== "inherit"}
+            {#if selectedProviderId === "custom"}
+                <div class="form-group">
+                    <label for="subtitle-translation-url">Base URL</label>
+                    <input
+                        id="subtitle-translation-url"
+                        type="text"
+                        bind:value={url}
+                        placeholder="https://api.openai.com"
+                        class="config-input"
+                    />
+                    <p class="field-help">
+                        Clear the Base URL and choose "Use current call LLM" to
+                        keep using the current call LLM for translation.
+                    </p>
+                </div>
+            {/if}
+
             <div class="form-group">
                 <label for="subtitle-translation-key">API Key (Optional)</label>
                 <input
@@ -500,6 +681,34 @@
 
     .checkbox-row input {
         margin: 0;
+    }
+
+    .apple-pack-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04);
+    }
+
+    .apple-pack-title {
+        font-size: 0.85rem;
+        font-weight: 650;
+        color: rgba(255, 255, 255, 0.9);
+    }
+
+    .apple-pack-status {
+        line-height: 1.4;
+    }
+
+    .apple-install-btn {
+        width: 100%;
+    }
+
+    .connection-status {
+        color: white;
     }
 
     .connection-status[data-state="success"] {

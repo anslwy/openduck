@@ -15,22 +15,48 @@
         StoredModelPreferences,
         GemmaVariant,
         AiSubtitleTargetLanguage,
+        AiSubtitleTranslationProvider,
+        AppleTranslationLanguagePackStatus,
     } from "$lib/openduck/types";
 
     let {
         onComplete,
         aiSubtitleTargetLanguage,
+        subtitleTranslationProvider,
         subtitleTranslationLlmConfigured,
         subtitleTranslationLlmTested,
+        appleTranslationLanguagePackStatus,
+        appleTranslationLanguagePackMessage,
+        isCheckingAppleTranslationLanguagePack,
+        isInstallingAppleTranslationLanguagePack,
         onOpenSubtitleTranslationLlmConfig,
+        onUpdateSubtitleTranslationProvider,
+        onCheckAppleTranslationLanguagePack,
+        onInstallAppleTranslationLanguagePack,
         onUpdateAiSubtitleTargetLanguage,
         onUpdateShowAiSubtitle,
     } = $props<{
         onComplete: () => void;
         aiSubtitleTargetLanguage: AiSubtitleTargetLanguage;
+        subtitleTranslationProvider: AiSubtitleTranslationProvider;
         subtitleTranslationLlmConfigured: boolean;
         subtitleTranslationLlmTested: boolean;
+        appleTranslationLanguagePackStatus: AppleTranslationLanguagePackStatus | null;
+        appleTranslationLanguagePackMessage: string;
+        isCheckingAppleTranslationLanguagePack: boolean;
+        isInstallingAppleTranslationLanguagePack: boolean;
         onOpenSubtitleTranslationLlmConfig: () => void;
+        onUpdateSubtitleTranslationProvider: (
+            provider: AiSubtitleTranslationProvider,
+        ) => Promise<void>;
+        onCheckAppleTranslationLanguagePack: (
+            targetLang: AiSubtitleTargetLanguage,
+            sourceLanguage: KokoroLanguage,
+        ) => Promise<AppleTranslationLanguagePackStatus | null>;
+        onInstallAppleTranslationLanguagePack: (
+            targetLang: AiSubtitleTargetLanguage,
+            sourceLanguage: KokoroLanguage,
+        ) => Promise<AppleTranslationLanguagePackStatus | null>;
         onUpdateAiSubtitleTargetLanguage: (
             lang: AiSubtitleTargetLanguage,
         ) => void;
@@ -129,6 +155,70 @@
         const key = mapping[lang] || lang;
         return demoTranslations[key] || demoTranslations["en"];
     }
+
+    function appleTranslationStatusText() {
+        if (selectedTranslationLanguage === "none") {
+            return "Choose a translation language first.";
+        }
+
+        if (isCheckingAppleTranslationLanguagePack) {
+            return "Checking Apple language pack...";
+        }
+
+        if (appleTranslationLanguagePackMessage) {
+            return appleTranslationLanguagePackMessage;
+        }
+
+        if (!appleTranslationLanguagePackStatus) {
+            return "Apple language pack status has not been checked yet.";
+        }
+
+        if (appleTranslationLanguagePackStatus.status === "installed") {
+            return `${appleTranslationLanguagePackStatus.targetLanguage} is installed for Apple translation.`;
+        }
+
+        if (appleTranslationLanguagePackStatus.status === "supported") {
+            return `${appleTranslationLanguagePackStatus.targetLanguage} needs an Apple language pack download.`;
+        }
+
+        if (appleTranslationLanguagePackStatus.status === "unsupported") {
+            return `Apple translation does not support ${appleTranslationLanguagePackStatus.sourceLanguage} to ${appleTranslationLanguagePackStatus.targetLanguage}.`;
+        }
+
+        return "Apple language pack status is unknown.";
+    }
+
+    async function updateTranslationProvider(event: Event) {
+        const provider = (event.currentTarget as HTMLSelectElement)
+            .value as AiSubtitleTranslationProvider;
+        await onUpdateSubtitleTranslationProvider(provider);
+    }
+
+    let lastAppleTranslationStatusKey = "";
+
+    $effect(() => {
+        const statusKey = `${subtitleTranslationProvider}:${selectedTranslationLanguage}:${selectedLanguage}`;
+
+        if (
+            subtitleTranslationProvider !== "apple" ||
+            selectedTranslationLanguage === "none"
+        ) {
+            if (lastAppleTranslationStatusKey !== statusKey) {
+                lastAppleTranslationStatusKey = statusKey;
+            }
+            return;
+        }
+
+        if (lastAppleTranslationStatusKey === statusKey) {
+            return;
+        }
+
+        lastAppleTranslationStatusKey = statusKey;
+        void onCheckAppleTranslationLanguagePack(
+            selectedTranslationLanguage,
+            selectedLanguage,
+        );
+    });
 
     function nextPage() {
         if (currentPage < 4) {
@@ -324,6 +414,19 @@
                     
                     <div class="translation-controls">
                         <div class="control-group">
+                            <label for="onboarding-translation-provider">Translation Type</label>
+                            <select
+                                id="onboarding-translation-provider"
+                                class="onboarding-select"
+                                value={subtitleTranslationProvider}
+                                onchange={updateTranslationProvider}
+                            >
+                                <option value="apple">Apple</option>
+                                <option value="openai_compatible">OpenAI-compatible</option>
+                            </select>
+                        </div>
+
+                        <div class="control-group">
                             <label for="onboarding-translation-lang">AI Subtitle Translation</label>
                             <select 
                                 id="onboarding-translation-lang"
@@ -339,26 +442,53 @@
                             </select>
                         </div>
 
-                        <div class="config-row">
-                            <button 
-                                class="config-llm-btn" 
-                                class:configured={subtitleTranslationLlmConfigured}
-                                onclick={onOpenSubtitleTranslationLlmConfig}
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
-                                    <circle cx="12" cy="12" r="3"></circle>
-                                </svg>
-                                {subtitleTranslationLlmConfigured ? 'Edit Translation LLM' : 'Configure Translation LLM'}
-                            </button>
-                            <div class="config-status" 
-                                class:configured={subtitleTranslationLlmConfigured && subtitleTranslationLlmTested}
-                                class:error={subtitleTranslationLlmConfigured && !subtitleTranslationLlmTested}
-                            >
-                                <span class="status-dot"></span>
-                                {subtitleTranslationLlmConfigured && subtitleTranslationLlmTested ? 'Ready' : !subtitleTranslationLlmConfigured ? 'Not set' : 'Invalid key'}
+                        {#if subtitleTranslationProvider === "apple"}
+                            <div class="apple-pack-panel">
+                                <div
+                                    class="config-status apple-status"
+                                    class:configured={appleTranslationLanguagePackStatus?.status === "installed"}
+                                    class:error={appleTranslationLanguagePackStatus?.status === "unsupported" || !!appleTranslationLanguagePackMessage}
+                                >
+                                    <span class="status-dot"></span>
+                                    {appleTranslationStatusText()}
+                                </div>
+                                {#if selectedTranslationLanguage !== "none" && appleTranslationLanguagePackStatus?.status !== "installed" && appleTranslationLanguagePackStatus?.status !== "unsupported"}
+                                    <button
+                                        type="button"
+                                        class="config-llm-btn"
+                                        onclick={() =>
+                                            onInstallAppleTranslationLanguagePack(
+                                                selectedTranslationLanguage,
+                                                selectedLanguage,
+                                            )}
+                                        disabled={isInstallingAppleTranslationLanguagePack}
+                                    >
+                                        {isInstallingAppleTranslationLanguagePack ? 'Installing...' : 'Download & Install'}
+                                    </button>
+                                {/if}
                             </div>
-                        </div>
+                        {:else}
+                            <div class="config-row">
+                                <button
+                                    class="config-llm-btn"
+                                    class:configured={subtitleTranslationLlmConfigured}
+                                    onclick={onOpenSubtitleTranslationLlmConfig}
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+                                        <circle cx="12" cy="12" r="3"></circle>
+                                    </svg>
+                                    {subtitleTranslationLlmConfigured ? 'Edit Translation LLM' : 'Configure Translation LLM'}
+                                </button>
+                                <div class="config-status"
+                                    class:configured={subtitleTranslationLlmConfigured && subtitleTranslationLlmTested}
+                                    class:error={subtitleTranslationLlmConfigured && !subtitleTranslationLlmTested}
+                                >
+                                    <span class="status-dot"></span>
+                                    {subtitleTranslationLlmConfigured && subtitleTranslationLlmTested ? 'Ready' : !subtitleTranslationLlmConfigured ? 'Not set' : 'Invalid key'}
+                                </div>
+                            </div>
+                        {/if}
                     </div>
 
                     <div class="onboarding-actions">
@@ -453,9 +583,14 @@
     }
 
     @media (max-height: 800px) or (max-width: 600px) {
+        .onboarding-overlay {
+            align-items: stretch;
+        }
+
         .onboarding-card {
             padding: 24px;
             min-height: auto;
+            max-height: calc(100vh - 40px);
             border-radius: 24px;
         }
 
@@ -472,6 +607,8 @@
 
         .translation-demo {
             max-width: 440px;
+            min-height: 150px;
+            padding: 14px;
             margin-bottom: 16px;
         }
 
@@ -520,17 +657,33 @@
         }
 
         .translation-demo {
+            min-height: 120px;
+            padding: 12px;
             margin-bottom: 16px;
         }
 
         .translation-controls {
-            gap: 10px;
-            margin-bottom: 16px;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .translation-page .description {
+            margin-bottom: 12px;
+        }
+
+        .apple-pack-panel {
+            padding: 10px;
+            gap: 8px;
+        }
+
+        .apple-pack-panel .config-llm-btn {
+            min-height: 42px;
+            padding: 10px 14px;
         }
     }
 
     .page-content {
-        flex: 1;
+        flex: 1 0 auto;
         display: grid;
         grid-template-columns: 1fr;
         grid-template-rows: 1fr;
@@ -624,6 +777,7 @@
         gap: 16px;
         width: 100%;
         justify-content: center;
+        flex-shrink: 0;
     }
 
     .translation-demo {
@@ -742,6 +896,23 @@
         transition: all 0.2s;
     }
 
+    .config-llm-btn:disabled {
+        opacity: 0.55;
+        cursor: wait;
+    }
+
+    .apple-pack-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        text-align: left;
+        padding: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.04);
+        min-width: 0;
+    }
+
     .config-status {
         display: flex;
         align-items: center;
@@ -751,6 +922,19 @@
         color: rgba(255, 255, 255, 0.4);
         white-space: nowrap;
         min-width: 100px;
+    }
+
+    .config-status.apple-status {
+        align-items: flex-start;
+        min-width: 0;
+        max-width: 100%;
+        white-space: normal;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+    }
+
+    .config-status.apple-status .status-dot {
+        margin-top: 0.35em;
     }
 
     .status-dot {
@@ -889,6 +1073,7 @@
         justify-content: center;
         gap: 12px;
         margin-top: 40px;
+        flex-shrink: 0;
     }
 
     .dot {

@@ -329,6 +329,8 @@ struct PersistedExternalLlmProviderConfig {
 #[derive(Clone, Serialize, Deserialize)]
 struct PersistedSubtitleTranslationLlmConfig {
     #[serde(default)]
+    provider: SubtitleTranslationProvider,
+    #[serde(default)]
     base_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     api_key: Option<String>,
@@ -366,9 +368,43 @@ struct ProviderConfigPayload {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SubtitleTranslationLlmConfigPayload {
+    provider: SubtitleTranslationProvider,
     base_url: String,
     has_api_key: bool,
     model_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SubtitleTranslationProvider {
+    Apple,
+    #[serde(rename = "openai_compatible")]
+    OpenAiCompatible,
+}
+
+impl Default for SubtitleTranslationProvider {
+    fn default() -> Self {
+        Self::OpenAiCompatible
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppleTranslationLanguagePackStatusPayload {
+    status: String,
+    source_language: String,
+    target_language: String,
+    source_identifier: String,
+    target_identifier: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppleTranslationHelperResponse {
+    ok: bool,
+    status: Option<String>,
+    translated_text: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -512,6 +548,7 @@ struct AppState {
     selected_openai_compatible_model: Mutex<String>,
     openai_compatible_base_url: Mutex<String>,
     openai_compatible_api_key: Mutex<Option<String>>,
+    subtitle_translation_provider: Mutex<SubtitleTranslationProvider>,
     subtitle_translation_base_url: Mutex<String>,
     subtitle_translation_api_key: Mutex<Option<String>>,
     subtitle_translation_model_id: Mutex<String>,
@@ -785,6 +822,7 @@ fn default_openai_compatible_provider_config() -> PersistedExternalLlmProviderCo
 
 fn default_subtitle_translation_llm_config() -> PersistedSubtitleTranslationLlmConfig {
     PersistedSubtitleTranslationLlmConfig {
+        provider: SubtitleTranslationProvider::OpenAiCompatible,
         base_url: default_openai_compatible_base_url(),
         api_key: None,
         model_id: String::new(),
@@ -999,13 +1037,217 @@ async fn translate_text_with_llm(
     Ok(translated_text.trim().to_string())
 }
 
-async fn translate_text_internal(
+fn subtitle_translation_provider(state: &AppState) -> SubtitleTranslationProvider {
+    *state.subtitle_translation_provider.lock().unwrap()
+}
+
+fn apple_translation_source_language(
+    state: &AppState,
+    source_language: Option<String>,
+) -> Result<KokoroLanguage, String> {
+    source_language
+        .as_deref()
+        .map(KokoroLanguage::from_key)
+        .transpose()
+        .map(|language| language.unwrap_or_else(|| selected_kokoro_language(state)))
+}
+
+fn apple_translation_source_language_identifier(language: KokoroLanguage) -> &'static str {
+    match language {
+        KokoroLanguage::AmericanEnglish => "en",
+        KokoroLanguage::BritishEnglish => "en-GB",
+        KokoroLanguage::Japanese => "ja",
+        KokoroLanguage::MandarinChinese => "zh-Hans",
+        KokoroLanguage::Spanish => "es",
+        KokoroLanguage::French => "fr",
+        KokoroLanguage::Hindi => "hi",
+        KokoroLanguage::Italian => "it",
+        KokoroLanguage::BrazilianPortuguese => "pt-BR",
+    }
+}
+
+fn apple_translation_target_language_identifier(target_lang: &str) -> Option<&'static str> {
+    match target_lang {
+        "ar" => Some("ar"),
+        "bn" => Some("bn"),
+        "zh" => Some("zh-Hans"),
+        "tw" => Some("zh-Hant"),
+        "en" => Some("en"),
+        "fr" => Some("fr"),
+        "de" => Some("de"),
+        "gu" => Some("gu"),
+        "hi" => Some("hi"),
+        "id" => Some("id"),
+        "it" => Some("it"),
+        "jp" => Some("ja"),
+        "ko" => Some("ko"),
+        "mr" => Some("mr"),
+        "fa" => Some("fa"),
+        "pt" => Some("pt"),
+        "pa" => Some("pa"),
+        "ru" => Some("ru"),
+        "es" => Some("es"),
+        "ta" => Some("ta"),
+        "te" => Some("te"),
+        "th" => Some("th"),
+        "tr" => Some("tr"),
+        "ur" => Some("ur"),
+        "vi" => Some("vi"),
+        _ => None,
+    }
+}
+
+fn apple_translation_target_language_label(target_lang: &str) -> Option<&'static str> {
+    ai_subtitle_target_language_name(target_lang)
+}
+
+fn apple_translation_identifiers_equivalent(source: &str, target: &str) -> bool {
+    source.eq_ignore_ascii_case(target)
+}
+
+fn resolve_apple_translation_languages(
+    state: &AppState,
+    target_lang: &str,
+    source_language: Option<String>,
+) -> Result<(KokoroLanguage, String, String), String> {
+    if target_lang == "none" {
+        return Err("Choose a subtitle translation language first.".to_string());
+    }
+
+    let source_language = apple_translation_source_language(state, source_language)?;
+    let source_identifier =
+        apple_translation_source_language_identifier(source_language).to_string();
+    let target_identifier = apple_translation_target_language_identifier(target_lang)
+        .ok_or_else(|| {
+            format!("Apple translation does not support target language: {target_lang}")
+        })?
+        .to_string();
+
+    Ok((source_language, source_identifier, target_identifier))
+}
+
+async fn run_apple_translation_helper(
+    app_handle: &tauri::AppHandle,
+    args: &[String],
+) -> Result<AppleTranslationHelperResponse, String> {
+    let output = app_handle
+        .shell()
+        .sidecar("apple-translation-helper")
+        .map_err(|err| format!("Failed to locate Apple translation helper: {err}"))?
+        .args(args)
+        .output()
+        .await
+        .map_err(|err| format!("Failed to run Apple translation helper: {err}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if stdout.is_empty() {
+        return Err(if stderr.is_empty() {
+            "Apple translation helper did not return a response.".to_string()
+        } else {
+            format!("Apple translation helper failed: {stderr}")
+        });
+    }
+
+    let response = serde_json::from_str::<AppleTranslationHelperResponse>(&stdout)
+        .map_err(|err| format!("Failed to parse Apple translation helper response: {err}"))?;
+
+    if !response.ok {
+        return Err(response
+            .error
+            .clone()
+            .unwrap_or_else(|| "Apple translation failed.".to_string()));
+    }
+
+    Ok(response)
+}
+
+async fn check_apple_translation_language_pack_inner(
+    app_handle: &tauri::AppHandle,
+    state: &AppState,
+    target_lang: &str,
+    source_language: Option<String>,
+) -> Result<AppleTranslationLanguagePackStatusPayload, String> {
+    let (source_language, source_identifier, target_identifier) =
+        resolve_apple_translation_languages(state, target_lang, source_language)?;
+
+    let status = if apple_translation_identifiers_equivalent(&source_identifier, &target_identifier)
+    {
+        "installed".to_string()
+    } else {
+        let args = vec![
+            "status".to_string(),
+            source_identifier.clone(),
+            target_identifier.clone(),
+        ];
+        run_apple_translation_helper(app_handle, &args)
+            .await?
+            .status
+            .unwrap_or_else(|| "unknown".to_string())
+    };
+
+    Ok(AppleTranslationLanguagePackStatusPayload {
+        status,
+        source_language: source_language.label().to_string(),
+        target_language: apple_translation_target_language_label(target_lang)
+            .unwrap_or(target_lang)
+            .to_string(),
+        source_identifier,
+        target_identifier,
+    })
+}
+
+async fn translate_text_with_apple(
+    app_handle: &tauri::AppHandle,
     state: &AppState,
     text: &str,
     target_lang: &str,
 ) -> Result<String, String> {
+    let text = text.trim();
+    if text.is_empty() || target_lang == "none" {
+        return Ok(text.to_string());
+    }
+
+    let (_, source_identifier, target_identifier) =
+        resolve_apple_translation_languages(state, target_lang, None)?;
+
+    if apple_translation_identifiers_equivalent(&source_identifier, &target_identifier) {
+        return Ok(text.to_string());
+    }
+
+    let encoded_text = BASE64_STANDARD.encode(text.as_bytes());
+    let args = vec![
+        "translate".to_string(),
+        source_identifier,
+        target_identifier,
+        encoded_text,
+    ];
+    let response = run_apple_translation_helper(app_handle, &args).await?;
+    response
+        .translated_text
+        .map(|translated| translated.trim().to_string())
+        .ok_or_else(|| "Apple translation helper did not return translated text.".to_string())
+}
+
+async fn translate_text_internal(
+    app_handle: &tauri::AppHandle,
+    state: &AppState,
+    text: &str,
+    target_lang: &str,
+) -> Result<String, String> {
+    if subtitle_translation_provider(state) == SubtitleTranslationProvider::Apple {
+        return translate_text_with_apple(app_handle, state, text, target_lang).await;
+    }
+
+    let Some(target_lang_name) = ai_subtitle_target_language_name(target_lang) else {
+        return Err(format!(
+            "Unsupported subtitle translation language: {target_lang}"
+        ));
+    };
+
     if let Some((base_url, api_key, model_id)) = subtitle_translation_llm_config(state) {
-        return translate_text_with_llm(text, target_lang, base_url, api_key, model_id).await;
+        return translate_text_with_llm(text, target_lang_name, base_url, api_key, model_id).await;
     }
 
     let server_port = *state.server_port.lock().unwrap();
@@ -1026,7 +1268,7 @@ async fn translate_text_internal(
         (server_base_url(port), None)
     };
 
-    translate_text_with_llm(text, target_lang, base_url, api_key, model_name).await
+    translate_text_with_llm(text, target_lang_name, base_url, api_key, model_name).await
 }
 
 #[tauri::command]
@@ -1037,12 +1279,12 @@ fn set_ai_subtitle_target_language(state: State<'_, AppState>, target_lang: Stri
 
 #[tauri::command]
 async fn translate_text(
-    _app_handle: AppHandle,
+    app_handle: AppHandle,
     state: State<'_, AppState>,
     text: String,
     target_lang: String,
 ) -> Result<String, String> {
-    translate_text_internal(state.inner(), &text, &target_lang).await
+    translate_text_internal(&app_handle, state.inner(), &text, &target_lang).await
 }
 
 fn ai_subtitle_target_language_name(target_lang: &str) -> Option<&'static str> {
@@ -1095,7 +1337,9 @@ fn get_build_info() -> BuildInfo {
 }
 
 #[tauri::command]
-fn initialize_openduck_contact_imports(state: State<'_, AppState>) -> Vec<OpenDuckContactImportEvent> {
+fn initialize_openduck_contact_imports(
+    state: State<'_, AppState>,
+) -> Vec<OpenDuckContactImportEvent> {
     {
         let mut ready = state.openduck_contact_import_frontend_ready.lock().unwrap();
         *ready = true;
@@ -2035,20 +2279,29 @@ async fn start_conversation(
     let persistent_memory_text = if !memory_enabled || persistent_memories.is_empty() {
         None
     } else {
-        Some(persistent_memories.iter().map(|m| {
-            let time = format_timeago(m.created_at);
-            let label = if m.more_than.unwrap_or(false) {
-                format!("More than {}", time)
-            } else {
-                time
-            };
-            format!("{}: {}", label, m.text)
-        }).collect::<Vec<_>>().join("\n"))
+        Some(
+            persistent_memories
+                .iter()
+                .map(|m| {
+                    let time = format_timeago(m.created_at);
+                    let label = if m.more_than.unwrap_or(false) {
+                        format!("More than {}", time)
+                    } else {
+                        time
+                    };
+                    format!("{}: {}", label, m.text)
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
     };
 
     let memory = if memory_enabled {
         match (persistent_memory_text, session_memory) {
-            (Some(p), Some(s)) => Some(format!("Character notes:\n{}\n\nPrevious conversation turns:\n{}", p, s)),
+            (Some(p), Some(s)) => Some(format!(
+                "Character notes:\n{}\n\nPrevious conversation turns:\n{}",
+                p, s
+            )),
             (Some(p), None) => Some(p),
             (None, Some(s)) => Some(s),
             (None, None) => None,
@@ -2652,6 +2905,10 @@ fn external_llm_api_key(state: &AppState, variant: GemmaVariant) -> Option<Strin
 }
 
 fn subtitle_translation_llm_config(state: &AppState) -> Option<(String, Option<String>, String)> {
+    if subtitle_translation_provider(state) != SubtitleTranslationProvider::OpenAiCompatible {
+        return None;
+    }
+
     let base_url = state.subtitle_translation_base_url.lock().unwrap().clone();
     let model_id = state.subtitle_translation_model_id.lock().unwrap().clone();
 
@@ -2902,6 +3159,7 @@ fn get_subtitle_translation_llm_config(
     state: State<'_, AppState>,
 ) -> SubtitleTranslationLlmConfigPayload {
     SubtitleTranslationLlmConfigPayload {
+        provider: subtitle_translation_provider(state.inner()),
         base_url: state.subtitle_translation_base_url.lock().unwrap().clone(),
         has_api_key: state.subtitle_translation_api_key.lock().unwrap().is_some(),
         model_id: state.subtitle_translation_model_id.lock().unwrap().clone(),
@@ -2970,6 +3228,7 @@ fn set_openai_compatible_config(
 #[tauri::command]
 fn set_subtitle_translation_llm_config(
     state: State<'_, AppState>,
+    provider: SubtitleTranslationProvider,
     url: String,
     key: Option<String>,
     clear_key: bool,
@@ -2979,6 +3238,14 @@ fn set_subtitle_translation_llm_config(
     let normalized_model_id = normalize_model_id(model_id);
     let should_clear_key =
         clear_key || (normalized_url.is_empty() && normalized_model_id.is_empty());
+
+    {
+        let mut provider_guard = state.subtitle_translation_provider.lock().unwrap();
+        *provider_guard = provider;
+    }
+    if provider == SubtitleTranslationProvider::Apple {
+        return persist_subtitle_translation_llm_config(state.inner());
+    }
 
     {
         let mut url_guard = state.subtitle_translation_base_url.lock().unwrap();
@@ -3001,6 +3268,19 @@ fn set_subtitle_translation_llm_config(
 }
 
 #[tauri::command]
+fn set_subtitle_translation_provider(
+    state: State<'_, AppState>,
+    provider: SubtitleTranslationProvider,
+) -> Result<(), String> {
+    {
+        let mut provider_guard = state.subtitle_translation_provider.lock().unwrap();
+        *provider_guard = provider;
+    }
+
+    persist_subtitle_translation_llm_config(state.inner())
+}
+
+#[tauri::command]
 async fn test_subtitle_translation_connection(
     state: State<'_, AppState>,
     url: String,
@@ -3017,6 +3297,46 @@ async fn test_subtitle_translation_connection(
 
     fetch_openai_compatible_models(normalize_base_url(url), api_key, "subtitle translation LLM")
         .await
+}
+
+#[tauri::command]
+async fn check_apple_translation_language_pack(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    target_lang: String,
+    source_language: Option<String>,
+) -> Result<AppleTranslationLanguagePackStatusPayload, String> {
+    check_apple_translation_language_pack_inner(
+        &app_handle,
+        state.inner(),
+        &target_lang,
+        source_language,
+    )
+    .await
+}
+
+#[tauri::command]
+async fn install_apple_translation_language_pack(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    target_lang: String,
+    source_language: Option<String>,
+) -> Result<AppleTranslationLanguagePackStatusPayload, String> {
+    let (_, source_identifier, target_identifier) =
+        resolve_apple_translation_languages(state.inner(), &target_lang, source_language.clone())?;
+
+    if !apple_translation_identifiers_equivalent(&source_identifier, &target_identifier) {
+        let args = vec!["prepare".to_string(), source_identifier, target_identifier];
+        run_apple_translation_helper(&app_handle, &args).await?;
+    }
+
+    check_apple_translation_language_pack_inner(
+        &app_handle,
+        state.inner(),
+        &target_lang,
+        source_language,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -5168,7 +5488,6 @@ fn start_response_generation(
         Some(user_text),
         latest_image_paths_for_active_gen,
     ) {
-
         warn!(
             "Skipping response generation {} because a newer generation is already active",
             generation_id
@@ -5559,6 +5878,7 @@ fn serialize_external_chat_request(request: &ChatRequest) -> serde_json::Value {
 }
 
 async fn translate_response_to_selected_language(
+    app_handle: &tauri::AppHandle,
     state: &AppState,
     text: &str,
 ) -> HashMap<String, String> {
@@ -5569,11 +5889,11 @@ async fn translate_response_to_selected_language(
         return translations;
     }
 
-    let Some(lang_name) = ai_subtitle_target_language_name(target_lang.as_str()) else {
+    if ai_subtitle_target_language_name(target_lang.as_str()).is_none() {
         return translations;
-    };
+    }
 
-    if let Ok(translated) = translate_text_internal(state, text, lang_name).await {
+    if let Ok(translated) = translate_text_internal(app_handle, state, text, &target_lang).await {
         translations.insert(target_lang, translated);
     }
 
@@ -5981,7 +6301,8 @@ async fn stream_gemma_response_to_csm(
         response_text.chars().count()
     );
 
-    let translations = translate_response_to_selected_language(state.inner(), &response_text).await;
+    let translations =
+        translate_response_to_selected_language(app_handle, state.inner(), &response_text).await;
 
     if response_text.is_empty() && raw_reasoning_text.is_empty() {
         warn!("Gemma returned an empty response, skipping CSM synthesis");
@@ -6405,13 +6726,18 @@ async fn queue_spoken_response_segments_for_csm(
                 return;
             }
 
-            let Some(lang_name) = ai_subtitle_target_language_name(target_lang.as_str()) else {
+            if ai_subtitle_target_language_name(target_lang.as_str()).is_none() {
                 return;
-            };
+            }
 
             let mut segment_translations = HashMap::new();
-            if let Ok(translated) =
-                translate_text_internal(state.inner(), &segment_clone, lang_name).await
+            if let Ok(translated) = translate_text_internal(
+                &app_handle_clone,
+                state.inner(),
+                &segment_clone,
+                &target_lang,
+            )
+            .await
             {
                 segment_translations.insert(target_lang, translated);
                 let mut translations_map = HashMap::new();
@@ -6428,9 +6754,17 @@ async fn queue_spoken_response_segments_for_csm(
 
         let tts_text = strip_emotion_tags(spoken_segment);
         if tts_text.is_empty() {
-            info!("Skipping synthesis for tag-only segment {}: {}", segment_index, spoken_segment);
-            if let Err(err) = app_handle.emit(CSM_AUDIO_DONE_EVENT, CsmAudioDoneEvent { request_id }) {
-                error!("Failed to emit CSM completion for tag-only segment: {}", err);
+            info!(
+                "Skipping synthesis for tag-only segment {}: {}",
+                segment_index, spoken_segment
+            );
+            if let Err(err) =
+                app_handle.emit(CSM_AUDIO_DONE_EVENT, CsmAudioDoneEvent { request_id })
+            {
+                error!(
+                    "Failed to emit CSM completion for tag-only segment: {}",
+                    err
+                );
             }
         } else {
             send_csm_synthesis_request(app_handle, request_id, &tts_text).await?;
@@ -9663,7 +9997,8 @@ fn send_ready_signal(
 }
 
 async fn interrupt_active_generation(app_handle: &tauri::AppHandle) {
-    let (interrupted_text, interrupted_image_paths) = cancel_active_generation(app_handle, false).await;
+    let (interrupted_text, interrupted_image_paths) =
+        cancel_active_generation(app_handle, false).await;
     if let Some(text) = interrupted_text {
         let filler = "[thinking]";
         info!("Recording interruption: {}", filler);
@@ -10080,8 +10415,10 @@ fn append_conversation_turn_with_save(
                     &turns[0].assistant_text
                 };
                 // Clean up emotion tags like [smile], *smile*, (smile)
-                let cleaned_text = text_for_title
-                    .replace(|c| c == '[' || c == ']' || c == '*' || c == '(' || c == ')', " ");
+                let cleaned_text = text_for_title.replace(
+                    |c| c == '[' || c == ']' || c == '*' || c == '(' || c == ')',
+                    " ",
+                );
                 let first_sentence = cleaned_text
                     .split(|c| c == '.' || c == '?' || c == '!')
                     .next()
@@ -10251,11 +10588,23 @@ fn format_timeago(created_at_ms: u64) -> String {
         let weeks = diff_days / 7;
         format!("{} week{} ago", weeks, if weeks > 1 { "s" } else { "" })
     } else if diff_days >= 1 {
-        format!("{} day{} ago", diff_days, if diff_days > 1 { "s" } else { "" })
+        format!(
+            "{} day{} ago",
+            diff_days,
+            if diff_days > 1 { "s" } else { "" }
+        )
     } else if diff_hours >= 1 {
-        format!("{} hour{} ago", diff_hours, if diff_hours > 1 { "s" } else { "" })
+        format!(
+            "{} hour{} ago",
+            diff_hours,
+            if diff_hours > 1 { "s" } else { "" }
+        )
     } else if diff_mins >= 1 {
-        format!("{} minute{} ago", diff_mins, if diff_mins > 1 { "s" } else { "" })
+        format!(
+            "{} minute{} ago",
+            diff_mins,
+            if diff_mins > 1 { "s" } else { "" }
+        )
     } else {
         "just now".to_string()
     }
@@ -10304,7 +10653,9 @@ fn reset_call_session_state(state: &AppState) {
         }
     }
     state.next_conversation_entry_id.store(1, Ordering::Relaxed);
-    state.last_extracted_assistant_entry_id.store(0, Ordering::Relaxed);
+    state
+        .last_extracted_assistant_entry_id
+        .store(0, Ordering::Relaxed);
     reset_auto_continue_tracker(state);
 
     {
@@ -10633,7 +10984,10 @@ fn handle_macos_opened_urls(app_handle: &AppHandle, urls: &[tauri::Url]) {
 
         if !handled_any {
             if let Err(err) = show_main_window(app_handle) {
-                error!("Failed to show the main window for OpenDuck file import: {}", err);
+                error!(
+                    "Failed to show the main window for OpenDuck file import: {}",
+                    err
+                );
             }
             handled_any = true;
         }
@@ -11846,6 +12200,7 @@ fn snapshot_subtitle_translation_llm_config(
     state: &AppState,
 ) -> PersistedSubtitleTranslationLlmConfig {
     PersistedSubtitleTranslationLlmConfig {
+        provider: subtitle_translation_provider(state),
         base_url: state.subtitle_translation_base_url.lock().unwrap().clone(),
         api_key: None,
         model_id: state.subtitle_translation_model_id.lock().unwrap().clone(),
@@ -12088,11 +12443,7 @@ async fn load_session(
         .next_conversation_entry_id
         .store(max_id + 1, Ordering::Relaxed);
 
-    let last_assistant_id = data
-        .turns
-        .last()
-        .map(|t| t.assistant_entry_id)
-        .unwrap_or(0);
+    let last_assistant_id = data.turns.last().map(|t| t.assistant_entry_id).unwrap_or(0);
     state
         .last_extracted_assistant_entry_id
         .store(last_assistant_id, Ordering::Relaxed);
@@ -13523,6 +13874,9 @@ pub fn run() {
                     .clone(),
             ),
             openai_compatible_api_key: Mutex::new(persisted_openai_compatible_api_key),
+            subtitle_translation_provider: Mutex::new(
+                persisted_config.subtitle_translation_llm.provider,
+            ),
             subtitle_translation_base_url: Mutex::new(
                 persisted_config.subtitle_translation_llm.base_url.clone(),
             ),
@@ -13641,7 +13995,10 @@ pub fn run() {
             set_openai_compatible_config,
             get_subtitle_translation_llm_config,
             set_subtitle_translation_llm_config,
+            set_subtitle_translation_provider,
             test_subtitle_translation_connection,
+            check_apple_translation_language_pack,
+            install_apple_translation_language_pack,
             check_csm_status,
             check_stt_status,
             clear_model_cache,
@@ -13696,19 +14053,17 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app_handle, event| {
-            match event {
-                tauri::RunEvent::ExitRequested { .. } => {
-                    let state = app_handle.state::<AppState>();
-                    let mut quitting_guard = state.is_quitting.lock().unwrap();
-                    *quitting_guard = true;
-                    cleanup_before_app_exit(app_handle);
-                }
-                #[cfg(target_os = "macos")]
-                tauri::RunEvent::Opened { urls } => {
-                    handle_macos_opened_urls(app_handle, &urls);
-                }
-                _ => {}
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { .. } => {
+                let state = app_handle.state::<AppState>();
+                let mut quitting_guard = state.is_quitting.lock().unwrap();
+                *quitting_guard = true;
+                cleanup_before_app_exit(app_handle);
             }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                handle_macos_opened_urls(app_handle, &urls);
+            }
+            _ => {}
         });
 }
