@@ -4972,7 +4972,7 @@ async fn receive_audio_chunk(
                 let resampled = vad::resample_to_16k(&prepared_chunk.samples, capture_sample_rate);
                 // Use VAD to filter out background noise
                 if let Ok(prob) = vad.calc_level(&resampled) {
-                    if prob < 0.001 {
+                    if prob < 0.002 {
                         is_really_speaking = false;
                     }
                 }
