@@ -4970,8 +4970,17 @@ async fn receive_audio_chunk(
             let mut vad_guard = state.vad.lock().unwrap();
             if let Some(vad) = vad_guard.as_mut() {
                 let resampled = vad::resample_to_16k(&prepared_chunk.samples, capture_sample_rate);
-                // Use VAD to filter out background noise
-                if let Ok(prob) = vad.calc_level(&resampled) {
+                let peak = resampled.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+                let rms = (resampled.iter().map(|s| s * s).sum::<f32>() / resampled.len() as f32).sqrt();
+                // Debug log:
+                // println!("VAD diag: resampled_len={} peak={} rms={} chunk_rms={}", resampled.len(), peak, rms, prepared_chunk.rms);
+                let normalized: Vec<f32> = if peak > 1e-4 {
+                    resampled.iter().map(|s| s / peak).collect()
+                } else {
+                    resampled
+                };
+                if let Ok(prob) = vad.calc_level(&normalized) {
+                    println!("prob: {}", prob);
                     if prob < 0.002 {
                         is_really_speaking = false;
                     }
