@@ -512,6 +512,9 @@
     let isMemoryProcessing = $state(false);
     let pendingMemoryProcessingCount = 0;
     let toastTimeout: ReturnType<typeof window.setTimeout> | null = null;
+    let contextMenuVisible = $state(false);
+    let contextMenuX = $state(0);
+    let contextMenuY = $state(0);
 
     const popupActionsBusy = $derived(
         isSavingConversationLogEntryEdit || isClearingConversationLogImages,
@@ -2274,7 +2277,10 @@
 
             return parsed.enabled;
         } catch (err) {
-            console.error("Failed to restore show advanced models preference:", err);
+            console.error(
+                "Failed to restore show advanced models preference:",
+                err,
+            );
             return DEFAULT_SHOW_ADVANCED_MODELS;
         }
     }
@@ -5280,6 +5286,19 @@
         }
     }
 
+    function handleContextMenu(e: MouseEvent) {
+        e.preventDefault();
+        contextMenuX = e.clientX;
+        contextMenuY = e.clientY;
+        contextMenuVisible = true;
+    }
+
+    function handleWindowClick() {
+        if (contextMenuVisible) {
+            contextMenuVisible = false;
+        }
+    }
+
     function handleWindowKeydown(event: KeyboardEvent) {
         if (event.defaultPrevented) {
             return;
@@ -6170,7 +6189,8 @@
         } catch (err) {
             if (requestId === appleTranslationLanguagePackRequestId) {
                 appleTranslationLanguagePackStatus = null;
-                appleTranslationLanguagePackMessage = normalizeErrorMessage(err);
+                appleTranslationLanguagePackMessage =
+                    normalizeErrorMessage(err);
             }
             return null;
         } finally {
@@ -6207,7 +6227,8 @@
             return status;
         } catch (err) {
             if (requestId === appleTranslationLanguagePackRequestId) {
-                appleTranslationLanguagePackMessage = normalizeErrorMessage(err);
+                appleTranslationLanguagePackMessage =
+                    normalizeErrorMessage(err);
             }
             return null;
         } finally {
@@ -6225,10 +6246,7 @@
             await invoke("set_subtitle_translation_provider", { provider });
             await syncSubtitleTranslationLlmConfig();
         } catch (err) {
-            console.error(
-                "Failed to save subtitle translation provider:",
-                err,
-            );
+            console.error("Failed to save subtitle translation provider:", err);
             throw err;
         }
     }
@@ -8557,6 +8575,8 @@
     onkeydown={handleWindowKeydown}
     onfocus={handleWindowFocus}
     onpaste={handleWindowPaste}
+    onclick={handleWindowClick}
+    oncontextmenu={handleContextMenu}
 />
 
 <div class="app-container" class:contacts-open={showContactsPopup}>
@@ -8862,7 +8882,13 @@
             <div
                 class="avatar-container"
                 class:live2d-avatar-container={!!selectedContactCubismModel}
-                style="--cubism-min-width: {selectedContactCubismModel?.sizeMultiplier ? 330 * selectedContactCubismModel.sizeMultiplier + 'px' : '330px'}; --cubism-min-height: {selectedContactCubismModel?.sizeMultiplier ? 380 * selectedContactCubismModel.sizeMultiplier + 'px' : '380px'}; --cubism-absolute-min-height: {selectedContactCubismModel?.sizeMultiplier ? 250 * selectedContactCubismModel.sizeMultiplier + 'px' : '250px'}"
+                style="--cubism-min-width: {selectedContactCubismModel?.sizeMultiplier
+                    ? 330 * selectedContactCubismModel.sizeMultiplier + 'px'
+                    : '330px'}; --cubism-min-height: {selectedContactCubismModel?.sizeMultiplier
+                    ? 380 * selectedContactCubismModel.sizeMultiplier + 'px'
+                    : '380px'}; --cubism-absolute-min-height: {selectedContactCubismModel?.sizeMultiplier
+                    ? 250 * selectedContactCubismModel.sizeMultiplier + 'px'
+                    : '250px'}"
             >
                 {#if assistantSpeaking && !(selectedContactCubismModel && !isCubismForceHidden)}
                     <div class="avatar-wave" out:fade={{ duration: 400 }}></div>
@@ -9057,6 +9083,8 @@
                     {calling}
                     onClearHistory={clearConversationLogImages}
                     onClose={closeConversationPopup}
+                    onShowCharacterInfo={toggleContactsPopup}
+                    onShowSettings={toggleAboutPopup}
                     onFork={handleForkSession}
                     onPreviewImage={(url) => (previewImageUrl = url)}
                     {saveConversationLogEntryEdit}
@@ -9637,14 +9665,14 @@
 
     {#if showOnboarding}
         <Onboarding
-            aiSubtitleTargetLanguage={aiSubtitleTargetLanguage}
-            subtitleTranslationProvider={subtitleTranslationProvider}
-            subtitleTranslationLlmConfigured={subtitleTranslationLlmConfigured}
+            {aiSubtitleTargetLanguage}
+            {subtitleTranslationProvider}
+            {subtitleTranslationLlmConfigured}
             subtitleTranslationLlmTested={subtitleTranslationReady}
-            appleTranslationLanguagePackStatus={appleTranslationLanguagePackStatus}
-            appleTranslationLanguagePackMessage={appleTranslationLanguagePackMessage}
-            isCheckingAppleTranslationLanguagePack={isCheckingAppleTranslationLanguagePack}
-            isInstallingAppleTranslationLanguagePack={isInstallingAppleTranslationLanguagePack}
+            {appleTranslationLanguagePackStatus}
+            {appleTranslationLanguagePackMessage}
+            {isCheckingAppleTranslationLanguagePack}
+            {isInstallingAppleTranslationLanguagePack}
             onOpenSubtitleTranslationLlmConfig={() =>
                 (showSubtitleTranslationLlmConfig = true)}
             onUpdateSubtitleTranslationProvider={saveSubtitleTranslationProvider}
@@ -9664,10 +9692,10 @@
             modelId={subtitleTranslationModelId}
             targetLanguage={aiSubtitleTargetLanguage}
             sourceLanguage={selectedKokoroLanguage}
-            appleTranslationLanguagePackStatus={appleTranslationLanguagePackStatus}
-            appleTranslationLanguagePackMessage={appleTranslationLanguagePackMessage}
-            isCheckingAppleTranslationLanguagePack={isCheckingAppleTranslationLanguagePack}
-            isInstallingAppleTranslationLanguagePack={isInstallingAppleTranslationLanguagePack}
+            {appleTranslationLanguagePackStatus}
+            {appleTranslationLanguagePackMessage}
+            {isCheckingAppleTranslationLanguagePack}
+            {isInstallingAppleTranslationLanguagePack}
             onSave={saveSubtitleTranslationLlmConfig}
             onTestConnection={testSubtitleTranslationConnection}
             onCheckAppleTranslationLanguagePack={refreshAppleTranslationLanguagePackStatus}
@@ -9679,6 +9707,88 @@
     {#if toastMessage}
         <div class="toast-bubble" transition:fade={{ duration: 150 }}>
             {toastMessage}
+        </div>
+    {/if}
+
+    {#if contextMenuVisible}
+        <div
+            class="context-menu"
+            style="left: {contextMenuX}px; top: {contextMenuY}px;"
+        >
+            <button
+                type="button"
+                class="context-menu-item"
+                onclick={() => {
+                    toggleConversationPopup();
+                    contextMenuVisible = false;
+                }}
+            >
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                >
+                    <path
+                        d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+                    />
+                </svg>
+                <span>Show Conversation Log</span>
+            </button>
+            <button
+                type="button"
+                class="context-menu-item"
+                onclick={() => {
+                    toggleContactsPopup();
+                    contextMenuVisible = false;
+                }}
+            >
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                >
+                    <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                </svg>
+                <span>Show Character Info</span>
+            </button>
+            <button
+                type="button"
+                class="context-menu-item"
+                onclick={() => {
+                    toggleAboutPopup();
+                    contextMenuVisible = false;
+                }}
+            >
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                >
+                    <path
+                        d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+                    /><circle cx="12" cy="12" r="3" /></svg
+                >
+                <span>Settings</span>
+            </button>
         </div>
     {/if}
 </div>
