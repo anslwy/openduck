@@ -119,6 +119,10 @@
         DEFAULT_SHOW_ADVANCED_MODELS,
         DEFAULT_CHARACTER_MEMORY_LIMIT,
         CHARACTER_MEMORY_LIMIT_OPTIONS,
+        MAX_SPOKEN_SENTENCES_PER_SEGMENT_STORAGE_KEY,
+        DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT,
+        MIN_SPOKEN_SENTENCES_PER_SEGMENT,
+        MAX_MAX_SPOKEN_SENTENCES_PER_SEGMENT,
         DEFAULT_AUTO_LOAD_MODELS_ON_STARTUP,
         DEFAULT_AUTO_CHECK_APP_UPDATES,
         DEFAULT_GLOBAL_SHORTCUT,
@@ -283,6 +287,11 @@
     type StoredCharacterMemoryLimitPreference = {
         version: 1;
         limit: number | null;
+    };
+
+    type StoredMaxSpokenSentencesPerSegmentPreference = {
+        version: 1;
+        count: number;
     };
 
     const OVERLAY_WINDOW_LABEL = "overlay";
@@ -458,6 +467,9 @@
     );
     let characterMemoryLimit = $state<number | null>(
         DEFAULT_CHARACTER_MEMORY_LIMIT,
+    );
+    let maxSpokenSentencesPerSegment = $state<number>(
+        DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT,
     );
     let globalShortcut = $state(DEFAULT_GLOBAL_SHORTCUT);
     let globalShortcutEntireScreen = $state(
@@ -2035,6 +2047,66 @@
         return DEFAULT_CHARACTER_MEMORY_LIMIT;
     }
 
+    function clampMaxSpokenSentencesPerSegment(count: number): number {
+        if (!Number.isFinite(count)) {
+            return DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT;
+        }
+
+        return Math.min(
+            MAX_MAX_SPOKEN_SENTENCES_PER_SEGMENT,
+            Math.max(MIN_SPOKEN_SENTENCES_PER_SEGMENT, Math.round(count)),
+        );
+    }
+
+    function persistMaxSpokenSentencesPerSegmentPreference(count: number) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredMaxSpokenSentencesPerSegmentPreference = {
+            version: 1,
+            count,
+        };
+        window.localStorage.setItem(
+            MAX_SPOKEN_SENTENCES_PER_SEGMENT_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function loadMaxSpokenSentencesPerSegmentPreferenceFromStorage(): number {
+        if (typeof window === "undefined") {
+            return DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            MAX_SPOKEN_SENTENCES_PER_SEGMENT_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                count?: unknown;
+            };
+            if (
+                parsed.version !== 1 ||
+                typeof parsed.count !== "number"
+            ) {
+                return DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT;
+            }
+
+            return clampMaxSpokenSentencesPerSegment(parsed.count);
+        } catch (err) {
+            console.error(
+                "Failed to restore max spoken sentences per segment preference:",
+                err,
+            );
+            return DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT;
+        }
+    }
+
     function persistLlmImageHistoryLimitPreference(limit: number | null) {
         if (typeof window === "undefined") {
             return;
@@ -2913,6 +2985,21 @@
         persistCharacterMemoryLimitPreference(limit);
     }
 
+    function applyMaxSpokenSentencesPerSegmentPreference(count: number) {
+        const normalizedCount = clampMaxSpokenSentencesPerSegment(count);
+        maxSpokenSentencesPerSegment = normalizedCount;
+        persistMaxSpokenSentencesPerSegmentPreference(normalizedCount);
+
+        void invoke("set_max_spoken_sentences_per_segment", {
+            count: normalizedCount,
+        }).catch((err) => {
+            console.error(
+                "Failed to update max spoken sentences per segment preference:",
+                err,
+            );
+        });
+    }
+
     async function initializePongPlaybackPreference() {
         const storedEnabled = loadPongPlaybackPreferenceFromStorage();
         let effectiveEnabled = storedEnabled;
@@ -2975,6 +3062,11 @@
     async function initializeCharacterMemoryLimitPreference() {
         const storedLimit = loadCharacterMemoryLimitPreferenceFromStorage();
         applyCharacterMemoryLimitPreference(storedLimit);
+    }
+
+    async function initializeMaxSpokenSentencesPerSegmentPreference() {
+        const storedCount = loadMaxSpokenSentencesPerSegmentPreferenceFromStorage();
+        applyMaxSpokenSentencesPerSegmentPreference(storedCount);
     }
 
     async function initializeShowAdvancedModelsPreference() {
@@ -8490,6 +8582,7 @@
             await initializeAutoLoadModelsOnStartupPreference();
             await initializeShowStatPreference();
             await initializeCharacterMemoryLimitPreference();
+            await initializeMaxSpokenSentencesPerSegmentPreference();
             await initializeShowAdvancedModelsPreference();
             await initializeShowSubtitlePreference();
             await initializeSubtitleFontSizePreference();
@@ -9297,6 +9390,7 @@
                     {llmContextTurnLimit}
                     {llmImageHistoryLimit}
                     {characterMemoryLimit}
+                    {maxSpokenSentencesPerSegment}
                     onUpdateCallMode={applyCallModePreference}
                     onManageBackgrounds={toggleBackgroundsPopup}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
@@ -9323,6 +9417,7 @@
                     onUpdateLlmContextTurnLimit={applyLlmContextTurnLimitPreference}
                     onUpdateLlmImageHistoryLimit={applyLlmImageHistoryLimitPreference}
                     onUpdateCharacterMemoryLimit={applyCharacterMemoryLimitPreference}
+                    onUpdateMaxSpokenSentencesPerSegment={applyMaxSpokenSentencesPerSegmentPreference}
                 />
             </div>
         {/if}

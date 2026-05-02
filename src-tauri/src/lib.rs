@@ -538,6 +538,7 @@ struct AppState {
     auto_continue_tracker: Mutex<Option<AutoContinueTracker>>,
     llm_context_turn_limit: Mutex<Option<usize>>,
     llm_image_history_limit: Mutex<Option<usize>>,
+    max_spoken_sentences_per_segment: Mutex<usize>,
     conversation_log_has_visible_images: Mutex<bool>,
     selected_ollama_model: Mutex<String>,
     ollama_base_url: Mutex<String>,
@@ -2639,6 +2640,20 @@ fn set_llm_image_history_limit(state: State<'_, AppState>, limit: Option<u32>) -
     let effective_limit = limit.map(clamp_llm_image_history_limit);
     *state.llm_image_history_limit.lock().unwrap() = effective_limit;
     effective_limit.map(|value| value as u32)
+}
+
+fn clamp_max_spoken_sentences_per_segment(count: u32) -> u32 {
+    count.clamp(
+        MIN_SPOKEN_SENTENCES_PER_SEGMENT as u32,
+        MAX_MAX_SPOKEN_SENTENCES_PER_SEGMENT as u32,
+    )
+}
+
+#[tauri::command]
+fn set_max_spoken_sentences_per_segment(state: State<'_, AppState>, count: u32) -> u32 {
+    let effective_count = clamp_max_spoken_sentences_per_segment(count);
+    *state.max_spoken_sentences_per_segment.lock().unwrap() = effective_count as usize;
+    effective_count
 }
 
 #[tauri::command]
@@ -6680,13 +6695,14 @@ async fn queue_spoken_response_segments_for_csm(
 ) -> Result<usize, String> {
     let queued_start = (*queued_response_bytes).min(response_text.len());
     let pending_response_text = &response_text[queued_start..];
+    let max_sentences = *app_handle.state::<AppState>().max_spoken_sentences_per_segment.lock().unwrap();
     let (mut spoken_segments, consumed_len) = if flush_incomplete_segment {
         (
-            prepare_spoken_response_segments_for_csm(pending_response_text),
+            prepare_spoken_response_segments_for_csm(pending_response_text, max_sentences),
             pending_response_text.len(),
         )
     } else {
-        prepare_completed_spoken_response_segments_for_csm(pending_response_text)
+        prepare_completed_spoken_response_segments_for_csm(pending_response_text, max_sentences)
     };
 
     if spoken_segments.len() > 1 {
@@ -7619,16 +7635,16 @@ fn is_tight_trailing_punctuation(ch: char) -> bool {
     )
 }
 
-fn prepare_spoken_response_segments_for_csm(text: &str) -> Vec<String> {
-    split_spoken_response_into_segments(text, MAX_SPOKEN_SENTENCES_PER_SEGMENT)
+fn prepare_spoken_response_segments_for_csm(text: &str, max_sentences: usize) -> Vec<String> {
+    split_spoken_response_into_segments(text, max_sentences)
         .into_iter()
         .flat_map(|segment| split_long_spoken_segment_for_csm(&segment))
         .collect()
 }
 
-fn prepare_completed_spoken_response_segments_for_csm(text: &str) -> (Vec<String>, usize) {
+fn prepare_completed_spoken_response_segments_for_csm(text: &str, max_sentences: usize) -> (Vec<String>, usize) {
     let (segments, consumed_len) =
-        collect_spoken_response_segments(text, MAX_SPOKEN_SENTENCES_PER_SEGMENT, false);
+        collect_spoken_response_segments(text, max_sentences, false);
     (
         segments
             .into_iter()
@@ -8096,7 +8112,7 @@ mod tests {
         MAX_SPOKEN_WORDS_PER_SEGMENT_HARD_LIMIT,
     };
     use crate::constants::{
-        DEFAULT_LLM_CONTEXT_TURN_LIMIT, END_OF_UTTERANCE_SILENCE_MS, MAX_AUTO_CONTINUE_SILENCE_MS,
+        DEFAULT_LLM_CONTEXT_TURN_LIMIT, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT, END_OF_UTTERANCE_SILENCE_MS, MAX_AUTO_CONTINUE_SILENCE_MS,
         MAX_END_OF_UTTERANCE_SILENCE_MS, MAX_LLM_CONTEXT_TURN_LIMIT, MAX_LLM_IMAGE_HISTORY_LIMIT,
         MIN_AUTO_CONTINUE_SILENCE_MS, MIN_END_OF_UTTERANCE_SILENCE_MS, MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_LLM_IMAGE_HISTORY_LIMIT, STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
@@ -8204,7 +8220,7 @@ mod tests {
         assert_eq!(
             prepare_spoken_response_segments_for_csm(&sanitize_for_voice_output(
                 "Sure 😊. I can help with that 👍."
-            )),
+            ), DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT),
             vec!["Sure.".to_string(), "I can help with that.".to_string()]
         );
     }
@@ -8213,7 +8229,7 @@ mod tests {
     fn completed_spoken_segments_wait_for_sentence_boundary() {
         let response_text = "Hello there. How are";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(segments, vec!["Hello there.".to_string()]);
         assert_eq!(&response_text[consumed_len..], "How are");
@@ -8222,7 +8238,7 @@ mod tests {
     #[test]
     fn long_single_sentence_is_split_into_shorter_spoken_segments() {
         let response_text = "Alright, alright, settle down folks! You're looking at the one and only Monkey D. Luffy and I'm not your average primate because I'm a pirate with a dream bigger than the whole sea.";
-        let segments = prepare_spoken_response_segments_for_csm(response_text);
+        let segments = prepare_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert!(segments.len() > 1);
         assert!(segments.iter().all(|segment| {
@@ -8235,7 +8251,7 @@ mod tests {
         let response_text =
             "Is there a particular line or concept in this code you would like me to focus on? Next bit";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(
             segments,
@@ -8251,7 +8267,7 @@ mod tests {
     fn completed_spoken_segments_split_long_finished_sentence_without_losing_tail() {
         let response_text = "This is an extremely long finished sentence that should be broken into smaller chunks for speech synthesis because otherwise the speech worker can cut it off midway through playback. Next bit";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert!(segments.len() > 1);
         assert_eq!(&response_text[consumed_len..], "Next bit");
@@ -8261,7 +8277,7 @@ mod tests {
     fn completed_spoken_segments_drop_punctuation_only_ellipsis_tail() {
         let response_text = "Letting everyone peek under the hood, tinker, improve... Next bit";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(
             segments,
@@ -8274,7 +8290,7 @@ mod tests {
     fn completed_spoken_segments_wait_for_decimal_suffix_before_flushing() {
         let response_text = "I am not familiar with Claude 3.";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert!(segments.is_empty());
         assert_eq!(consumed_len, 0);
@@ -8284,7 +8300,7 @@ mod tests {
     fn completed_spoken_segments_keep_decimal_model_names_intact() {
         let response_text = "I am not familiar with Claude 3.5. Are you asking about a specific AI";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(
             segments,
@@ -8300,7 +8316,7 @@ mod tests {
     fn spoken_segments_keep_decimal_model_names_intact() {
         let response_text =
             "I am not familiar with Claude 3.5. Are you asking about a specific AI model?";
-        let segments = prepare_spoken_response_segments_for_csm(response_text);
+        let segments = prepare_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(
             segments,
@@ -8336,7 +8352,7 @@ mod tests {
             ),
         ] {
             let (segments, consumed_len) =
-                prepare_completed_spoken_response_segments_for_csm(response_text);
+                prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
             assert_eq!(segments, vec![expected_segment.to_string()]);
             assert_eq!(&response_text[consumed_len..], expected_tail);
@@ -8347,7 +8363,7 @@ mod tests {
     fn completed_spoken_segments_keep_french_closing_guillemet() {
         let response_text = "« D'accord ! » On continue";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(segments, vec!["« D'accord ! »".to_string()]);
         assert_eq!(&response_text[consumed_len..], "On continue");
@@ -8357,7 +8373,7 @@ mod tests {
     fn completed_spoken_segments_split_hindi_danda_boundaries() {
         let response_text = "समझ गया। आगे छोटा परीक्षण करते हैं";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(segments, vec!["समझ गया।".to_string()]);
         assert_eq!(&response_text[consumed_len..], "आगे छोटा परीक्षण करते हैं");
@@ -8366,7 +8382,7 @@ mod tests {
     #[test]
     fn spoken_segments_split_hindi_double_danda_boundaries() {
         let response_text = "पहला भाग॥ दूसरा भाग।";
-        let segments = prepare_spoken_response_segments_for_csm(response_text);
+        let segments = prepare_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(
             segments,
@@ -8378,7 +8394,7 @@ mod tests {
     fn completed_spoken_segments_split_chinese_sentence_boundaries() {
         let response_text = "第一句完成了。第二句还没说完";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(segments, vec!["第一句完成了。".to_string()]);
         assert_eq!(&response_text[consumed_len..], "第二句还没说完");
@@ -8387,7 +8403,7 @@ mod tests {
     #[test]
     fn spoken_segments_split_chinese_terminal_punctuation() {
         let response_text = "可以。这样更稳定！你觉得呢？";
-        let segments = prepare_spoken_response_segments_for_csm(response_text);
+        let segments = prepare_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(
             segments,
@@ -8403,7 +8419,7 @@ mod tests {
     fn completed_spoken_segments_keep_chinese_closing_punctuation() {
         let response_text = "他说“可以。”下一句还没说完";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(segments, vec!["他说“可以。”".to_string()]);
         assert_eq!(&response_text[consumed_len..], "下一句还没说完");
@@ -8412,7 +8428,7 @@ mod tests {
     #[test]
     fn long_chinese_sentence_is_split_into_shorter_spoken_segments() {
         let response_text = "这是一段没有明显停顿的中文回复它会连续说明实现方式延迟影响和用户体验然后继续补充自动显示与点击翻译的差异以及下一步应该怎样验证效果";
-        let segments = prepare_spoken_response_segments_for_csm(response_text);
+        let segments = prepare_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert!(segments.len() > 1);
         assert!(segments.iter().all(|segment| {
@@ -8440,7 +8456,7 @@ mod tests {
     fn completed_spoken_segments_split_japanese_sentence_boundaries() {
         let response_text = "承知しました。日本語だけで話します";
         let (segments, consumed_len) =
-            prepare_completed_spoken_response_segments_for_csm(response_text);
+            prepare_completed_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(segments, vec!["承知しました。".to_string()]);
         assert_eq!(&response_text[consumed_len..], "日本語だけで話します");
@@ -8449,7 +8465,7 @@ mod tests {
     #[test]
     fn spoken_segments_split_japanese_terminal_punctuation() {
         let response_text = "承知しました。短く進めます！何をしましょうか？";
-        let segments = prepare_spoken_response_segments_for_csm(response_text);
+        let segments = prepare_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert_eq!(
             segments,
@@ -8464,7 +8480,7 @@ mod tests {
     #[test]
     fn long_japanese_sentence_is_split_into_shorter_spoken_segments() {
         let response_text = "これは句点が少ない長い日本語の返答で字幕と音声合成のために短い単位へ分ける必要がありますそして表示が一度に長くなりすぎないように続きも自然な位置で区切ります";
-        let segments = prepare_spoken_response_segments_for_csm(response_text);
+        let segments = prepare_spoken_response_segments_for_csm(response_text, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT);
 
         assert!(segments.len() > 1);
         assert!(segments.iter().all(|segment| {
@@ -13887,6 +13903,7 @@ pub fn run() {
             auto_continue_tracker: Mutex::new(None),
             llm_context_turn_limit: Mutex::new(DEFAULT_LLM_CONTEXT_TURN_LIMIT),
             llm_image_history_limit: Mutex::new(DEFAULT_LLM_IMAGE_HISTORY_LIMIT),
+            max_spoken_sentences_per_segment: Mutex::new(DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT),
             conversation_log_has_visible_images: Mutex::new(false),
             selected_ollama_model: Mutex::new("gemma2:2b".to_string()),
             ollama_base_url: Mutex::new(
@@ -13994,6 +14011,7 @@ pub fn run() {
             set_auto_continue_max_count,
             set_llm_context_turn_limit,
             set_llm_image_history_limit,
+            set_max_spoken_sentences_per_segment,
             get_global_shortcut_look_at_entire_screen,
             initialize_global_shortcut_look_at_entire_screen,
             set_global_shortcut_look_at_entire_screen,

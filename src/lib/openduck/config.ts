@@ -110,6 +110,12 @@ export const LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE =
 export const CHARACTER_MEMORY_LIMIT_OPTIONS = [5, 10, 20, 50, 100, 500, null];
 export const DEFAULT_CHARACTER_MEMORY_LIMIT: number | null = 20;
 
+export const MAX_SPOKEN_SENTENCES_PER_SEGMENT_STORAGE_KEY =
+  "openduck.max-spoken-sentences-per-segment.v1";
+export const DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT = 2;
+export const MIN_SPOKEN_SENTENCES_PER_SEGMENT = 1;
+export const MAX_MAX_SPOKEN_SENTENCES_PER_SEGMENT = 10;
+
 export const DEFAULT_GLOBAL_SHORTCUT = "Command+Shift+L";
 export const DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN = "Command+Shift+Option+L";
 export const DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE = "Command+Shift+Option+U";

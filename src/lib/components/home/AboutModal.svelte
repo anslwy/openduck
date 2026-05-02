@@ -28,6 +28,9 @@
         SUBTITLE_FONT_SIZE_STEP,
         CHARACTER_MEMORY_LIMIT_OPTIONS,
         CONTACTS_STORAGE_KEY,
+        DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT,
+        MIN_SPOKEN_SENTENCES_PER_SEGMENT,
+        MAX_MAX_SPOKEN_SENTENCES_PER_SEGMENT,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
         DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
@@ -84,6 +87,7 @@
         llmContextTurnLimit,
         llmImageHistoryLimit,
         characterMemoryLimit,
+        maxSpokenSentencesPerSegment,
         selectedBackground,
         onUpdateCallMode,
         onManageBackgrounds,
@@ -111,6 +115,7 @@
         onUpdateLlmContextTurnLimit,
         onUpdateLlmImageHistoryLimit,
         onUpdateCharacterMemoryLimit,
+        onUpdateMaxSpokenSentencesPerSegment,
     } = $props<{
         calling: boolean;
         buildInfo: BuildInfo | null;
@@ -147,6 +152,7 @@
         llmContextTurnLimit: number | null;
         llmImageHistoryLimit: number | null;
         characterMemoryLimit: number | null;
+        maxSpokenSentencesPerSegment: number;
         selectedBackground: Background | null;
         onUpdateCallMode: (mode: CallMode) => void;
         onManageBackgrounds: () => void;
@@ -176,6 +182,7 @@
         onUpdateLlmContextTurnLimit: (limit: number | null) => void;
         onUpdateLlmImageHistoryLimit: (limit: number | null) => void;
         onUpdateCharacterMemoryLimit: (limit: number | null) => void;
+        onUpdateMaxSpokenSentencesPerSegment: (count: number) => void;
     }>();
 
     let copyState = $state<"idle" | "copied" | "failed">("idle");
@@ -539,6 +546,22 @@
     const minimumCharacterMemoryLimitLabel = `${CHARACTER_MEMORY_LIMIT_OPTIONS[0]}`;
     const maximumCharacterMemoryLimitLabel = "Unlimited";
 
+    const formattedMaxSpokenSentencesPerSegment = $derived.by(() => {
+        if (maxSpokenSentencesPerSegment === 1) {
+            return "1 sentence (lowest latency)";
+        }
+        return `${maxSpokenSentencesPerSegment} sentences`;
+    });
+    const maxSpokenSentencesPerSegmentProgress = $derived.by(() => {
+        const range = MAX_MAX_SPOKEN_SENTENCES_PER_SEGMENT - MIN_SPOKEN_SENTENCES_PER_SEGMENT;
+        if (range <= 0) {
+            return 0;
+        }
+        return ((maxSpokenSentencesPerSegment - MIN_SPOKEN_SENTENCES_PER_SEGMENT) / range) * 100;
+    });
+    const minimumMaxSpokenSentencesPerSegmentLabel = "1";
+    const maximumMaxSpokenSentencesPerSegmentLabel = `${MAX_MAX_SPOKEN_SENTENCES_PER_SEGMENT}`;
+
     onDestroy(() => {
         clearCopyFeedback();
     });
@@ -728,6 +751,22 @@
             minLabel: minimumEndOfUtteranceSilenceLabel,
             maxLabel: maximumEndOfUtteranceSilenceLabel,
             onUpdate: onUpdateEndOfUtteranceSilenceMs,
+            hidden: callMode === "push_to_talk",
+        },
+        {
+            id: "tts-sentences-per-segment",
+            type: "slider",
+            label: "TTS Sentences per Segment",
+            detail: "How many sentences the TTS waits to accumulate before starting speech synthesis. Higher values produce more natural prosody but increase latency. If the response is shorter than the target, it starts immediately.",
+            value: maxSpokenSentencesPerSegment,
+            min: MIN_SPOKEN_SENTENCES_PER_SEGMENT,
+            max: MAX_MAX_SPOKEN_SENTENCES_PER_SEGMENT,
+            step: 1,
+            displayValue: formattedMaxSpokenSentencesPerSegment,
+            progress: maxSpokenSentencesPerSegmentProgress,
+            minLabel: minimumMaxSpokenSentencesPerSegmentLabel,
+            maxLabel: maximumMaxSpokenSentencesPerSegmentLabel,
+            onUpdate: onUpdateMaxSpokenSentencesPerSegment,
             hidden: callMode === "push_to_talk",
         },
         {
