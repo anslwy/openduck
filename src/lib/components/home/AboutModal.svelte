@@ -27,6 +27,7 @@
         MAX_SUBTITLE_FONT_SIZE,
         SUBTITLE_FONT_SIZE_STEP,
         CHARACTER_MEMORY_LIMIT_OPTIONS,
+        CONTACTS_STORAGE_KEY,
         DEFAULT_GLOBAL_SHORTCUT,
         DEFAULT_GLOBAL_SHORTCUT_ENTIRE_SCREEN,
         DEFAULT_GLOBAL_SHORTCUT_TOGGLE_MUTE,
@@ -40,6 +41,7 @@
         BuildInfo,
         CallMode,
     } from "$lib/openduck/types";
+    import { restoreDefaultContactsToStorage } from "$lib/openduck/contacts";
     import ShortcutCapture from "./ShortcutCapture.svelte";
 
     const DEFAULT_RELEASE_NOTES_URL =
@@ -173,6 +175,7 @@
 
     let copyState = $state<"idle" | "copied" | "failed">("idle");
     let copyResetTimeout: ReturnType<typeof window.setTimeout> | null = null;
+    let isRestoringSettings = $state(false);
     let isRefreshing = $state(false);
     let searchQuery = $state("");
 
@@ -251,6 +254,31 @@
         } catch (error) {
             console.error("Failed to refresh runtime caches:", error);
             isRefreshing = false;
+        }
+    }
+
+    async function restoreSettings() {
+        const confirmed = await ask(
+            "This will clear saved app settings (except your characters settings) and reload OpenDuck. Are you sure?",
+            {
+                title: "Restore Settings",
+                kind: "warning",
+            },
+        );
+
+        if (!confirmed) return;
+
+        isRestoringSettings = true;
+        try {
+            const contacts = window.localStorage.getItem(CONTACTS_STORAGE_KEY);
+            window.localStorage.clear();
+            if (contacts) {
+                window.localStorage.setItem(CONTACTS_STORAGE_KEY, contacts);
+            }
+            window.location.reload();
+        } catch (error) {
+            console.error("Failed to restore settings:", error);
+            isRestoringSettings = false;
         }
     }
 
@@ -487,7 +515,8 @@
     );
 
     const characterMemoryLimitSliderValue = $derived.by(() => {
-        const index = CHARACTER_MEMORY_LIMIT_OPTIONS.indexOf(characterMemoryLimit);
+        const index =
+            CHARACTER_MEMORY_LIMIT_OPTIONS.indexOf(characterMemoryLimit);
         return index === -1
             ? CHARACTER_MEMORY_LIMIT_OPTIONS.indexOf(20)
             : index;
@@ -759,8 +788,8 @@
                         ? null
                         : Math.min(
                               MAX_LLM_CONTEXT_TURN_LIMIT,
-                                  Math.max(MIN_LLM_CONTEXT_TURN_LIMIT, val),
-                              ),
+                              Math.max(MIN_LLM_CONTEXT_TURN_LIMIT, val),
+                          ),
                 ),
         },
         {
@@ -777,7 +806,9 @@
             minLabel: minimumCharacterMemoryLimitLabel,
             maxLabel: maximumCharacterMemoryLimitLabel,
             onUpdate: (val: number) =>
-                onUpdateCharacterMemoryLimit(CHARACTER_MEMORY_LIMIT_OPTIONS[val]),
+                onUpdateCharacterMemoryLimit(
+                    CHARACTER_MEMORY_LIMIT_OPTIONS[val],
+                ),
         },
         {
             id: "image-history",
@@ -1171,6 +1202,25 @@
 
             {#if !calling}
                 <div class="about-update-card">
+                    <div class="about-update-header">
+                        <div class="about-update-copy">
+                            <span class="about-update-title">Settings</span>
+                            <span class="about-update-detail"
+                                >Clear saved app settings and restore defaults.</span
+                            >
+                        </div>
+                        <button
+                            type="button"
+                            class="utility-btn"
+                            onclick={restoreSettings}
+                            disabled={isRestoringSettings}
+                        >
+                            {isRestoringSettings
+                                ? "Restoring..."
+                                : "Restore Settings"}
+                        </button>
+                    </div>
+
                     <div class="about-update-header">
                         <div class="about-update-copy">
                             <span class="about-update-title">Runtime Cache</span

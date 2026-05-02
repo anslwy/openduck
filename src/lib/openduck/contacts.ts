@@ -524,6 +524,60 @@ export function createStoredContactsPayload(
   };
 }
 
+async function clearStoredContactAssets() {
+  if (typeof window === "undefined" || !("indexedDB" in window)) {
+    return;
+  }
+
+  await Promise.all([
+    runContactAssetStoreRequest(
+      CONTACT_ICONS_STORE_NAME,
+      "readwrite",
+      (store) => store.clear(),
+    ),
+    runContactAssetStoreRequest(
+      CONTACT_CUBISM_ZIPS_STORE_NAME,
+      "readwrite",
+      (store) => store.clear(),
+    ),
+  ]);
+}
+
+export async function restoreDefaultContactsToStorage() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    await clearStoredContactAssets();
+  } catch (err) {
+    console.error("Failed to clear stored contact assets:", err);
+  }
+
+  const defaultContacts = await createDefaultContactList();
+  await Promise.all(
+    defaultContacts.map(async (contact) => {
+      if (!contact.iconDataUrl) {
+        return;
+      }
+
+      try {
+        await saveStoredContactIcon(contact.id, contact.iconDataUrl);
+      } catch (err) {
+        console.error(`Failed to restore contact icon for ${contact.id}:`, err);
+      }
+    }),
+  );
+
+  const defaultSelectedContactId = defaultContacts[0]?.id ?? DEFAULT_CONTACT_ID;
+  const payload = createStoredContactsPayload(
+    defaultContacts,
+    defaultSelectedContactId,
+  );
+
+  window.localStorage.setItem(CONTACTS_STORAGE_KEY, JSON.stringify(payload));
+}
+
 function normalizeStoredContactProfile(
   value: unknown,
 ): StoredContactProfile | null {
