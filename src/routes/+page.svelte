@@ -12,6 +12,7 @@
     import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
     import { save } from "@tauri-apps/plugin-dialog";
     import AboutModal from "$lib/components/home/AboutModal.svelte";
+    import BackgroundModal from "$lib/components/home/BackgroundModal.svelte";
     import ContactsModal from "$lib/components/home/ContactsModal.svelte";
     import ConversationPopup from "$lib/components/home/ConversationPopup.svelte";
     import SessionsPopup from "$lib/components/home/SessionsPopup.svelte";
@@ -40,6 +41,12 @@
         saveStoredContactIcon,
         slugifyContactName,
     } from "$lib/openduck/contacts";
+    import {
+        loadBackgroundsFromStorage,
+        persistBackgroundPreferences,
+        saveUserBackground,
+        deleteUserBackground,
+    } from "$lib/openduck/backgrounds";
     import {
         AUTO_CONTINUE_MAX_COUNT_STORAGE_KEY,
         AUTO_CONTINUE_SILENCE_STEP_MS,
@@ -96,6 +103,7 @@
         CHARACTER_MEMORY_LIMIT_STORAGE_KEY,
         AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY,
         CALL_MODE_STORAGE_KEY,
+        BACKGROUNDS_STORAGE_KEY,
         GLOBAL_SHORTCUT_STORAGE_KEY,
         GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY,
         GLOBAL_SHORTCUT_TOGGLE_MUTE_STORAGE_KEY,
@@ -142,6 +150,7 @@
         AppleTranslationLanguagePackStatus,
         AssistantResponseEvent,
         AssistantTranslationsEvent,
+        Background,
         BuildInfo,
         CallMode,
         CallStageEvent,
@@ -515,6 +524,13 @@
     let contextMenuVisible = $state(false);
     let contextMenuX = $state(0);
     let contextMenuY = $state(0);
+    let backgrounds = $state<Background[]>([]);
+    let selectedBackgroundId = $state<string | null>("");
+    let showBackgroundsPopup = $state(false);
+
+    const selectedBackground = $derived(
+        backgrounds.find((bg) => bg.id === selectedBackgroundId) ?? null,
+    );
 
     const popupActionsBusy = $derived(
         isSavingConversationLogEntryEdit || isClearingConversationLogImages,
@@ -526,7 +542,7 @@
             return;
         }
 
-        if (calling || showAboutPopup) {
+        if (calling || showAboutPopup || showBackgroundsPopup) {
             return;
         }
 
@@ -670,6 +686,7 @@
     let conversationPopupEl = $state<HTMLElement | null>(null);
     let aboutPopupEl = $state<HTMLElement | null>(null);
     let sessionsPopupEl = $state<HTMLElement | null>(null);
+    let backgroundsPopupEl = $state<HTMLElement | null>(null);
 
     function setConversationLogViewport(element: HTMLDivElement | null) {
         conversationLogViewport = element;
@@ -1130,6 +1147,11 @@
     );
     const selectedContactImageStyle = $derived(
         `background-image: url('${selectedContactIconUrl}')`,
+    );
+    const appBackgroundStyle = $derived(
+        selectedBackground
+            ? `background-image: url('${selectedBackground.url}')`
+            : `background-image: url('${selectedContactIconUrl}')`,
     );
     let isCubismForceHidden = $state(false);
     function triggerCubismReload() {
@@ -4041,6 +4063,7 @@
         showAboutPopup = true;
         closeContactsPopup();
         closeConversationPopup();
+        showBackgroundsPopup = false;
 
         if (!buildInfo) {
             void loadBuildInfo();
@@ -4100,6 +4123,7 @@
         if (showContactsPopup) {
             closeConversationPopup();
             closeAboutPopup();
+            showBackgroundsPopup = false;
         }
     }
 
@@ -4108,6 +4132,7 @@
         if (showConversationPopup) {
             closeContactsPopup();
             closeAboutPopup();
+            showBackgroundsPopup = false;
             scrollConversationLogToBottom();
         }
     }
@@ -4328,6 +4353,70 @@
         }
 
         openAboutPopup();
+    }
+
+    async function handleSelectBackground(bg: Background) {
+        selectedBackgroundId = bg.id;
+        persistBackgroundPreferences(
+            selectedBackgroundId,
+            backgrounds.filter((b) => !b.isStock),
+        );
+    }
+
+    async function handleUnsetBackground() {
+        selectedBackgroundId = null;
+        persistBackgroundPreferences(
+            null,
+            backgrounds.filter((b) => !b.isStock),
+        );
+    }
+
+    async function handleUploadBackground(file: File) {
+        try {
+            const dataUrl = await readFileAsDataUrl(file);
+            const id = `user-${Date.now()}`;
+            const newBg: Background = {
+                id,
+                name: file.name,
+                url: dataUrl,
+                isStock: false,
+            };
+
+            await saveUserBackground(id, dataUrl);
+            backgrounds = [...backgrounds, newBg];
+            selectedBackgroundId = id;
+            persistBackgroundPreferences(
+                selectedBackgroundId,
+                backgrounds.filter((b) => !b.isStock),
+            );
+        } catch (err) {
+            console.error("Failed to upload background:", err);
+            alert(
+                `Failed to upload background.\n${normalizeErrorMessage(err)}`,
+            );
+        }
+    }
+
+    async function handleDeleteBackground(bg: Background) {
+        if (bg.isStock) return;
+
+        try {
+            await deleteUserBackground(bg.id);
+            backgrounds = backgrounds.filter((b) => b.id !== bg.id);
+            if (selectedBackgroundId === bg.id) {
+                selectedBackgroundId = "";
+            }
+            persistBackgroundPreferences(
+                selectedBackgroundId,
+                backgrounds.filter((b) => !b.isStock),
+            );
+        } catch (err) {
+            console.error("Failed to delete background:", err);
+        }
+    }
+
+    function toggleBackgroundsPopup() {
+        showBackgroundsPopup = !showBackgroundsPopup;
     }
 
     async function selectContact(
@@ -8418,6 +8507,10 @@
             await initializeGlobalShortcutToggleMutePreference();
             await initializeGlobalShortcutInterruptPreference();
 
+            const restoredBackgrounds = await loadBackgroundsFromStorage();
+            backgrounds = restoredBackgrounds.backgrounds;
+            selectedBackgroundId = restoredBackgrounds.selectedBackgroundId;
+
             if (navigator.onLine) {
                 void triggerAutomaticAppUpdateCheck();
             }
@@ -8524,6 +8617,27 @@
                 }
             }
 
+            // Check Backgrounds Popup
+            if (
+                showBackgroundsPopup &&
+                backgroundsPopupEl &&
+                !backgroundsPopupEl.contains(target)
+            ) {
+                // If manage button was clicked, don't close here as it's handled by toggle
+                let isManageBtn = false;
+                document.querySelectorAll(".utility-btn").forEach((btn) => {
+                    if (
+                        btn.textContent?.trim() === "Manage" &&
+                        btn.contains(target)
+                    ) {
+                        isManageBtn = true;
+                    }
+                });
+                if (!isManageBtn) {
+                    showBackgroundsPopup = false;
+                }
+            }
+
             // Check About Popup
             if (
                 showAboutPopup &&
@@ -8580,7 +8694,11 @@
 />
 
 <div class="app-container" class:contacts-open={showContactsPopup}>
-    <div class="background" style={selectedContactImageStyle}></div>
+    <div
+        class="background"
+        class:custom-bg={!!selectedBackground}
+        style={appBackgroundStyle}
+    ></div>
 
     {#if !isPreparingRuntime && !showContactsPopup && !showAboutPopup && !showConversationPopup && !showUpdatePrompt}
         <AppHeader
@@ -9169,6 +9287,7 @@
                     {subtitleFontSize}
                     {showAiSubtitleEnabled}
                     {aiSubtitleTargetLanguage}
+                    {selectedBackground}
                     {subtitleTranslationLlmConfigured}
                     {showCallTimerEnabled}
                     {showHiddenWindowOverlayEnabled}
@@ -9179,6 +9298,7 @@
                     {llmImageHistoryLimit}
                     {characterMemoryLimit}
                     onUpdateCallMode={applyCallModePreference}
+                    onManageBackgrounds={toggleBackgroundsPopup}
                     onUpdateGlobalShortcut={applyGlobalShortcutPreference}
                     onUpdateGlobalShortcutEntireScreen={applyGlobalShortcutEntireScreenPreference}
                     onUpdateGlobalShortcutToggleMute={applyGlobalShortcutToggleMutePreference}
@@ -9203,6 +9323,20 @@
                     onUpdateLlmContextTurnLimit={applyLlmContextTurnLimitPreference}
                     onUpdateLlmImageHistoryLimit={applyLlmImageHistoryLimitPreference}
                     onUpdateCharacterMemoryLimit={applyCharacterMemoryLimitPreference}
+                />
+            </div>
+        {/if}
+
+        {#if showBackgroundsPopup}
+            <div class="popup-wrapper" bind:this={backgroundsPopupEl}>
+                <BackgroundModal
+                    {backgrounds}
+                    {selectedBackgroundId}
+                    onSelect={handleSelectBackground}
+                    onUnset={handleUnsetBackground}
+                    onUpload={handleUploadBackground}
+                    onDelete={handleDeleteBackground}
+                    onClose={() => (showBackgroundsPopup = false)}
                 />
             </div>
         {/if}
@@ -9763,6 +9897,31 @@
                     <circle cx="12" cy="7" r="4" />
                 </svg>
                 <span>Show Character Info</span>
+            </button>
+            <button
+                type="button"
+                class="context-menu-item"
+                onclick={() => {
+                    toggleBackgroundsPopup();
+                    contextMenuVisible = false;
+                }}
+            >
+                <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                >
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <polyline points="21 15 16 10 5 21" />
+                </svg>
+                <span>Change Background</span>
             </button>
             <button
                 type="button"

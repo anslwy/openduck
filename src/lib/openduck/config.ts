@@ -55,6 +55,10 @@ export const SHOW_ADVANCED_MODELS_STORAGE_KEY =
 export const CHARACTER_MEMORY_LIMIT_STORAGE_KEY =
   "openduck.character-memory-limit.v1";
 export const CALL_MODE_STORAGE_KEY = "openduck.call-mode.v1";
+export const BACKGROUNDS_STORAGE_KEY = "openduck.backgrounds.v1";
+export const BACKGROUND_IMAGES_DB_NAME = "openduck.backgrounds";
+export const BACKGROUND_IMAGES_STORE_NAME = "background-images";
+export const BACKGROUND_ASSETS_DB_VERSION = 1;
 export const ONBOARDING_SEEN_STORAGE_KEY = "seenOnboarding";
 export const GLOBAL_SHORTCUT_STORAGE_KEY = "openduck.global-shortcut.v1";
 export const GLOBAL_SHORTCUT_ENTIRE_SCREEN_STORAGE_KEY =

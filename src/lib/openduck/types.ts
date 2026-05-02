@@ -330,6 +330,13 @@ export type AppUpdateInfo = {
 
 export type CallMode = "natural" | "push_to_talk";
 
+export type Background = {
+    id: string;
+    name: string;
+    url: string;
+    isStock: boolean;
+};
+
 export type StoredModelPreferences = {
     version: 1;
     gemmaVariant: GemmaVariant;

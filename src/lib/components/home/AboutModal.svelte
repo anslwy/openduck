@@ -38,6 +38,7 @@
         AppUpdateInfo,
         AppUpdateStatus,
         AiSubtitleTargetLanguage,
+        Background,
         BuildInfo,
         CallMode,
     } from "$lib/openduck/types";
@@ -83,7 +84,9 @@
         llmContextTurnLimit,
         llmImageHistoryLimit,
         characterMemoryLimit,
+        selectedBackground,
         onUpdateCallMode,
+        onManageBackgrounds,
         onUpdateGlobalShortcut,
         onUpdateGlobalShortcutEntireScreen,
         onUpdateGlobalShortcutToggleMute,
@@ -144,7 +147,9 @@
         llmContextTurnLimit: number | null;
         llmImageHistoryLimit: number | null;
         characterMemoryLimit: number | null;
+        selectedBackground: Background | null;
         onUpdateCallMode: (mode: CallMode) => void;
+        onManageBackgrounds: () => void;
         onUpdateGlobalShortcut: (shortcut: string) => void;
         onUpdateGlobalShortcutEntireScreen: (shortcut: string) => void;
         onUpdateGlobalShortcutToggleMute: (shortcut: string) => void;
@@ -539,6 +544,13 @@
     });
 
     const settingsData = $derived([
+        {
+            id: "background",
+            type: "background",
+            label: "Background",
+            value: selectedBackground,
+            onAction: onManageBackgrounds,
+        },
         {
             id: "call-mode",
             type: "select",
@@ -1016,7 +1028,27 @@
 
             <div class="about-metadata-card">
                 {#each filteredSettings as setting (setting.id)}
-                    {#if setting.type === "toggle"}
+                    {#if setting.type === "background"}
+                        <div class="about-metadata-row background-row">
+                            <div class="about-slider-header">
+                                <span class="about-metadata-label">{setting.label}</span>
+                                <div class="background-selection-control">
+                                    {#if setting.value}
+                                        <div class="background-thumbnail">
+                                            <img src={setting.value.url} alt={setting.value.name} />
+                                        </div>
+                                    {/if}
+                                    <button
+                                        type="button"
+                                        class="utility-btn"
+                                        onclick={setting.onAction}
+                                    >
+                                        Manage
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    {:else if setting.type === "toggle"}
                         <div class="about-metadata-row">
                             <div class="about-slider-header">
                                 <span class="about-metadata-label"
@@ -1685,28 +1717,36 @@
 
     .about-select-action-btn:hover {
         background: rgba(255, 255, 255, 0.1);
-        color: rgba(255, 255, 255, 0.88);
+        color: white;
     }
 
-    .about-select-action-btn:focus-visible {
-        outline: none;
-        border-color: rgba(255, 205, 64, 0.3);
-        box-shadow: 0 0 0 4px rgba(255, 205, 64, 0.06);
+    .background-selection-control {
+        display: flex;
+        align-items: center;
+        gap: 12px;
     }
 
-    .about-select-tooltip-shell {
-        position: relative;
+    .background-thumbnail {
+        width: 48px;
+        height: 27px;
+        border-radius: 4px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .background-thumbnail img {
         width: 100%;
+        height: 100%;
+        object-fit: cover;
     }
 
-    @media (max-width: 720px) {
-        .about-slider-header {
-            align-items: flex-start;
-            flex-direction: column;
-        }
-
-        .about-slider-detail {
-            max-width: none;
-        }
+    .background-none-placeholder {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.3);
     }
 </style>
