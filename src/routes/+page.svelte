@@ -510,6 +510,7 @@
     let isClearingConversationLogImages = $state(false);
     let toastMessage = $state<string | null>(null);
     let isMemoryProcessing = $state(false);
+    let pendingMemoryProcessingCount = 0;
     let toastTimeout: ReturnType<typeof window.setTimeout> | null = null;
 
     const popupActionsBusy = $derived(
@@ -7182,9 +7183,104 @@
         });
     }
 
+    function beginMemoryProcessing() {
+        pendingMemoryProcessingCount += 1;
+        isMemoryProcessing = true;
+    }
+
+    function finishMemoryProcessing() {
+        pendingMemoryProcessingCount = Math.max(
+            0,
+            pendingMemoryProcessingCount - 1,
+        );
+        isMemoryProcessing = pendingMemoryProcessingCount > 0;
+    }
+
+    async function processEndedSessionMemories(
+        sessionId: string,
+        characterIdAtEnd: string,
+        existingMemoryTexts: string[],
+    ) {
+        beginMemoryProcessing();
+        try {
+            const extractedMemories = await invoke<string[]>(
+                "extract_memories_from_session",
+                { sessionId, existingMemories: existingMemoryTexts },
+            );
+            if (extractedMemories.length === 0) {
+                return;
+            }
+
+            console.log("Extracted new memories:", extractedMemories);
+
+            const newMemories = extractedMemories.map((text) => ({
+                id: Math.random().toString(36).substring(2, 9),
+                text,
+                createdAt: Date.now(),
+            }));
+
+            updateContactById(characterIdAtEnd, (contact) => {
+                const existing = contact.memories || [];
+                return {
+                    ...contact,
+                    memories: [...newMemories, ...existing],
+                };
+            });
+
+            const contactAfterAdd = contacts.find(
+                (c) => c.id === characterIdAtEnd,
+            );
+            if (
+                contactAfterAdd &&
+                characterMemoryLimit !== null &&
+                contactAfterAdd.memories.length > characterMemoryLimit
+            ) {
+                const mergedMemories = contactAfterAdd.memories;
+                const keepCount = Math.floor(characterMemoryLimit / 2);
+                const keep = mergedMemories.slice(0, keepCount);
+                const toSummarize = mergedMemories.slice(keepCount);
+
+                try {
+                    const summary = await invoke<string>("summarize_memories", {
+                        memories: toSummarize.map((m) => m.text),
+                    });
+                    if (summary) {
+                        const summaryMemory: MemoryItem = {
+                            id: Math.random().toString(36).substring(2, 9),
+                            text: summary,
+                            createdAt: toSummarize[0].createdAt,
+                            moreThan: true,
+                        };
+                        updateContactById(characterIdAtEnd, (c) => ({
+                            ...c,
+                            memories: [...keep, summaryMemory],
+                        }));
+                    }
+                } catch (err) {
+                    console.error("Failed to summarize memories:", err);
+                }
+            }
+
+            if (selectedContactId === characterIdAtEnd) {
+                void syncSelectedContactMemory();
+            }
+        } catch (err) {
+            console.error("Failed to extract memories:", err);
+        } finally {
+            finishMemoryProcessing();
+        }
+    }
+
     async function handleEndCall() {
         const characterIdAtEnd = selectedContactId;
+        const contactAtEnd = selectedContact;
+        const shouldProcessMemories = contactAtEnd?.memoryEnabled !== false;
+        const existingMemoryTexts = (contactAtEnd?.memories || []).map(
+            (m) => m.text,
+        );
         calling = false;
+        currentSessionId = null;
+        currentSessionTitle = null;
         isFirstSentenceReady = false;
         stopConnectingSound();
         syncKeepAwakeState();
@@ -7200,89 +7296,9 @@
         setCallStage("idle", "");
         stopCallTimerTracking();
 
-        // Memory extraction must happen before reset_call_session clears the turns
-        if (selectedContact?.memoryEnabled !== false) {
-            isMemoryProcessing = true;
-            try {
-                const existingMemoryTexts = (
-                    selectedContact?.memories || []
-                ).map((m) => m.text);
-                const extractedMemories = await invoke<string[]>(
-                    "extract_memories_from_current_session",
-                    { existingMemories: existingMemoryTexts },
-                );
-                if (extractedMemories.length > 0) {
-                    console.log("Extracted new memories:", extractedMemories);
-
-                    const newMemories = extractedMemories.map((text) => ({
-                        id: Math.random().toString(36).substring(2, 9),
-                        text,
-                        createdAt: Date.now(),
-                    }));
-
-                    // 1. Add new memories immediately
-                    updateContactById(characterIdAtEnd, (contact) => {
-                        const existing = contact.memories || [];
-                        return {
-                            ...contact,
-                            memories: [...newMemories, ...existing],
-                        };
-                    });
-
-                    // 2. Perform compaction if necessary
-                    const contactAfterAdd = contacts.find(
-                        (c) => c.id === characterIdAtEnd,
-                    );
-                    if (
-                        contactAfterAdd &&
-                        characterMemoryLimit !== null &&
-                        contactAfterAdd.memories.length > characterMemoryLimit
-                    ) {
-                        const mergedMemories = contactAfterAdd.memories;
-                        const keepCount = Math.floor(characterMemoryLimit / 2);
-                        const keep = mergedMemories.slice(0, keepCount);
-                        const toSummarize = mergedMemories.slice(keepCount);
-
-                        try {
-                            const summary = await invoke<string>(
-                                "summarize_memories",
-                                {
-                                    memories: toSummarize.map((m) => m.text),
-                                },
-                            );
-                            if (summary) {
-                                const summaryMemory: MemoryItem = {
-                                    id: Math.random()
-                                        .toString(36)
-                                        .substring(2, 9),
-                                    text: summary,
-                                    createdAt: toSummarize[0].createdAt,
-                                    moreThan: true,
-                                };
-                                updateContactById(characterIdAtEnd, (c) => ({
-                                    ...c,
-                                    memories: [...keep, summaryMemory],
-                                }));
-                            }
-                        } catch (err) {
-                            console.error("Failed to summarize memories:", err);
-                        }
-                    }
-
-                    // Sync to backend character_memory state if it's the currently selected character
-                    if (selectedContactId === characterIdAtEnd) {
-                        void syncSelectedContactMemory();
-                    }
-                }
-            } catch (err) {
-                console.error("Failed to extract memories:", err);
-            } finally {
-                isMemoryProcessing = false;
-            }
-        }
-
+        let endedSessionId: string | null = null;
         try {
-            await invoke("reset_call_session");
+            endedSessionId = await invoke<string | null>("reset_call_session");
             currentSessionId = await invoke<string | null>(
                 "get_current_session_id",
             );
@@ -7298,6 +7314,14 @@
             }
         } catch (err) {
             console.error("Failed to clear call session:", err);
+        }
+
+        if (shouldProcessMemories && endedSessionId) {
+            void processEndedSessionMemories(
+                endedSessionId,
+                characterIdAtEnd,
+                existingMemoryTexts,
+            );
         }
     }
 

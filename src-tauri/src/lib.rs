@@ -1972,17 +1972,21 @@ fn export_contact_profile(payload: ContactExportPayload) -> Result<ContactExport
 async fn reset_call_session(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    if let Err(err) = save_current_session(&app_handle, state.inner()) {
-        error!("Failed to save session before reset: {}", err);
-    }
-    cancel_active_generation(&app_handle, false).await;
+) -> Result<Option<String>, String> {
+    let saved_session_id = match save_current_session(&app_handle, state.inner()) {
+        Ok(()) => state.current_session_id.lock().unwrap().clone(),
+        Err(err) => {
+            error!("Failed to save session before reset: {}", err);
+            None
+        }
+    };
     set_tts_playback_active_state(&app_handle, false);
     reset_call_session_state(state.inner());
     clear_pending_screen_capture_inner(&app_handle, true);
     emit_call_stage(&app_handle, "idle", "");
     reset_csm_reference_context(&app_handle).await?;
-    Ok(())
+    cancel_active_generation(&app_handle, false).await;
+    Ok(saved_session_id)
 }
 
 #[tauri::command]
@@ -2062,6 +2066,41 @@ async fn extract_memories_from_current_session(
         (turns_to_process, last_processed_id)
     };
 
+    let memories = extract_memories_from_turns(state.inner(), turns, existing_memories).await?;
+
+    state
+        .last_extracted_assistant_entry_id
+        .store(last_assistant_entry_id, Ordering::Relaxed);
+    Ok(memories)
+}
+
+#[tauri::command]
+async fn extract_memories_from_session(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+    existing_memories: Vec<String>,
+) -> Result<Vec<String>, String> {
+    if !*state.memory_enabled.lock().unwrap() {
+        return Ok(Vec::new());
+    }
+
+    let session_file = resolve_session_file(&app_handle, &session_id)?;
+    if !session_file.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(session_file).map_err(|err| err.to_string())?;
+    let data: SessionData = serde_json::from_str(&content).map_err(|err| err.to_string())?;
+
+    extract_memories_from_turns(state.inner(), data.turns, existing_memories).await
+}
+
+async fn extract_memories_from_turns(
+    state: &AppState,
+    turns: Vec<ConversationTurn>,
+    existing_memories: Vec<String>,
+) -> Result<Vec<String>, String> {
     let mut conversation_text = String::new();
     for turn in turns {
         if !turn.user_text.trim().is_empty() {
@@ -2073,17 +2112,13 @@ async fn extract_memories_from_current_session(
     }
 
     if conversation_text.trim().is_empty() {
-        state
-            .last_extracted_assistant_entry_id
-            .store(last_assistant_entry_id, Ordering::Relaxed);
         return Ok(Vec::new());
     }
 
-    let variant = loaded_gemma_variant(state.inner())
-        .unwrap_or_else(|| selected_gemma_variant(state.inner()));
+    let variant = loaded_gemma_variant(state).unwrap_or_else(|| selected_gemma_variant(state));
 
     let model_name = if variant.is_external() {
-        selected_external_llm_model(state.inner(), variant).unwrap_or_default()
+        selected_external_llm_model(state, variant).unwrap_or_default()
     } else {
         variant.repo_id().unwrap_or_default().to_string()
     };
@@ -2092,9 +2127,9 @@ async fn extract_memories_from_current_session(
 
     let (base_url, api_key) = if variant.is_external() {
         (
-            external_llm_base_url(state.inner(), variant)
+            external_llm_base_url(state, variant)
                 .ok_or_else(|| format!("Missing {} base URL.", variant.label()))?,
-            external_llm_api_key(state.inner(), variant),
+            external_llm_api_key(state, variant),
         )
     } else {
         let port = server_port.ok_or_else(|| "LLM server is not running.".to_string())?;
@@ -2168,9 +2203,6 @@ async fn extract_memories_from_current_session(
         .filter(|l| !l.is_empty() && l.to_lowercase() != "none")
         .collect();
 
-    state
-        .last_extracted_assistant_entry_id
-        .store(last_assistant_entry_id, Ordering::Relaxed);
     Ok(memories)
 }
 
@@ -13937,6 +13969,7 @@ pub fn run() {
             export_contact_profile,
             reset_call_session,
             extract_memories_from_current_session,
+            extract_memories_from_session,
             summarize_memories,
             start_conversation,
             ensure_runtime_dependencies,
