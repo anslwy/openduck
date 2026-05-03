@@ -42,6 +42,8 @@ export const AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY =
   "openduck.auto-unmute-on-pasted-screenshot.v1";
 export const END_OF_UTTERANCE_SILENCE_STORAGE_KEY =
   "openduck.end-of-utterance-silence-ms.v1";
+export const SMART_TURN_THRESHOLD_STORAGE_KEY =
+  "openduck.smart-turn-threshold.v1";
 export const COMMIT_AUDIO_DRAIN_STORAGE_KEY =
   "openduck.commit-audio-drain-ms.v1";
 export const AUTO_CONTINUE_SILENCE_STORAGE_KEY =
@@ -83,10 +85,14 @@ export const SUBTITLE_FONT_SIZE_STEP = 0.02;
 export const DEFAULT_OLLAMA_MODEL = "gemma2:2b";
 export const DEFAULT_LMSTUDIO_MODEL = "";
 export const DEFAULT_OPENAI_COMPATIBLE_MODEL = "";
-export const DEFAULT_END_OF_UTTERANCE_SILENCE_MS = 2500;
+export const DEFAULT_END_OF_UTTERANCE_SILENCE_MS = 1500;
 export const MIN_END_OF_UTTERANCE_SILENCE_MS = 500;
 export const MAX_END_OF_UTTERANCE_SILENCE_MS = 5000;
 export const END_OF_UTTERANCE_SILENCE_STEP_MS = 100;
+export const DEFAULT_SMART_TURN_THRESHOLD = 0.8;
+export const MIN_SMART_TURN_THRESHOLD = 0.0;
+export const MAX_SMART_TURN_THRESHOLD = 1.0;
+export const SMART_TURN_THRESHOLD_STEP = 0.05;
 export const DEFAULT_COMMIT_AUDIO_DRAIN_MS = 200;
 export const MIN_COMMIT_AUDIO_DRAIN_MS = 100;
 export const MAX_COMMIT_AUDIO_DRAIN_MS = 1200;

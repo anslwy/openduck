@@ -573,6 +573,12 @@ struct AppState {
     last_tray_title: Mutex<Option<String>>,
     is_quitting: Mutex<bool>,
     vad: Mutex<Option<vad::Silero>>,
+    smart_turn_process: Mutex<Option<SmartTurnProcess>>,
+    smart_turn_ready: Mutex<bool>,
+    smart_turn_request_in_flight: Mutex<bool>,
+    next_smart_turn_request_id: AtomicU64,
+    smart_turn_predictions: Mutex<HashMap<u64, (bool, f32)>>,
+    smart_turn_threshold: Mutex<f32>,
     screen_capture_child: Mutex<Option<std::process::Child>>,
     ai_subtitle_target_language: Mutex<String>,
     last_memory_clear_at: Mutex<HashMap<String, u64>>,
@@ -643,6 +649,29 @@ enum SttWorkerEvent {
         request_id: Option<u64>,
         message: String,
     },
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum SmartTurnWorkerEvent {
+    Status {
+        message: String,
+    },
+    Ready {},
+    Prediction {
+        request_id: u64,
+        probability: f32,
+        completed: bool,
+    },
+    Error {
+        request_id: Option<u64>,
+        message: String,
+    },
+}
+
+struct SmartTurnProcess {
+    child: Arc<AsyncMutex<Child>>,
+    stdin: Arc<AsyncMutex<ChildStdin>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1330,7 +1359,8 @@ async fn initialize_vad_command(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    ensure_vad(&app_handle, state.inner())
+    ensure_vad(&app_handle, state.inner())?;
+    ensure_smart_turn(&app_handle, state.inner())
 }
 
 #[tauri::command]
@@ -4521,6 +4551,31 @@ async fn stop_csm_server(
 }
 
 #[tauri::command]
+fn get_smart_turn_threshold(state: State<'_, AppState>) -> f32 {
+    *state.smart_turn_threshold.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_smart_turn_threshold(state: State<'_, AppState>, threshold: f32) -> Result<(), String> {
+    if !(0.0..=1.0).contains(&threshold) {
+        return Err("Threshold must be between 0.0 and 1.0".to_string());
+    }
+    let mut guard = state.smart_turn_threshold.lock().unwrap();
+    *guard = threshold;
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_smart_turn(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    stop_smart_turn_inner(state.inner()).await?;
+    refresh_tray_presentation(&app_handle);
+    Ok(())
+}
+
+#[tauri::command]
 async fn stop_stt_server(
     app_handle: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -5000,9 +5055,6 @@ async fn receive_audio_chunk(
             if let Some(vad) = vad_guard.as_mut() {
                 let resampled = vad::resample_to_16k(&prepared_chunk.samples, capture_sample_rate);
                 let peak = resampled.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-                // let rms = (resampled.iter().map(|s| s * s).sum::<f32>() / resampled.len() as f32).sqrt();
-                // Debug log:
-                // println!("VAD diag: resampled_len={} peak={} rms={} chunk_rms={}", resampled.len(), peak, rms, prepared_chunk.rms);
                 let normalized: Vec<f32> = if peak > 1e-4 {
                     resampled.iter().map(|s| s / peak).collect()
                 } else {
@@ -5076,52 +5128,196 @@ async fn receive_audio_chunk(
     let mut endpoint_audio: Option<Vec<f32>> = None;
     let mut endpoint_voiced_samples: usize = 0;
     {
-        let mut buffer = state.audio_buffer.lock().unwrap();
-        let mut silent_count = state.silent_chunks_count.lock().unwrap();
-        let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
-        let mut current_utterance_voiced_samples =
-            state.current_utterance_voiced_samples.lock().unwrap();
-        let mut is_speaking = state.is_speaking.lock().unwrap();
+        let is_ptt = *state.call_mode.lock().unwrap() == "push_to_talk";
 
-        if force_commit || *is_speaking {
-            buffer.extend_from_slice(&prepared_chunk.samples);
+        let (is_candidate_init, is_endpoint_base) = {
+            let mut buffer = state.audio_buffer.lock().unwrap();
+            let silent_count = state.silent_chunks_count.lock().unwrap();
+            let is_speaking = state.is_speaking.lock().unwrap();
 
-            let silence_chunks_required = required_silence_chunks(
-                capture_sample_rate,
-                prepared_chunk.samples.len(),
-                configured_silence_ms,
-            );
+            if force_commit || *is_speaking {
+                buffer.extend_from_slice(&prepared_chunk.samples);
 
-            let is_ptt = *state.call_mode.lock().unwrap() == "push_to_talk";
-            if force_commit || (!is_ptt && *silent_count >= silence_chunks_required) {
-                endpoint_voiced_samples = *current_utterance_voiced_samples;
-                endpoint_audio = Some(std::mem::take(&mut *buffer));
-                {
-                    let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
-                    pre_buffer.clear();
-                }
-                *is_speaking = false;
-                *silent_count = 0;
-                *speaking_count = 0;
-                *current_utterance_voiced_samples = 0;
+                let silence_chunks_required = required_silence_chunks(
+                    capture_sample_rate,
+                    prepared_chunk.samples.len(),
+                    configured_silence_ms,
+                );
+                
+                let fast_trigger_silence_ms = 400;
+                let fast_trigger_chunks = required_silence_chunks(
+                    capture_sample_rate,
+                    prepared_chunk.samples.len(),
+                    fast_trigger_silence_ms,
+                );
 
-                let mut vad_guard = state.vad.lock().unwrap();
-                if let Some(vad) = vad_guard.as_mut() {
-                    vad.reset();
-                }
-            }
-        } else {
-            let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
-            if in_grace_period {
-                pre_buffer.clear();
+                let is_endpoint_base = force_commit || (!is_ptt && *silent_count >= silence_chunks_required);
+                let is_fast_candidate = !is_ptt && *silent_count >= fast_trigger_chunks;
+                
+                (is_endpoint_base || is_fast_candidate, is_endpoint_base)
             } else {
-                pre_buffer.extend(prepared_chunk.samples.iter().copied());
-                let max_pre_buffer_samples =
-                    (capture_sample_rate as u64 * PRE_SPEECH_BUFFER_MS as u64 / 1000) as usize;
-                if pre_buffer.len() > max_pre_buffer_samples {
-                    let to_remove = pre_buffer.len() - max_pre_buffer_samples;
-                    pre_buffer.drain(..to_remove);
+                let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
+                if in_grace_period {
+                    pre_buffer.clear();
+                } else {
+                    pre_buffer.extend(prepared_chunk.samples.iter().copied());
+                    let max_pre_buffer_samples =
+                        (capture_sample_rate as u64 * PRE_SPEECH_BUFFER_MS as u64 / 1000) as usize;
+                    if pre_buffer.len() > max_pre_buffer_samples {
+                        let to_remove = pre_buffer.len() - max_pre_buffer_samples;
+                        pre_buffer.drain(..to_remove);
+                    }
                 }
+                (false, false)
+            }
+        };
+        
+        let mut is_candidate = is_candidate_init;
+        let mut is_endpoint_confirmed = is_endpoint_base;
+
+        if is_candidate && !force_commit && !is_ptt {
+            let in_flight = {
+                let mut guard = state.smart_turn_request_in_flight.lock().unwrap();
+                if *guard {
+                    true
+                } else {
+                    *guard = true;
+                    false
+                }
+            };
+
+            if in_flight {
+                if !is_endpoint_confirmed {
+                    is_candidate = false;
+                }
+            } else {
+                let smart_turn_data = {
+                    let buffer = state.audio_buffer.lock().unwrap();
+                    let is_ready = *state.smart_turn_ready.lock().unwrap();
+                    
+                    if is_ready {
+                        if let Ok(_) = ensure_smart_turn(&app_handle, state.inner()) {
+                            let request_id = state
+                                .next_smart_turn_request_id
+                                .fetch_add(1, Ordering::SeqCst);
+
+                            let recent_audio: Vec<f32> = buffer
+                                .iter()
+                                .rev()
+                                .take(8 * capture_sample_rate as usize)
+                                .rev()
+                                .copied()
+                                .collect();
+                            let resampled = vad::resample_to_16k(&recent_audio, capture_sample_rate);
+                            
+                            let peak = resampled.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+                            let normalized: Vec<f32> = if peak > 1e-4 {
+                                resampled.iter().map(|s| s / peak).collect()
+                            } else {
+                                resampled
+                            };
+                            
+                            let audio_bytes = unsafe {
+                                std::slice::from_raw_parts(
+                                    normalized.as_ptr() as *const u8,
+                                    normalized.len() * std::mem::size_of::<f32>(),
+                                )
+                            };
+                            let audio_base64 = base64::engine::general_purpose::STANDARD.encode(audio_bytes);
+                            
+                            let mut smart_turn_process_guard = state.smart_turn_process.lock().unwrap();
+                            if let Some(smart_turn_process) = smart_turn_process_guard.as_mut() {
+                                 Some((request_id, audio_base64, smart_turn_process.stdin.clone(), peak))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        let _ = ensure_smart_turn(&app_handle, state.inner());
+                        None
+                    }
+                };
+
+                if let Some((request_id, audio_base64, stdin, peak)) = smart_turn_data {
+                    let threshold = *state.smart_turn_threshold.lock().unwrap();
+                    info!("Smart Turn request (Req {}): sending 8s buffer, peak={:.4}, threshold={:.2}", request_id, peak, threshold);
+                    let payload = serde_json::json!({
+                        "type": "predict",
+                        "request_id": request_id,
+                        "audio_base64": audio_base64,
+                        "threshold": threshold,
+                    });
+
+                    let payload_str = payload.to_string() + "\n";
+                    {
+                        let mut stdin_lock = stdin.lock().await;
+                        let _ = stdin_lock.write_all(payload_str.as_bytes()).await;
+                        let _ = stdin_lock.flush().await;
+                    }
+
+                    let start = Instant::now();
+                    let mut prediction = None;
+                    let timeout = Duration::from_millis(1500);
+                    while start.elapsed() < timeout {
+                        {
+                            let mut predictions = state.smart_turn_predictions.lock().unwrap();
+                            if let Some(completed) = predictions.remove(&request_id) {
+                                prediction = Some(completed);
+                                break;
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+
+                    if let Some((completed, probability)) = prediction {
+                        if !completed {
+                            if !is_endpoint_confirmed {
+                                is_endpoint_confirmed = false;
+                                *state.silent_chunks_count.lock().unwrap() = 0;
+                                info!("Smart Turn deferred endpointing (Req {}): user likely not finished. (prob={:.4})", request_id, probability);
+                            } else {
+                                info!("Smart Turn suggested deferral (Req {}), but hard silence limit reached. Proceeding. (prob={:.4})", request_id, probability);
+                                is_endpoint_confirmed = true;
+                            }
+                        } else {
+                            info!("Smart Turn confirmed endpointing (Req {}). (prob={:.4})", request_id, probability);
+                            is_endpoint_confirmed = true;
+                        }
+                    } else {
+                        warn!("Smart Turn prediction timed out (Req {}), falling back to VAD silence decision ({}).", request_id, is_endpoint_confirmed);
+                    }
+                }
+                
+                *state.smart_turn_request_in_flight.lock().unwrap() = false;
+            }
+        }
+        
+        let is_endpoint = is_endpoint_confirmed;
+
+        if is_endpoint {
+            let mut buffer = state.audio_buffer.lock().unwrap();
+            let mut silent_count = state.silent_chunks_count.lock().unwrap();
+            let mut speaking_count = state.speaking_chunks_count.lock().unwrap();
+            let mut current_utterance_voiced_samples =
+                state.current_utterance_voiced_samples.lock().unwrap();
+            let mut is_speaking = state.is_speaking.lock().unwrap();
+
+            endpoint_voiced_samples = *current_utterance_voiced_samples;
+            endpoint_audio = Some(std::mem::take(&mut *buffer));
+            {
+                let mut pre_buffer = state.pre_audio_buffer.lock().unwrap();
+                pre_buffer.clear();
+            }
+            *is_speaking = false;
+            *silent_count = 0;
+            *speaking_count = 0;
+            *current_utterance_voiced_samples = 0;
+
+            let mut vad_guard = state.vad.lock().unwrap();
+            if let Some(vad) = vad_guard.as_mut() {
+                vad.reset();
             }
         }
     }
@@ -5162,6 +5358,7 @@ async fn receive_audio_chunk(
 }
 
 fn required_silence_chunks(
+
     sample_rate: u32,
     chunk_sample_count: usize,
     silence_duration_ms: u32,
@@ -9091,6 +9288,47 @@ async fn stt_process_is_ready(state: &AppState) -> bool {
     }
 }
 
+async fn stop_smart_turn_inner(state: &AppState) -> Result<(), String> {
+    let process = {
+        let mut guard = state.smart_turn_process.lock().unwrap();
+        guard.take()
+    };
+    *state.smart_turn_ready.lock().unwrap() = false;
+
+    let Some(process) = process else {
+        return Ok(());
+    };
+
+    {
+        let mut stdin = process.stdin.lock().await;
+        let _ = stdin.write_all(br#"{"type":"shutdown"}"#).await;
+        let _ = stdin.write_all(b"\n").await;
+        let _ = stdin.flush().await;
+    }
+
+    let mut child = process.child.lock().await;
+    if let Err(err) = child.kill().await {
+        warn!("Failed to kill the Smart Turn worker cleanly: {}", err);
+    }
+
+    Ok(())
+}
+
+fn stop_smart_turn_for_exit(state: &AppState) {
+    let process = {
+        let mut guard = state.smart_turn_process.lock().unwrap();
+        guard.take()
+    };
+    *state.smart_turn_ready.lock().unwrap() = false;
+
+    if let Some(process) = process {
+        let child = process.child.try_lock();
+        if let Ok(mut child) = child {
+            let _ = child.start_kill();
+        }
+    }
+}
+
 async fn stop_stt_server_inner(state: &AppState) -> Result<(), String> {
     let process = take_stt_process(state);
     reset_stt_runtime_state(state);
@@ -9172,6 +9410,7 @@ fn cleanup_before_app_exit(app_handle: &AppHandle) {
     });
     stop_csm_server_for_exit(state.inner());
     stop_stt_server_for_exit(state.inner());
+    stop_smart_turn_for_exit(state.inner());
 
     let mut keep_awake_child = state.sleep_assertion_child.lock().unwrap();
     if let Some(mut child) = keep_awake_child.take() {
@@ -11638,7 +11877,138 @@ fn ensure_vad(app_handle: &tauri::AppHandle, state: &AppState) -> Result<(), Str
     Ok(())
 }
 
+fn ensure_smart_turn(app_handle: &tauri::AppHandle, state: &AppState) -> Result<(), String> {
+    let mut process_guard = state.smart_turn_process.lock().unwrap();
+    if process_guard.is_some() {
+        return Ok(());
+    }
+
+    info!("Starting Smart Turn worker...");
+    let python_executable = resolve_gemma_python_executable(app_handle)?;
+    let python_home = python_executable
+        .parent()
+        .and_then(|path| path.parent())
+        .map(PathBuf::from)
+        .ok_or_else(|| "Failed to resolve Smart Turn Python home".to_string())?;
+    let stt_site_packages = resolve_stt_site_packages(app_handle)?;
+    let script_path = resolve_resource_file(app_handle, "turn_detector.py")?;
+    let model_path = resolve_resource_file(app_handle, "smart-turn-v3.1-cpu.onnx")?;
+
+    let mut command = Command::new(&python_executable);
+    command
+        .arg(&script_path)
+        .arg("--model")
+        .arg(model_path)
+        .env("PYTHONUNBUFFERED", "1")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("PYTHONHOME", &python_home)
+        .env("PYTHONPATH", &stt_site_packages)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Failed to start Smart Turn worker: {e}"))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to open stdin for Smart Turn worker".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to open stdout for Smart Turn worker".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to open stderr for Smart Turn worker".to_string())?;
+
+    let child = Arc::new(AsyncMutex::new(child));
+    let stdin = Arc::new(AsyncMutex::new(stdin));
+
+    *process_guard = Some(SmartTurnProcess {
+        child: child.clone(),
+        stdin: stdin.clone(),
+    });
+
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let ready_tx = Arc::new(Mutex::new(Some(ready_tx)));
+
+    tauri::async_runtime::spawn(smart_turn_stdout_task(
+        app_handle.clone(),
+        stdout,
+        ready_tx.clone(),
+    ));
+    tauri::async_runtime::spawn(smart_turn_stderr_task(app_handle.clone(), stderr));
+
+    let _ = ready_rx; // We won't block here for simplicity, but we could.
+    Ok(())
+}
+
+async fn smart_turn_stdout_task(
+    app_handle: AppHandle,
+    stdout: ChildStdout,
+    ready_tx: Arc<Mutex<Option<oneshot::Sender<Result<(), String>>>>>,
+) {
+    let state = app_handle.state::<AppState>();
+    let reader = BufReader::new(stdout);
+    let mut lines = reader.lines();
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        match serde_json::from_str::<SmartTurnWorkerEvent>(&line) {
+            Ok(SmartTurnWorkerEvent::Status { message }) => {
+                info!("Smart Turn worker status: {}", message);
+            }
+            Ok(SmartTurnWorkerEvent::Ready {}) => {
+                info!("Smart Turn worker is ready.");
+                *state.smart_turn_ready.lock().unwrap() = true;
+                if let Some(tx) = ready_tx.lock().unwrap().take() {
+                    let _ = tx.send(Ok(()));
+                }
+            }
+            Ok(SmartTurnWorkerEvent::Prediction {
+                request_id,
+                completed,
+                probability,
+            }) => {
+                info!("Smart Turn prediction (Req {}): completed={}, prob={:.4}", request_id, completed, probability);
+                state
+                    .smart_turn_predictions
+                    .lock()
+                    .unwrap()
+                    .insert(request_id, (completed, probability));
+            }
+            Ok(SmartTurnWorkerEvent::Error { message, .. }) => {
+                error!("Smart Turn worker error: {}", message);
+            }
+            Err(e) => {
+                error!("Failed to parse Smart Turn worker event: {}. Line: {}", e, line);
+            }
+        }
+    }
+}
+
+async fn smart_turn_stderr_task(app_handle: AppHandle, stderr: ChildStderr) {
+    let reader = BufReader::new(stderr);
+    let mut lines = reader.lines();
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        let severity = classify_worker_stderr(&line);
+        let preview = line.trim();
+        if preview.is_empty() {
+            continue;
+        }
+
+        match severity {
+            WorkerStderrSeverity::Error => error!("Smart Turn stderr: {}", preview),
+            WorkerStderrSeverity::Warn => warn!("Smart Turn stderr: {}", preview),
+            WorkerStderrSeverity::Trace => trace!("Smart Turn stderr: {}", preview),
+        }
+    }
+}
+
 fn reserve_free_port() -> Result<u16, String> {
+
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     listener
         .local_addr()
@@ -12852,6 +13222,7 @@ fn runtime_root_has_required_markers(runtime_root: &Path) -> bool {
         && runtime_root
             .join(KOKORO_MULTILINGUAL_RUNTIME_MARKER_FILE)
             .exists()
+        && runtime_root.join(SMART_TURN_RUNTIME_MARKER_FILE).exists()
 }
 
 fn python_site_package_module_exists(site_packages: &Path, module_name: &str) -> bool {
@@ -12886,6 +13257,15 @@ fn kokoro_multilingual_dependencies_available(app_handle: &tauri::AppHandle) -> 
     kokoro_python_modules_available(app_handle, KOKORO_MULTILINGUAL_REQUIRED_PYTHON_MODULES)
 }
 
+fn smart_turn_dependencies_available(app_handle: &tauri::AppHandle) -> bool {
+    let Ok(site_packages) = resolve_stt_site_packages(app_handle) else {
+        return false;
+    };
+    SMART_TURN_REQUIRED_PYTHON_MODULES
+        .iter()
+        .all(|&module| python_site_package_module_exists(&site_packages, module))
+}
+
 fn kokoro_language_dependencies_available(
     app_handle: &tauri::AppHandle,
     language: KokoroLanguage,
@@ -12901,6 +13281,7 @@ fn runtime_dependencies_available(app_handle: &tauri::AppHandle) -> bool {
             && resolve_cosyvoice_site_packages(app_handle).is_ok()
             && resolve_stt_site_packages(app_handle).is_ok()
             && kokoro_multilingual_dependencies_available(app_handle)
+            && smart_turn_dependencies_available(app_handle)
     };
 
     // If we have an installed runtime in the app data directory, it must be current.
@@ -13987,6 +14368,12 @@ pub fn run() {
             last_tray_title: Mutex::new(None),
             is_quitting: Mutex::new(false),
             vad: Mutex::new(None),
+            smart_turn_process: Mutex::new(None),
+            smart_turn_ready: Mutex::new(false),
+            smart_turn_request_in_flight: Mutex::new(false),
+            next_smart_turn_request_id: AtomicU64::new(1),
+            smart_turn_predictions: Mutex::new(HashMap::new()),
+            smart_turn_threshold: Mutex::new(SMART_TURN_THRESHOLD),
             screen_capture_child: Mutex::new(None),
             ai_subtitle_target_language: Mutex::new("none".to_string()),
             last_memory_clear_at: Mutex::new(HashMap::new()),
@@ -14007,6 +14394,9 @@ pub fn run() {
             is_main_window_visible_to_user,
             receive_audio_chunk,
             initialize_vad_command,
+            stop_smart_turn,
+            get_smart_turn_threshold,
+            set_smart_turn_threshold,
             ping,
             get_build_info,
             initialize_openduck_contact_imports,

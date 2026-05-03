@@ -25,6 +25,9 @@
         MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
         MIN_LLM_IMAGE_HISTORY_LIMIT,
+        MIN_SMART_TURN_THRESHOLD,
+        MAX_SMART_TURN_THRESHOLD,
+        SMART_TURN_THRESHOLD_STEP,
         DEFAULT_SUBTITLE_FONT_SIZE,
         MIN_SUBTITLE_FONT_SIZE,
         MAX_SUBTITLE_FONT_SIZE,
@@ -85,6 +88,7 @@
         showCallTimerEnabled,
         showHiddenWindowOverlayEnabled,
         endOfUtteranceSilenceMs,
+        smartTurnThreshold,
         commitAudioDrainMs,
         autoContinueSilenceMs,
         autoContinueMaxCount,
@@ -114,6 +118,7 @@
         onUpdateShowCallTimer,
         onUpdateShowHiddenWindowOverlay,
         onUpdateEndOfUtteranceSilenceMs,
+        onUpdateSmartTurnThreshold,
         onUpdateCommitAudioDrainMs,
         onUpdateAutoContinueSilenceMs,
         onUpdateAutoContinueMaxCount,
@@ -183,6 +188,7 @@
         onUpdateShowCallTimer: (enabled: boolean) => void;
         onUpdateShowHiddenWindowOverlay: (enabled: boolean) => void;
         onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
+        onUpdateSmartTurnThreshold: (threshold: number) => void;
         onUpdateCommitAudioDrainMs: (milliseconds: number) => void;
         onUpdateAutoContinueSilenceMs: (milliseconds: number | null) => void;
         onUpdateAutoContinueMaxCount: (count: number | null) => void;
@@ -363,6 +369,14 @@
         return Number.isInteger(seconds)
             ? `${seconds}s`
             : `${seconds.toFixed(1)}s`;
+    });
+    const formattedSmartTurnThreshold = $derived(`${(smartTurnThreshold * 100).toFixed(0)}%`);
+    const minimumSmartTurnThresholdLabel = `${(MIN_SMART_TURN_THRESHOLD * 100).toFixed(0)}%`;
+    const maximumSmartTurnThresholdLabel = `${(MAX_SMART_TURN_THRESHOLD * 100).toFixed(0)}%`;
+    const smartTurnThresholdProgress = $derived.by(() => {
+        const range = MAX_SMART_TURN_THRESHOLD - MIN_SMART_TURN_THRESHOLD;
+        if (range <= 0) return 0;
+        return ((smartTurnThreshold - MIN_SMART_TURN_THRESHOLD) / range) * 100;
     });
     const minimumEndOfUtteranceSilenceLabel = $derived.by(() => {
         const seconds = MIN_END_OF_UTTERANCE_SILENCE_MS / 1000;
@@ -771,6 +785,22 @@
             minLabel: minimumEndOfUtteranceSilenceLabel,
             maxLabel: maximumEndOfUtteranceSilenceLabel,
             onUpdate: onUpdateEndOfUtteranceSilenceMs,
+            hidden: callMode === "push_to_talk",
+        },
+        {
+            id: "smart-turn-threshold",
+            type: "slider",
+            label: "Smart-Turn Confidence Threshold",
+            detail: "Smart-Turn uses a secondary AI model to check if you've actually finished your thought during a pause. Lower values respond faster but may cut you off; higher values are more 'certain' before triggering.",
+            value: smartTurnThreshold,
+            min: MIN_SMART_TURN_THRESHOLD,
+            max: MAX_SMART_TURN_THRESHOLD,
+            step: SMART_TURN_THRESHOLD_STEP,
+            displayValue: formattedSmartTurnThreshold,
+            progress: smartTurnThresholdProgress,
+            minLabel: minimumSmartTurnThresholdLabel,
+            maxLabel: maximumSmartTurnThresholdLabel,
+            onUpdate: onUpdateSmartTurnThreshold,
             hidden: callMode === "push_to_talk",
         },
         {

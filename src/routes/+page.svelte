@@ -60,6 +60,7 @@
         DEFAULT_CONTACT_ID,
         DEFAULT_CSM_MODEL,
         DEFAULT_END_OF_UTTERANCE_SILENCE_MS,
+        DEFAULT_SMART_TURN_THRESHOLD,
         DEFAULT_GEMMA_VARIANT,
         DEFAULT_KOKORO_LANGUAGE,
         DEFAULT_LLM_CONTEXT_TURN_LIMIT,
@@ -76,6 +77,7 @@
         END_OF_UTTERANCE_SILENCE_STEP_MS,
         COMMIT_AUDIO_DRAIN_STEP_MS,
         END_OF_UTTERANCE_SILENCE_STORAGE_KEY,
+        SMART_TURN_THRESHOLD_STORAGE_KEY,
         COMMIT_AUDIO_DRAIN_STORAGE_KEY,
         LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY,
         LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY,
@@ -86,6 +88,9 @@
         MAX_AUTO_CONTINUE_MAX_COUNT,
         MAX_AUTO_CONTINUE_SILENCE_MS,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
+        MIN_SMART_TURN_THRESHOLD,
+        MAX_SMART_TURN_THRESHOLD,
+        SMART_TURN_THRESHOLD_STEP,
         MIN_COMMIT_AUDIO_DRAIN_MS,
         MAX_COMMIT_AUDIO_DRAIN_MS,
         MIN_LLM_CONTEXT_TURN_LIMIT,
@@ -463,6 +468,7 @@
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
     );
     let endOfUtteranceSilenceMs = $state(DEFAULT_END_OF_UTTERANCE_SILENCE_MS);
+    let smartTurnThreshold = $state(DEFAULT_SMART_TURN_THRESHOLD);
     let commitAudioDrainMs = $state(DEFAULT_COMMIT_AUDIO_DRAIN_MS);
     let autoContinueSilenceMs = $state<number | null>(
         DEFAULT_AUTO_CONTINUE_SILENCE_MS,
@@ -2573,6 +2579,37 @@
         }
     }
 
+    function loadSmartTurnThresholdPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_SMART_TURN_THRESHOLD;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            SMART_TURN_THRESHOLD_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_SMART_TURN_THRESHOLD;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                threshold?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.threshold !== "number") {
+                return DEFAULT_SMART_TURN_THRESHOLD;
+            }
+
+            return clampSmartTurnThreshold(parsed.threshold);
+        } catch (err) {
+            console.error(
+                "Failed to restore smart turn threshold preference:",
+                err,
+            );
+            return DEFAULT_SMART_TURN_THRESHOLD;
+        }
+    }
+
     function loadCommitAudioDrainPreferenceFromStorage() {
         if (typeof window === "undefined") {
             return DEFAULT_COMMIT_AUDIO_DRAIN_MS;
@@ -2972,21 +3009,49 @@
     }
 
     function applyEndOfUtteranceSilencePreference(milliseconds: number) {
-        const normalizedMilliseconds =
-            clampEndOfUtteranceSilenceMs(milliseconds);
-        endOfUtteranceSilenceMs = normalizedMilliseconds;
-        persistEndOfUtteranceSilencePreference(normalizedMilliseconds);
-        syncEndOfUtteranceSilenceWithCaptureProcessor(normalizedMilliseconds);
-
-        void invoke("set_end_of_utterance_silence_ms", {
-            milliseconds: normalizedMilliseconds,
-        }).catch((err) => {
-            console.error(
-                "Failed to update end-of-utterance silence preference:",
-                err,
-            );
-        });
+        const clamped = clampEndOfUtteranceSilenceMs(milliseconds);
+        endOfUtteranceSilenceMs = clamped;
+        persistEndOfUtteranceSilencePreference(clamped);
+        invoke("set_end_of_utterance_silence_ms", { milliseconds: clamped });
     }
+
+    function clampSmartTurnThreshold(threshold: number) {
+        if (!Number.isFinite(threshold)) {
+            return DEFAULT_SMART_TURN_THRESHOLD;
+        }
+
+        const steppedThreshold =
+            Math.round(threshold / SMART_TURN_THRESHOLD_STEP) *
+            SMART_TURN_THRESHOLD_STEP;
+
+        return Math.min(
+            MAX_SMART_TURN_THRESHOLD,
+            Math.max(MIN_SMART_TURN_THRESHOLD, steppedThreshold),
+        );
+    }
+
+    function persistSmartTurnThresholdPreference(threshold: number) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload = {
+            version: 1,
+            threshold,
+        };
+        window.localStorage.setItem(
+            SMART_TURN_THRESHOLD_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
+    function applySmartTurnThresholdPreference(threshold: number) {
+        const clamped = clampSmartTurnThreshold(threshold);
+        smartTurnThreshold = clamped;
+        persistSmartTurnThresholdPreference(clamped);
+        invoke("set_smart_turn_threshold", { threshold: clamped });
+    }
+
 
     function applyCommitAudioDrainPreference(milliseconds: number) {
         const normalizedMilliseconds = clampCommitAudioDrainMs(milliseconds);
@@ -3216,6 +3281,11 @@
         const storedMilliseconds =
             loadEndOfUtteranceSilencePreferenceFromStorage();
         applyEndOfUtteranceSilencePreference(storedMilliseconds);
+    }
+
+    async function initializeSmartTurnThresholdPreference() {
+        const storedThreshold = loadSmartTurnThresholdPreferenceFromStorage();
+        applySmartTurnThresholdPreference(storedThreshold);
     }
 
     async function initializeCommitAudioDrainPreference() {
@@ -8685,6 +8755,7 @@
             await initializeShowCallTimerPreference();
             await initializeShowHiddenWindowOverlayPreference();
             await initializeEndOfUtteranceSilencePreference();
+            await initializeSmartTurnThresholdPreference();
             await initializeCommitAudioDrainPreference();
             await initializeAutoContinueSilencePreference();
             await initializeAutoContinueMaxCountPreference();
@@ -9480,6 +9551,7 @@
                     {showCallTimerEnabled}
                     {showHiddenWindowOverlayEnabled}
                     {endOfUtteranceSilenceMs}
+                    {smartTurnThreshold}
                     {commitAudioDrainMs}
                     {autoContinueSilenceMs}
                     {autoContinueMaxCount}
@@ -9508,6 +9580,7 @@
                     onUpdateShowCallTimer={applyShowCallTimerPreference}
                     onUpdateShowHiddenWindowOverlay={applyShowHiddenWindowOverlayPreference}
                     onUpdateEndOfUtteranceSilenceMs={applyEndOfUtteranceSilencePreference}
+                    onUpdateSmartTurnThreshold={applySmartTurnThresholdPreference}
                     onUpdateCommitAudioDrainMs={applyCommitAudioDrainPreference}
                     onUpdateAutoContinueSilenceMs={applyAutoContinueSilencePreference}
                     onUpdateAutoContinueMaxCount={applyAutoContinueMaxCountPreference}

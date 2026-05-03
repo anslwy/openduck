@@ -123,10 +123,10 @@ status "Installing mlx-audio-plus into the CosyVoice environment..."
 "$COSYVOICE_ENV_DIR/venv/bin/pip" install numpy huggingface_hub tqdm "mlx-audio-plus==$MLX_AUDIO_PLUS_VERSION" soundfile
 status "Installing mlx-audio into the STT environment..."
 "$STT_ENV_DIR/venv/bin/pip" install -U pip
-"$STT_ENV_DIR/venv/bin/pip" install numpy huggingface_hub tqdm "mlx-audio==$MLX_AUDIO_STT_VERSION" soundfile
+"$STT_ENV_DIR/venv/bin/pip" install numpy huggingface_hub tqdm "mlx-audio==$MLX_AUDIO_STT_VERSION" soundfile onnxruntime transformers
 
 status "Setup complete!"
-touch "$RUNTIME_ROOT_DIR/.complete" "$RUNTIME_ROOT_DIR/.kokoro-multilingual-v2"
+touch "$RUNTIME_ROOT_DIR/.complete" "$RUNTIME_ROOT_DIR/.kokoro-multilingual-v2" "$RUNTIME_ROOT_DIR/.smart-turn-v1"
 status "Gemma environment: $PYTHON_ENV_DIR/venv"
 status "CSM environment: $CSM_ENV_DIR/venv"
 status "Kokoro environment: $KOKORO_ENV_DIR/venv"
