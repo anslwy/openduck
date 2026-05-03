@@ -4947,6 +4947,7 @@ async fn cancel_audio(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn commit_audio(state: State<'_, AppState>) -> Result<(), String> {
+    tokio::time::sleep(std::time::Duration::from_millis(COMMIT_AUDIO_DRAIN_MS)).await;
     *state.commit_audio_requested.lock().unwrap() = true;
     Ok(())
 }

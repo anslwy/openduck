@@ -119,6 +119,7 @@ pub(crate) const MAX_AUTO_CONTINUE_SILENCE_MS: u32 = 7000;
 pub(crate) const DEFAULT_AUTO_CONTINUE_MAX_COUNT: Option<u32> = Some(3);
 pub(crate) const MIN_AUTO_CONTINUE_MAX_COUNT: u32 = 1;
 pub(crate) const MAX_AUTO_CONTINUE_MAX_COUNT: u32 = 10;
+pub(crate) const COMMIT_AUDIO_DRAIN_MS: u64 = 320;
 pub(crate) const MIN_SPEAKING_CHUNKS: usize = 10;
 pub(crate) const PRE_SPEECH_BUFFER_MS: u32 = 2000;
 pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
