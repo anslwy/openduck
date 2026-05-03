@@ -42,6 +42,8 @@ export const AUTO_UNMUTE_ON_PASTED_SCREENSHOT_STORAGE_KEY =
   "openduck.auto-unmute-on-pasted-screenshot.v1";
 export const END_OF_UTTERANCE_SILENCE_STORAGE_KEY =
   "openduck.end-of-utterance-silence-ms.v1";
+export const COMMIT_AUDIO_DRAIN_STORAGE_KEY =
+  "openduck.commit-audio-drain-ms.v1";
 export const AUTO_CONTINUE_SILENCE_STORAGE_KEY =
   "openduck.auto-continue-silence-ms.v1";
 export const AUTO_CONTINUE_MAX_COUNT_STORAGE_KEY =
@@ -85,6 +87,10 @@ export const DEFAULT_END_OF_UTTERANCE_SILENCE_MS = 2500;
 export const MIN_END_OF_UTTERANCE_SILENCE_MS = 500;
 export const MAX_END_OF_UTTERANCE_SILENCE_MS = 5000;
 export const END_OF_UTTERANCE_SILENCE_STEP_MS = 100;
+export const DEFAULT_COMMIT_AUDIO_DRAIN_MS = 200;
+export const MIN_COMMIT_AUDIO_DRAIN_MS = 100;
+export const MAX_COMMIT_AUDIO_DRAIN_MS = 1200;
+export const COMMIT_AUDIO_DRAIN_STEP_MS = 50;
 export const DEFAULT_AUTO_CONTINUE_SILENCE_MS: number | null = null;
 export const MIN_AUTO_CONTINUE_SILENCE_MS = 3000;
 export const MAX_AUTO_CONTINUE_SILENCE_MS = 7000;

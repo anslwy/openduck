@@ -56,6 +56,7 @@
         CONTACTS_STORAGE_KEY,
         DEFAULT_AUTO_CONTINUE_MAX_COUNT,
         DEFAULT_AUTO_CONTINUE_SILENCE_MS,
+        DEFAULT_COMMIT_AUDIO_DRAIN_MS,
         DEFAULT_CONTACT_ID,
         DEFAULT_CSM_MODEL,
         DEFAULT_END_OF_UTTERANCE_SILENCE_MS,
@@ -73,7 +74,9 @@
         SUBTITLE_FONT_SIZE_STEP,
         DEFAULT_STT_MODEL,
         END_OF_UTTERANCE_SILENCE_STEP_MS,
+        COMMIT_AUDIO_DRAIN_STEP_MS,
         END_OF_UTTERANCE_SILENCE_STORAGE_KEY,
+        COMMIT_AUDIO_DRAIN_STORAGE_KEY,
         LLM_CONTEXT_TURN_LIMIT_STORAGE_KEY,
         LLM_IMAGE_HISTORY_LIMIT_STORAGE_KEY,
         MODEL_PREFERENCES_STORAGE_KEY,
@@ -83,6 +86,8 @@
         MAX_AUTO_CONTINUE_MAX_COUNT,
         MAX_AUTO_CONTINUE_SILENCE_MS,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
+        MIN_COMMIT_AUDIO_DRAIN_MS,
+        MAX_COMMIT_AUDIO_DRAIN_MS,
         MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_LLM_IMAGE_HISTORY_LIMIT,
         MIN_AUTO_CONTINUE_MAX_COUNT,
@@ -250,6 +255,11 @@
     };
 
     type StoredEndOfUtteranceSilencePreference = {
+        version: 1;
+        milliseconds: number;
+    };
+
+    type StoredCommitAudioDrainPreference = {
         version: 1;
         milliseconds: number;
     };
@@ -453,6 +463,7 @@
         DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY,
     );
     let endOfUtteranceSilenceMs = $state(DEFAULT_END_OF_UTTERANCE_SILENCE_MS);
+    let commitAudioDrainMs = $state(DEFAULT_COMMIT_AUDIO_DRAIN_MS);
     let autoContinueSilenceMs = $state<number | null>(
         DEFAULT_AUTO_CONTINUE_SILENCE_MS,
     );
@@ -1924,6 +1935,37 @@
         );
     }
 
+    function clampCommitAudioDrainMs(milliseconds: number) {
+        if (!Number.isFinite(milliseconds)) {
+            return DEFAULT_COMMIT_AUDIO_DRAIN_MS;
+        }
+
+        const roundedMilliseconds = Math.round(milliseconds);
+        const steppedMilliseconds =
+            Math.round(roundedMilliseconds / COMMIT_AUDIO_DRAIN_STEP_MS) *
+            COMMIT_AUDIO_DRAIN_STEP_MS;
+
+        return Math.min(
+            MAX_COMMIT_AUDIO_DRAIN_MS,
+            Math.max(MIN_COMMIT_AUDIO_DRAIN_MS, steppedMilliseconds),
+        );
+    }
+
+    function persistCommitAudioDrainPreference(milliseconds: number) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: StoredCommitAudioDrainPreference = {
+            version: 1,
+            milliseconds,
+        };
+        window.localStorage.setItem(
+            COMMIT_AUDIO_DRAIN_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function clampAutoContinueSilenceMs(
         milliseconds: number | null,
     ): number | null {
@@ -2090,10 +2132,7 @@
                 version?: unknown;
                 count?: unknown;
             };
-            if (
-                parsed.version !== 1 ||
-                typeof parsed.count !== "number"
-            ) {
+            if (parsed.version !== 1 || typeof parsed.count !== "number") {
                 return DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT;
             }
 
@@ -2534,6 +2573,40 @@
         }
     }
 
+    function loadCommitAudioDrainPreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_COMMIT_AUDIO_DRAIN_MS;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            COMMIT_AUDIO_DRAIN_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_COMMIT_AUDIO_DRAIN_MS;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                milliseconds?: unknown;
+            };
+            if (
+                parsed.version !== 1 ||
+                typeof parsed.milliseconds !== "number"
+            ) {
+                return DEFAULT_COMMIT_AUDIO_DRAIN_MS;
+            }
+
+            return clampCommitAudioDrainMs(parsed.milliseconds);
+        } catch (err) {
+            console.error(
+                "Failed to restore commit audio drain preference:",
+                err,
+            );
+            return DEFAULT_COMMIT_AUDIO_DRAIN_MS;
+        }
+    }
+
     function loadAutoContinueSilencePreferenceFromStorage() {
         if (typeof window === "undefined") {
             return DEFAULT_AUTO_CONTINUE_SILENCE_MS;
@@ -2915,6 +2988,21 @@
         });
     }
 
+    function applyCommitAudioDrainPreference(milliseconds: number) {
+        const normalizedMilliseconds = clampCommitAudioDrainMs(milliseconds);
+        commitAudioDrainMs = normalizedMilliseconds;
+        persistCommitAudioDrainPreference(normalizedMilliseconds);
+
+        void invoke("set_commit_audio_drain_ms", {
+            milliseconds: normalizedMilliseconds,
+        }).catch((err) => {
+            console.error(
+                "Failed to update commit audio drain preference:",
+                err,
+            );
+        });
+    }
+
     function applyAutoContinueSilencePreference(milliseconds: number | null) {
         const normalizedMilliseconds = clampAutoContinueSilenceMs(milliseconds);
         autoContinueSilenceMs = normalizedMilliseconds;
@@ -3065,7 +3153,8 @@
     }
 
     async function initializeMaxSpokenSentencesPerSegmentPreference() {
-        const storedCount = loadMaxSpokenSentencesPerSegmentPreferenceFromStorage();
+        const storedCount =
+            loadMaxSpokenSentencesPerSegmentPreferenceFromStorage();
         applyMaxSpokenSentencesPerSegmentPreference(storedCount);
     }
 
@@ -3127,6 +3216,11 @@
         const storedMilliseconds =
             loadEndOfUtteranceSilencePreferenceFromStorage();
         applyEndOfUtteranceSilencePreference(storedMilliseconds);
+    }
+
+    async function initializeCommitAudioDrainPreference() {
+        const storedMilliseconds = loadCommitAudioDrainPreferenceFromStorage();
+        applyCommitAudioDrainPreference(storedMilliseconds);
     }
 
     async function initializeAutoContinueSilencePreference() {
@@ -8591,6 +8685,7 @@
             await initializeShowCallTimerPreference();
             await initializeShowHiddenWindowOverlayPreference();
             await initializeEndOfUtteranceSilencePreference();
+            await initializeCommitAudioDrainPreference();
             await initializeAutoContinueSilencePreference();
             await initializeAutoContinueMaxCountPreference();
             await initializeLlmContextTurnLimitPreference();
@@ -9385,6 +9480,7 @@
                     {showCallTimerEnabled}
                     {showHiddenWindowOverlayEnabled}
                     {endOfUtteranceSilenceMs}
+                    {commitAudioDrainMs}
                     {autoContinueSilenceMs}
                     {autoContinueMaxCount}
                     {llmContextTurnLimit}
@@ -9412,6 +9508,7 @@
                     onUpdateShowCallTimer={applyShowCallTimerPreference}
                     onUpdateShowHiddenWindowOverlay={applyShowHiddenWindowOverlayPreference}
                     onUpdateEndOfUtteranceSilenceMs={applyEndOfUtteranceSilencePreference}
+                    onUpdateCommitAudioDrainMs={applyCommitAudioDrainPreference}
                     onUpdateAutoContinueSilenceMs={applyAutoContinueSilencePreference}
                     onUpdateAutoContinueMaxCount={applyAutoContinueMaxCountPreference}
                     onUpdateLlmContextTurnLimit={applyLlmContextTurnLimitPreference}

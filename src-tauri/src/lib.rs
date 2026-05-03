@@ -532,6 +532,7 @@ struct AppState {
     call_mode: Mutex<String>,
     sleep_assertion_child: Mutex<Option<Child>>,
     end_of_utterance_silence_ms: Mutex<u32>,
+    commit_audio_drain_ms: Mutex<u64>,
     auto_continue_silence_ms: Mutex<Option<u32>>,
     auto_continue_max_count: Mutex<Option<u32>>,
     auto_continue_timer_generation: AtomicU64,
@@ -2595,6 +2596,17 @@ fn clamp_llm_image_history_limit(limit: u32) -> usize {
 fn set_end_of_utterance_silence_ms(state: State<'_, AppState>, milliseconds: u32) -> u32 {
     let effective_milliseconds = clamp_end_of_utterance_silence_ms(milliseconds);
     *state.end_of_utterance_silence_ms.lock().unwrap() = effective_milliseconds;
+    effective_milliseconds
+}
+
+fn clamp_commit_audio_drain_ms(milliseconds: u64) -> u64 {
+    milliseconds.clamp(MIN_COMMIT_AUDIO_DRAIN_MS, MAX_COMMIT_AUDIO_DRAIN_MS)
+}
+
+#[tauri::command]
+fn set_commit_audio_drain_ms(state: State<'_, AppState>, milliseconds: u64) -> u64 {
+    let effective_milliseconds = clamp_commit_audio_drain_ms(milliseconds);
+    *state.commit_audio_drain_ms.lock().unwrap() = effective_milliseconds;
     effective_milliseconds
 }
 
@@ -4947,7 +4959,8 @@ async fn cancel_audio(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn commit_audio(state: State<'_, AppState>) -> Result<(), String> {
-    tokio::time::sleep(std::time::Duration::from_millis(COMMIT_AUDIO_DRAIN_MS)).await;
+    let drain_ms = *state.commit_audio_drain_ms.lock().unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(drain_ms)).await;
     *state.commit_audio_requested.lock().unwrap() = true;
     Ok(())
 }
@@ -8098,7 +8111,7 @@ mod tests {
     use super::{
         append_assistant_message_text, apply_llm_image_history_limit,
         build_latest_user_turn_message, build_llm_system_prompt, build_user_turn_message,
-        clamp_auto_continue_silence_ms, clamp_end_of_utterance_silence_ms,
+        clamp_auto_continue_silence_ms, clamp_commit_audio_drain_ms, clamp_end_of_utterance_silence_ms,
         clamp_llm_context_turn_limit, clamp_llm_image_history_limit, parse_gemma_stream_event,
         pending_streamed_segment_is_in_first_sentence,
         prepare_completed_spoken_response_segments_for_csm,
@@ -8113,8 +8126,8 @@ mod tests {
     };
     use crate::constants::{
         DEFAULT_LLM_CONTEXT_TURN_LIMIT, DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT, END_OF_UTTERANCE_SILENCE_MS, MAX_AUTO_CONTINUE_SILENCE_MS,
-        MAX_END_OF_UTTERANCE_SILENCE_MS, MAX_LLM_CONTEXT_TURN_LIMIT, MAX_LLM_IMAGE_HISTORY_LIMIT,
-        MIN_AUTO_CONTINUE_SILENCE_MS, MIN_END_OF_UTTERANCE_SILENCE_MS, MIN_LLM_CONTEXT_TURN_LIMIT,
+        MAX_COMMIT_AUDIO_DRAIN_MS, MAX_END_OF_UTTERANCE_SILENCE_MS, MAX_LLM_CONTEXT_TURN_LIMIT, MAX_LLM_IMAGE_HISTORY_LIMIT,
+        MIN_AUTO_CONTINUE_SILENCE_MS, MIN_COMMIT_AUDIO_DRAIN_MS, MIN_END_OF_UTTERANCE_SILENCE_MS, MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_LLM_IMAGE_HISTORY_LIMIT, STREAMING_INCOMPLETE_SEGMENT_FLUSH_MS,
         STREAMING_INCOMPLETE_SEGMENT_FLUSH_WORDS,
     };
@@ -8638,6 +8651,18 @@ mod tests {
         assert_eq!(
             clamp_end_of_utterance_silence_ms(MAX_END_OF_UTTERANCE_SILENCE_MS + 1),
             MAX_END_OF_UTTERANCE_SILENCE_MS
+        );
+    }
+
+    #[test]
+    fn clamp_commit_audio_drain_ms_stays_in_supported_range() {
+        assert_eq!(
+            clamp_commit_audio_drain_ms(MIN_COMMIT_AUDIO_DRAIN_MS - 1),
+            MIN_COMMIT_AUDIO_DRAIN_MS
+        );
+        assert_eq!(
+            clamp_commit_audio_drain_ms(MAX_COMMIT_AUDIO_DRAIN_MS + 1),
+            MAX_COMMIT_AUDIO_DRAIN_MS
         );
     }
 
@@ -13897,6 +13922,7 @@ pub fn run() {
             call_mode: Mutex::new("natural".to_string()),
             sleep_assertion_child: Mutex::new(None),
             end_of_utterance_silence_ms: Mutex::new(END_OF_UTTERANCE_SILENCE_MS),
+            commit_audio_drain_ms: Mutex::new(COMMIT_AUDIO_DRAIN_MS),
             auto_continue_silence_ms: Mutex::new(DEFAULT_AUTO_CONTINUE_SILENCE_MS),
             auto_continue_max_count: Mutex::new(DEFAULT_AUTO_CONTINUE_MAX_COUNT),
             auto_continue_timer_generation: AtomicU64::new(0),
@@ -14007,6 +14033,7 @@ pub fn run() {
             set_pong_playback_enabled,
             initialize_pong_playback_preference,
             set_end_of_utterance_silence_ms,
+            set_commit_audio_drain_ms,
             set_auto_continue_silence_ms,
             set_auto_continue_max_count,
             set_llm_context_turn_limit,

@@ -12,12 +12,15 @@
         DEFAULT_LLM_IMAGE_HISTORY_LIMIT,
         LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE,
         END_OF_UTTERANCE_SILENCE_STEP_MS,
+        COMMIT_AUDIO_DRAIN_STEP_MS,
         LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE,
         MAX_AUTO_CONTINUE_MAX_COUNT,
+        MAX_COMMIT_AUDIO_DRAIN_MS,
         MAX_LLM_CONTEXT_TURN_LIMIT,
         MAX_END_OF_UTTERANCE_SILENCE_MS,
         MAX_LLM_IMAGE_HISTORY_LIMIT,
         MIN_AUTO_CONTINUE_MAX_COUNT,
+        MIN_COMMIT_AUDIO_DRAIN_MS,
         MIN_AUTO_CONTINUE_SILENCE_MS,
         MIN_LLM_CONTEXT_TURN_LIMIT,
         MIN_END_OF_UTTERANCE_SILENCE_MS,
@@ -82,6 +85,7 @@
         showCallTimerEnabled,
         showHiddenWindowOverlayEnabled,
         endOfUtteranceSilenceMs,
+        commitAudioDrainMs,
         autoContinueSilenceMs,
         autoContinueMaxCount,
         llmContextTurnLimit,
@@ -110,6 +114,7 @@
         onUpdateShowCallTimer,
         onUpdateShowHiddenWindowOverlay,
         onUpdateEndOfUtteranceSilenceMs,
+        onUpdateCommitAudioDrainMs,
         onUpdateAutoContinueSilenceMs,
         onUpdateAutoContinueMaxCount,
         onUpdateLlmContextTurnLimit,
@@ -147,6 +152,7 @@
         showCallTimerEnabled: boolean;
         showHiddenWindowOverlayEnabled: boolean;
         endOfUtteranceSilenceMs: number;
+        commitAudioDrainMs: number;
         autoContinueSilenceMs: number | null;
         autoContinueMaxCount: number | null;
         llmContextTurnLimit: number | null;
@@ -177,6 +183,7 @@
         onUpdateShowCallTimer: (enabled: boolean) => void;
         onUpdateShowHiddenWindowOverlay: (enabled: boolean) => void;
         onUpdateEndOfUtteranceSilenceMs: (milliseconds: number) => void;
+        onUpdateCommitAudioDrainMs: (milliseconds: number) => void;
         onUpdateAutoContinueSilenceMs: (milliseconds: number | null) => void;
         onUpdateAutoContinueMaxCount: (count: number | null) => void;
         onUpdateLlmContextTurnLimit: (limit: number | null) => void;
@@ -380,6 +387,19 @@
             ((endOfUtteranceSilenceMs - MIN_END_OF_UTTERANCE_SILENCE_MS) /
                 range) *
             100
+        );
+    });
+    const formattedCommitAudioDrain = $derived(`${commitAudioDrainMs}ms`);
+    const minimumCommitAudioDrainLabel = `${MIN_COMMIT_AUDIO_DRAIN_MS}ms`;
+    const maximumCommitAudioDrainLabel = `${MAX_COMMIT_AUDIO_DRAIN_MS}ms`;
+    const commitAudioDrainProgress = $derived.by(() => {
+        const range = MAX_COMMIT_AUDIO_DRAIN_MS - MIN_COMMIT_AUDIO_DRAIN_MS;
+        if (range <= 0) {
+            return 0;
+        }
+
+        return (
+            ((commitAudioDrainMs - MIN_COMMIT_AUDIO_DRAIN_MS) / range) * 100
         );
     });
     const autoContinueSilenceSliderValue = $derived.by(() => {
@@ -754,7 +774,22 @@
             hidden: callMode === "push_to_talk",
         },
         {
-            id: "tts-sentences-per-segment",
+            id: "commit-audio-drain",
+            type: "slider",
+            label: "Audio Drain Delay",
+            detail: "Extra time to wait after speech ends before processing the final audio. Higher values capture more trailing audio but add latency before the response starts.",
+            value: commitAudioDrainMs,
+            min: MIN_COMMIT_AUDIO_DRAIN_MS,
+            max: MAX_COMMIT_AUDIO_DRAIN_MS,
+            step: COMMIT_AUDIO_DRAIN_STEP_MS,
+            displayValue: formattedCommitAudioDrain,
+            progress: commitAudioDrainProgress,
+            minLabel: minimumCommitAudioDrainLabel,
+            maxLabel: maximumCommitAudioDrainLabel,
+            onUpdate: onUpdateCommitAudioDrainMs,
+            hidden: callMode === "push_to_talk",
+        },
+        {
             type: "slider",
             label: "TTS Sentences per Segment",
             detail: "How many sentences the TTS waits to accumulate before starting speech synthesis. Higher values produce more natural prosody but increase latency. If the response is shorter than the target, it starts immediately.",
