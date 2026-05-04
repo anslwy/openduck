@@ -108,7 +108,7 @@ export const MIN_AUTO_CONTINUE_MAX_COUNT = 1;
 export const MAX_AUTO_CONTINUE_MAX_COUNT = 10;
 export const AUTO_CONTINUE_MAX_COUNT_CONTINUOUS_SLIDER_VALUE =
   MAX_AUTO_CONTINUE_MAX_COUNT + 1;
-export const DEFAULT_LLM_CONTEXT_TURN_LIMIT: number | null = 7;
+export const DEFAULT_LLM_CONTEXT_TURN_LIMIT: number | null = 35;
 export const MIN_LLM_CONTEXT_TURN_LIMIT = 2;
 export const MAX_LLM_CONTEXT_TURN_LIMIT = 50;
 export const LLM_CONTEXT_TURN_LIMIT_UNLIMITED_SLIDER_VALUE =
@@ -119,8 +119,17 @@ export const MAX_LLM_IMAGE_HISTORY_LIMIT = 9;
 export const LLM_IMAGE_HISTORY_UNLIMITED_SLIDER_VALUE =
   MAX_LLM_IMAGE_HISTORY_LIMIT + 1;
 
-export const CHARACTER_MEMORY_LIMIT_OPTIONS = [5, 10, 20, 50, 100, 500, null];
-export const DEFAULT_CHARACTER_MEMORY_LIMIT: number | null = 20;
+export const CHARACTER_MEMORY_LIMIT_OPTIONS = [
+  5,
+  10,
+  15,
+  20,
+  50,
+  100,
+  500,
+  null,
+];
+export const DEFAULT_CHARACTER_MEMORY_LIMIT: number | null = 10;
 
 export const MAX_SPOKEN_SENTENCES_PER_SEGMENT_STORAGE_KEY =
   "openduck.max-spoken-sentences-per-segment.v1";
