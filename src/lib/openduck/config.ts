@@ -133,7 +133,7 @@ export const DEFAULT_CHARACTER_MEMORY_LIMIT: number | null = 10;
 
 export const MAX_SPOKEN_SENTENCES_PER_SEGMENT_STORAGE_KEY =
   "openduck.max-spoken-sentences-per-segment.v1";
-export const DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT = 2;
+export const DEFAULT_MAX_SPOKEN_SENTENCES_PER_SEGMENT = 1;
 export const MIN_SPOKEN_SENTENCES_PER_SEGMENT = 1;
 export const MAX_MAX_SPOKEN_SENTENCES_PER_SEGMENT = 10;
 
