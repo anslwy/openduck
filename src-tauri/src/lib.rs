@@ -6539,7 +6539,7 @@ async fn stream_gemma_response_to_csm(
         }
     }
 
-    if !saw_stream_event {
+    if !saw_stream_event && !cancellation_token.load(Ordering::Relaxed) {
         let payload = serde_json::from_slice::<ChatCompletionResponse>(&raw_body)
             .map_err(|e| format!("Failed to parse Gemma response: {e}"))?;
         let choice = payload.choices.into_iter().next();
