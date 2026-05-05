@@ -3052,7 +3052,6 @@
         invoke("set_smart_turn_threshold", { threshold: clamped });
     }
 
-
     function applyCommitAudioDrainPreference(milliseconds: number) {
         const normalizedMilliseconds = clampCommitAudioDrainMs(milliseconds);
         commitAudioDrainMs = normalizedMilliseconds;
@@ -7446,7 +7445,7 @@
         }
     }
 
-    function startCallTimer() {
+    async function startCallTimer(resume = false) {
         if (callTimerInterval) {
             clearInterval(callTimerInterval);
         }
@@ -7465,9 +7464,11 @@
             syncCallElapsedTime();
         }, 1000);
 
-        void invoke("start_call_timer", { muted: micMuted }).catch((err) => {
+        try {
+            await invoke("start_call_timer", { muted: micMuted, resume });
+        } catch (err) {
             console.error("Failed to start tray call timer", err);
-        });
+        }
     }
 
     async function handleStartCall() {
@@ -7531,7 +7532,7 @@
         activeExpression = null;
         resetProcessingAudioLatencies();
         clearLiveTranscriptSubtitle();
-        startCallTimer();
+        await startCallTimer(true);
         activeTtsRequestId = null;
         syncTtsPlaybackState(false);
         setCallStage("listening", "Listening");
@@ -8275,7 +8276,7 @@
                             if (calling && !isFirstSentenceReady) {
                                 isFirstSentenceReady = true;
                                 stopConnectingSound();
-                                startCallTimer();
+                                startCallTimer(false);
                             }
 
                             const shouldPreserveSpokenResponse =

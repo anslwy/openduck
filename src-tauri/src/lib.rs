@@ -519,6 +519,7 @@ struct AppState {
     current_session_title: Mutex<Option<String>>,
     current_character_id: Mutex<String>,
     call_started_at: Mutex<Option<Instant>>,
+    call_started_from_resume: Mutex<bool>,
     processing_audio_started_at: Mutex<Option<Instant>>,
     processing_audio_latency_request_id: Mutex<Option<u64>>,
     tray_timer_generation: AtomicU64,
@@ -4586,7 +4587,12 @@ async fn stop_stt_server(
 }
 
 #[tauri::command]
-fn start_call_timer(app_handle: AppHandle, state: State<'_, AppState>, muted: bool) {
+fn start_call_timer(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+    muted: bool,
+    resume: Option<bool>,
+) {
     {
         let mut call_in_progress_guard = state.call_in_progress.lock().unwrap();
         *call_in_progress_guard = true;
@@ -4594,6 +4600,10 @@ fn start_call_timer(app_handle: AppHandle, state: State<'_, AppState>, muted: bo
     {
         let mut call_muted_guard = state.call_muted.lock().unwrap();
         *call_muted_guard = muted;
+    }
+    {
+        let mut resume_guard = state.call_started_from_resume.lock().unwrap();
+        *resume_guard = resume.unwrap_or(false);
     }
     refresh_tray_presentation(&app_handle);
     emit_call_stage(&app_handle, "listening", "Listening");
@@ -5040,9 +5050,15 @@ async fn receive_audio_chunk(
 
     let in_grace_period = {
         let started_at_guard = state.call_started_at.lock().unwrap();
-        match *started_at_guard {
-            None => true,
-            Some(t) => t.elapsed() < Duration::from_millis(CALL_START_GRACE_PERIOD_MS),
+        let from_resume_guard = state.call_started_from_resume.lock().unwrap();
+
+        if *from_resume_guard {
+            false
+        } else {
+            match *started_at_guard {
+                None => true,
+                Some(t) => t.elapsed() < Duration::from_millis(CALL_START_GRACE_PERIOD_MS),
+            }
         }
     };
 
@@ -11024,6 +11040,8 @@ fn clear_call_timer_state(state: &AppState) {
     clear_transient_tray_icon(state);
     let mut started_at_guard = state.call_started_at.lock().unwrap();
     *started_at_guard = None;
+    let mut from_resume_guard = state.call_started_from_resume.lock().unwrap();
+    *from_resume_guard = false;
 }
 
 #[cfg(target_os = "macos")]
@@ -14290,6 +14308,7 @@ pub fn run() {
             current_session_title: Mutex::new(None),
             current_character_id: Mutex::new(DEFAULT_CONTACT_ID.to_string()),
             call_started_at: Mutex::new(None),
+            call_started_from_resume: Mutex::new(false),
             processing_audio_started_at: Mutex::new(None),
             processing_audio_latency_request_id: Mutex::new(None),
             tray_timer_generation: AtomicU64::new(0),
