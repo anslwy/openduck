@@ -118,6 +118,14 @@
             linkText: "Mistral Console",
             linkUrl: "https://console.mistral.ai/api-keys/",
         },
+        {
+            id: "xai",
+            name: "xAI",
+            baseUrl: "https://api.x.ai",
+            helpText: "Get your API key from the",
+            linkText: "xAI Console",
+            linkUrl: "https://console.x.ai/",
+        },
         { id: "custom", name: "Custom" },
     ];
 

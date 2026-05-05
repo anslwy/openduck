@@ -1,20 +1,18 @@
 <!-- Modal for configuring external LLM connection details like URL and API key. -->
 <script lang="ts">
-    let {
-        providerName,
-        baseUrl,
-        hasApiKey,
-        urlPlaceholder,
-        onSave,
-        onClose,
-    } = $props<{
-        providerName: string;
-        baseUrl: string;
-        hasApiKey: boolean;
-        urlPlaceholder: string;
-        onSave: (url: string, key: string, clearKey: boolean) => Promise<void>;
-        onClose: () => void;
-    }>();
+    let { providerName, baseUrl, hasApiKey, urlPlaceholder, onSave, onClose } =
+        $props<{
+            providerName: string;
+            baseUrl: string;
+            hasApiKey: boolean;
+            urlPlaceholder: string;
+            onSave: (
+                url: string,
+                key: string,
+                clearKey: boolean,
+            ) => Promise<void>;
+            onClose: () => void;
+        }>();
 
     let url = $state("");
     let key = $state("");
@@ -70,6 +68,14 @@
             linkText: "Mistral Console",
             linkUrl: "https://console.mistral.ai/api-keys/",
         },
+        {
+            id: "xai",
+            name: "xAI",
+            baseUrl: "https://api.x.ai",
+            helpText: "Get your API key from the",
+            linkText: "xAI Console",
+            linkUrl: "https://console.x.ai/",
+        },
         { id: "custom", name: "Custom" },
     ];
 
@@ -84,7 +90,9 @@
         clearSavedKey = false;
 
         if (isOpenAiCompatible) {
-            const matchingProvider = providers.find((p) => p.baseUrl === baseUrl);
+            const matchingProvider = providers.find(
+                (p) => p.baseUrl === baseUrl,
+            );
             if (matchingProvider) {
                 selectedProviderId = matchingProvider.id;
             } else {
@@ -231,8 +239,9 @@
             />
             <p class="field-help">
                 {#if hasApiKey}
-                    A key is already saved in your system credential store. Leave
-                    this blank to keep it, or enter a new key to replace it.
+                    A key is already saved in your system credential store.
+                    Leave this blank to keep it, or enter a new key to replace
+                    it.
                 {:else}
                     Required for providers like OpenAI. Optional for local
                     servers or unauthenticated proxies.
