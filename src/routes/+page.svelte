@@ -448,7 +448,7 @@
         null,
     );
     let activeConnectingSoundGainNode = $state<GainNode | null>(null);
-    let pongPlaybackEnabled = $state(true);
+    let pongPlaybackEnabled = $state(false);
     let keepScreenOnEnabled = $state(true);
     let autoUnmuteOnPastedScreenshotEnabled = $state(
         DEFAULT_AUTO_UNMUTE_ON_PASTED_SCREENSHOT,

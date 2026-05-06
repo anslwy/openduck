@@ -87,7 +87,7 @@ def run_server(model_path: str) -> int:
 
             try:
                 # Decode base64 audio (expected to be raw float32 PCM at 16kHz)
-                audio_data = base64::b64decode(audio_base64)
+                audio_data = base64.b64decode(audio_base64)
                 audio_array = np.frombuffer(audio_data, dtype=np.float32)
 
                 # Basic signal check
