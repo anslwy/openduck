@@ -4,7 +4,7 @@
   <img src="icon.png" alt="OpenDuck Logo" width="200">
 </p>
 
-Lightweight, screen-aware, voice-first local AI assistant for 8 different languages (English, Japanese, Mandarin Chinese, Spanish, French, Hindi, Italian and Portuguese) with real-time subtitles and translations.
+Turn any OpenAI-compatible model into a real-time voice chat app in 8 languages (English, Japanese, Mandarin Chinese, Spanish, French, Hindi, Italian and Portuguese) with real-time subtitles and translations.
 
 ![Rust](https://img.shields.io/badge/rust-1.80+-orange.svg)
 ![Svelte](https://img.shields.io/badge/svelte-5.0+-ff3e00.svg)
