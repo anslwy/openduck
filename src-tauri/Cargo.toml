@@ -29,6 +29,7 @@ tokio = { version = "1", features = ["full"] }
 base64 = "0.22"
 uuid = { version = "1.10", features = ["v4", "serde"] }
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
+chrono = { version = "0.4", features = ["serde"] }
 ort = { version = "=2.0.0-rc.10", features = ["ndarray"] }
 ndarray = "0.16"
     objc2-app-kit = "0.3"

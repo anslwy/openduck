@@ -70,6 +70,8 @@
         DEFAULT_OLLAMA_MODEL,
         DEFAULT_STT_LANGUAGE,
         DEFAULT_SUBTITLE_FONT_SIZE,
+        DEFAULT_INJECT_CURRENT_TIME,
+        INJECT_CURRENT_TIME_STORAGE_KEY,
         MIN_SUBTITLE_FONT_SIZE,
         MAX_SUBTITLE_FONT_SIZE,
         SUBTITLE_FONT_SIZE_STEP,
@@ -458,7 +460,10 @@
     let showStatEnabled = $state(false);
     let showSubtitleEnabled = $state(true);
     let subtitleFontSize = $state(DEFAULT_SUBTITLE_FONT_SIZE);
-    let showAiSubtitleEnabled = $state(DEFAULT_SHOW_AI_SUBTITLE);
+    let showAiSubtitleEnabled = $state(loadShowAiSubtitlePreferenceFromStorage());
+    let injectCurrentTimeEnabled = $state(
+        loadInjectCurrentTimePreferenceFromStorage(),
+    );
     let showAdvancedModels = $state(DEFAULT_SHOW_ADVANCED_MODELS);
     let aiSubtitleTargetLanguage = $state<AiSubtitleTargetLanguage>(
         DEFAULT_AI_SUBTITLE_TARGET_LANGUAGE,
@@ -1878,6 +1883,21 @@
         );
     }
 
+    function persistInjectCurrentTimePreference(enabled: boolean) {
+        if (typeof window === "undefined") {
+            return;
+        }
+
+        const payload: { version: 1; enabled: boolean } = {
+            version: 1,
+            enabled,
+        };
+        window.localStorage.setItem(
+            INJECT_CURRENT_TIME_STORAGE_KEY,
+            JSON.stringify(payload),
+        );
+    }
+
     function persistAiSubtitleTargetLanguagePreference(
         targetLanguage: AiSubtitleTargetLanguage,
     ) {
@@ -2514,6 +2534,37 @@
         }
     }
 
+    function loadInjectCurrentTimePreferenceFromStorage() {
+        if (typeof window === "undefined") {
+            return DEFAULT_INJECT_CURRENT_TIME;
+        }
+
+        const rawPayload = window.localStorage.getItem(
+            INJECT_CURRENT_TIME_STORAGE_KEY,
+        );
+        if (!rawPayload) {
+            return DEFAULT_INJECT_CURRENT_TIME;
+        }
+
+        try {
+            const parsed = JSON.parse(rawPayload) as {
+                version?: unknown;
+                enabled?: unknown;
+            };
+            if (parsed.version !== 1 || typeof parsed.enabled !== "boolean") {
+                return DEFAULT_INJECT_CURRENT_TIME;
+            }
+
+            return parsed.enabled;
+        } catch (err) {
+            console.error(
+                "Failed to restore inject current time preference:",
+                err,
+            );
+            return DEFAULT_INJECT_CURRENT_TIME;
+        }
+    }
+
     function loadShowHiddenWindowOverlayPreferenceFromStorage() {
         if (typeof window === "undefined") {
             return DEFAULT_SHOW_HIDDEN_WINDOW_OVERLAY;
@@ -2990,6 +3041,13 @@
             targetLang: targetLanguage,
         });
         persistAiSubtitleTargetLanguagePreference(targetLanguage);
+    }
+
+
+    function applyInjectCurrentTimePreference(enabled: boolean) {
+        injectCurrentTimeEnabled = enabled;
+        persistInjectCurrentTimePreference(enabled);
+        void invoke("set_inject_current_time", { enabled });
     }
 
     function applyShowCallTimerPreference(enabled: boolean) {
@@ -3969,6 +4027,17 @@
             await setSttLanguageSelection(selectedSttLanguage);
         } catch (err) {
             console.error("Failed to restore STT language:", err);
+        }
+
+        try {
+            await invoke("set_inject_current_time", {
+                enabled: injectCurrentTimeEnabled,
+            });
+        } catch (err) {
+            console.error(
+                "Failed to restore inject current time preference:",
+                err,
+            );
         }
 
         if (isOllamaSupported) {
@@ -9546,6 +9615,7 @@
                     {showSubtitleEnabled}
                     {subtitleFontSize}
                     {showAiSubtitleEnabled}
+                    {injectCurrentTimeEnabled}
                     {aiSubtitleTargetLanguage}
                     {selectedBackground}
                     {subtitleTranslationLlmConfigured}
@@ -9576,6 +9646,7 @@
                     onUpdateShowSubtitle={applyShowSubtitlePreference}
                     onUpdateSubtitleFontSize={applySubtitleFontSizePreference}
                     onUpdateShowAiSubtitle={applyShowAiSubtitlePreference}
+                    onUpdateInjectCurrentTime={applyInjectCurrentTimePreference}
                     onUpdateAiSubtitleTargetLanguage={applyAiSubtitleTargetLanguagePreference}
                     onOpenSubtitleTranslationLlmConfig={openSubtitleTranslationLlmConfig}
                     onUpdateShowCallTimer={applyShowCallTimerPreference}

@@ -20,6 +20,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use chrono::Local;
 use tauri::menu::Menu;
 #[cfg(target_os = "macos")]
 use tauri::{
@@ -582,6 +583,7 @@ struct AppState {
     smart_turn_threshold: Mutex<f32>,
     screen_capture_child: Mutex<Option<std::process::Child>>,
     ai_subtitle_target_language: Mutex<String>,
+    inject_current_time: Mutex<bool>,
     last_memory_clear_at: Mutex<HashMap<String, u64>>,
     memory_enabled: Mutex<bool>,
     last_extracted_assistant_entry_id: AtomicU64,
@@ -1301,6 +1303,11 @@ async fn translate_text_internal(
     };
 
     translate_text_with_llm(text, target_lang_name, base_url, api_key, model_name).await
+}
+
+#[tauri::command]
+fn set_inject_current_time(state: State<'_, AppState>, enabled: bool) {
+    *state.inject_current_time.lock().unwrap() = enabled;
 }
 
 #[tauri::command]
@@ -6327,6 +6334,11 @@ async fn stream_gemma_response_to_csm(
                 has_latest_audio,
                 has_any_image_context,
                 kokoro_language,
+                *app_handle
+                    .state::<AppState>()
+                    .inject_current_time
+                    .lock()
+                    .unwrap(),
             ),
         }],
     }];
@@ -7368,8 +7380,17 @@ fn build_llm_system_prompt(
     include_audio_context: bool,
     include_image_context: bool,
     kokoro_language: Option<KokoroLanguage>,
+    inject_current_time: bool,
 ) -> String {
     let mut sections = vec![base_prompt.to_string()];
+
+    if inject_current_time {
+        let now = Local::now();
+        sections.push(format!(
+            "Current Date: {}",
+            now.format("%A, %B %d, %Y %I:%M %p")
+        ));
+    }
 
     if let Some(lang) = kokoro_language {
         sections.push(format!(
@@ -9091,19 +9112,28 @@ mod tests {
 
     #[test]
     fn llm_system_prompt_appends_context_only_when_needed() {
-        let base_prompt = "Base prompt";
+        let base_prompt = "You are a test assistant.";
+        assert_eq!(
+            build_llm_system_prompt(base_prompt, None, false, false, None, false),
+            base_prompt
+        );
+        assert_eq!(
+            build_llm_system_prompt(base_prompt, None, true, false, None, false),
+            format!("{base_prompt}\n\n{AUDIO_CONTEXT_SYSTEM_PROMPT}")
+        );
+        assert_eq!(
+            build_llm_system_prompt(base_prompt, None, false, true, None, false),
+            format!("{base_prompt}\n\n{IMAGE_CONTEXT_SYSTEM_PROMPT}")
+        );
+    }
 
+    #[test]
+    fn llm_system_prompt_includes_language_instruction() {
+        let base_prompt = "You are a test assistant.";
+        let lang = KokoroLanguage::Japanese;
         assert_eq!(
-            build_llm_system_prompt(base_prompt, None, false, false, None),
-            "Base prompt"
-        );
-        assert_eq!(
-            build_llm_system_prompt(base_prompt, None, true, false, None),
-            format!("Base prompt\n\n{AUDIO_CONTEXT_SYSTEM_PROMPT}")
-        );
-        assert_eq!(
-            build_llm_system_prompt(base_prompt, None, false, true, None),
-            format!("Base prompt\n\n{IMAGE_CONTEXT_SYSTEM_PROMPT}")
+            build_llm_system_prompt(base_prompt, None, false, false, Some(lang), false),
+            format!("{base_prompt}\n\nIMPORTANT: You must speak in Japanese ONLY. Do not use any other languages.")
         );
     }
 
@@ -14403,6 +14433,7 @@ pub fn run() {
             smart_turn_threshold: Mutex::new(SMART_TURN_THRESHOLD),
             screen_capture_child: Mutex::new(None),
             ai_subtitle_target_language: Mutex::new("none".to_string()),
+            inject_current_time: Mutex::new(true),
             last_memory_clear_at: Mutex::new(HashMap::new()),
             memory_enabled: Mutex::new(true),
             last_extracted_assistant_entry_id: AtomicU64::new(0),
@@ -14472,6 +14503,7 @@ pub fn run() {
             sync_conversation_log_has_visible_images,
             translate_text,
             set_ai_subtitle_target_language,
+            set_inject_current_time,
             get_gemma_variant,
             set_gemma_variant,
             get_stt_model_variant,

@@ -83,6 +83,7 @@
         showSubtitleEnabled,
         subtitleFontSize,
         showAiSubtitleEnabled,
+        injectCurrentTimeEnabled,
         aiSubtitleTargetLanguage,
         subtitleTranslationLlmConfigured,
         showCallTimerEnabled,
@@ -113,6 +114,7 @@
         onUpdateShowSubtitle,
         onUpdateSubtitleFontSize,
         onUpdateShowAiSubtitle,
+        onUpdateInjectCurrentTime,
         onUpdateAiSubtitleTargetLanguage,
         onOpenSubtitleTranslationLlmConfig,
         onUpdateShowCallTimer,
@@ -152,6 +154,7 @@
         showSubtitleEnabled: boolean;
         subtitleFontSize: number;
         showAiSubtitleEnabled: boolean;
+        injectCurrentTimeEnabled: boolean;
         aiSubtitleTargetLanguage: AiSubtitleTargetLanguage;
         subtitleTranslationLlmConfigured: boolean;
         showCallTimerEnabled: boolean;
@@ -181,6 +184,7 @@
         onUpdateShowSubtitle: (enabled: boolean) => void;
         onUpdateSubtitleFontSize: (fontSize: number) => void;
         onUpdateShowAiSubtitle: (enabled: boolean) => void;
+        onUpdateInjectCurrentTime: (enabled: boolean) => void;
         onUpdateAiSubtitleTargetLanguage: (
             targetLanguage: AiSubtitleTargetLanguage,
         ) => void;
@@ -693,6 +697,14 @@
             label: "Show AI Subtitle",
             value: showAiSubtitleEnabled,
             onUpdate: onUpdateShowAiSubtitle,
+        },
+        {
+            id: "inject-current-time",
+            type: "toggle",
+            label: "Inject Current Date & Time to AI",
+            detail: "Adds the current local date and time to the AI's system prompt so it knows the current time context.",
+            value: injectCurrentTimeEnabled,
+            onUpdate: onUpdateInjectCurrentTime,
         },
         {
             id: "ai-subtitle-translation",
