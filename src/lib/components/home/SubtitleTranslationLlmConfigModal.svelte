@@ -81,7 +81,7 @@
         {
             id: "gemini",
             name: "Gemini",
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
             helpText: "Get your API key from the",
             linkText: "Google AI Studio",
             linkUrl: "https://aistudio.google.com/app/apikey",
@@ -113,7 +113,7 @@
         {
             id: "mistral",
             name: "Mistral AI",
-            baseUrl: "https://api.mistral.ai/v1",
+            baseUrl: "https://api.mistral.ai",
             helpText: "Get your API key from the",
             linkText: "Mistral Console",
             linkUrl: "https://console.mistral.ai/api-keys/",

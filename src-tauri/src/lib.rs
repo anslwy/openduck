@@ -2952,7 +2952,14 @@ fn normalize_optional_api_key(key: Option<String>) -> Option<String> {
 }
 
 fn normalize_base_url(url: String) -> String {
-    url.trim().to_string()
+    let mut normalized = url.trim().to_string();
+    while normalized.ends_with('/') {
+        normalized.pop();
+    }
+    if normalized.ends_with("/v1") {
+        normalized = normalized[..normalized.len() - 3].to_string();
+    }
+    normalized
 }
 
 fn normalize_model_id(model_id: String) -> String {
@@ -3107,9 +3114,10 @@ async fn fetch_openai_compatible_models(
         .map_err(|e| format!("Failed to connect to {provider_label}: {e}"))?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
         return Err(format!(
-            "{provider_label} returned error: {}",
-            resp.status()
+            "{provider_label} returned error {status}: {body}"
         ));
     }
 
