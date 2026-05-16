@@ -5732,20 +5732,30 @@
             return;
         }
 
+        if (
+            (event.key === "i" || event.key === "I") &&
+            !event.repeat &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey &&
+            !shouldIgnoreGlobalShortcutTarget(event.target)
+        ) {
+            if (assistantSpeaking) {
+                event.preventDefault();
+                void handleInterruptTts();
+                return;
+            }
+            if (isSpacePressed) {
+                event.preventDefault();
+                isSpacePressed = false;
+                void handleCancelPtt();
+                showToast("Cancelled");
+                return;
+            }
+        }
+
         if (event.key !== "Escape") {
-            return;
-        }
-
-        if (isSpacePressed) {
-            event.preventDefault();
-            isSpacePressed = false;
-            void handleCancelPtt();
-            showToast("Cancelled");
-            return;
-        }
-
-        if (assistantSpeaking) {
-            void handleInterruptTts();
             return;
         }
 
@@ -9964,14 +9974,14 @@
                             <span
                                 >{callMode === "push_to_talk"
                                     ? isSpacePressed
-                                        ? "Press ESC to cancel"
+                                        ? "Press I to cancel"
                                         : "Push to Talk"
                                     : muteButtonLabel}</span
                             >
                             <span class="tooltip-shortcut"
                                 >{callMode === "push_to_talk"
                                     ? isSpacePressed
-                                        ? "ESC"
+                                        ? "I"
                                         : "Space"
                                     : "U"}</span
                             >
@@ -9984,7 +9994,7 @@
                             disabled={!assistantSpeaking}
                             onclick={handleInterruptTts}
                             aria-label="Interrupt assistant speech"
-                            title="Interrupt assistant speech (ESC)"
+                            title="Interrupt assistant speech (I)"
                         >
                             <svg
                                 xmlns="http://www.w3.org/2000/svg"
@@ -10008,7 +10018,7 @@
                         </button>
                         <div class="tooltip-bubble control-tooltip">
                             <span>Interrupt</span>
-                            <span class="tooltip-shortcut">ESC</span>
+                            <span class="tooltip-shortcut">I</span>
                         </div>
                     </div>
                     <div class="tooltip-shell control-tooltip-shell">
