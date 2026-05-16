@@ -247,16 +247,6 @@
                     servers or unauthenticated proxies.
                 {/if}
             </p>
-            {#if hasApiKey}
-                <label class="checkbox-row">
-                    <input
-                        type="checkbox"
-                        bind:checked={clearSavedKey}
-                        disabled={key.trim() !== ""}
-                    />
-                    <span>Clear saved API key</span>
-                </label>
-            {/if}
         </div>
     </div>
 
